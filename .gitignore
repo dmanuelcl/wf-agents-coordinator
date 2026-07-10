@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-packages/
+out/
+coverage/
+.turbo/
+.vite/
+.cache/
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local reference material. Keep it out of commits unless a maintainer explicitly
+# decides to vendor a reference with license notices.
+reference-not-commit/*
+!reference-not-commit/README.md
+
+# User projects opened by the coordinator are external state, not app source.
+user-projects/
+

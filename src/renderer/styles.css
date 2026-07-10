@@ -1,0 +1,2374 @@
+/* ─────────────────────────────────────────────────────────────
+   Agent Coordinator — "ember" theme.
+   Palette + patterns reproduced from the ADE reference (warm dark),
+   reimplemented as plain CSS tokens (no copied source).
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --bg: #151110;
+  --fg: #eae8e6;
+  --sidebar: #1a1716;
+  --card: #201e1c;
+  --elevated: #252220;
+  --hover: #201e1c;
+  --border: #2a2827;
+  --border-strong: #3a3837;
+  --muted-fg: #a8a5a3;
+  --faint-fg: #7d7a77;
+
+  /* ADE parity: the primary accent is the off-white foreground, NOT the orange.
+     The ember #e07850 is chart/search-highlight only, never chrome — so the UI
+     reads monochrome-warm with zero visible orange. */
+  --primary: #eae8e6;
+  --primary-soft: rgba(234, 232, 230, 0.07);
+  --primary-ring: rgba(234, 232, 230, 0.22);
+
+  --green: #50a878;
+  --gold: #d4a84b;
+  --danger: #cc4444;
+  --danger-bg: #2e1a18;
+  --danger-fg: #f0b4ac;
+
+  --radius: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+}
+
+code,
+kbd {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+/* theme native form controls to the ember accent (kill the default blue) */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+/* Thin warm scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 116, 112, 0.45) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(122, 116, 112, 0.4);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(122, 116, 112, 0.65);
+}
+
+/* ── Sidebar / project rail ─────────────────────────────────── */
+.project-rail {
+  width: 244px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  /* Top pad clears the native traffic lights floated in at (16,18). Rows run
+     edge-to-edge (ADE-style), so no horizontal padding here. */
+  padding: 38px 0 12px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.14s ease;
+  -webkit-app-region: drag;
+}
+/* Interactive elements must opt out of the sidebar drag region. */
+.project-rail button,
+.project-rail input,
+.project-rail .project-row,
+.project-rail .session-row {
+  -webkit-app-region: no-drag;
+}
+
+.project-rail-collapsed {
+  width: 60px;
+  padding: 38px 8px 8px;
+}
+
+.project-rail-toolbar {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.project-rail-toggle {
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.project-rail-toggle:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+
+/* one row: [collapse toggle] [PROJECTS] … [+] — all on the same level */
+.project-rail-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 8px 0 10px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+.project-rail-collapsed .project-rail-header {
+  justify-content: center;
+  padding: 0;
+}
+
+.project-rail h2 {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+  margin: 0 0 0 4px;
+}
+
+.project-rail-add {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.project-rail-add:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* project row = selectable name + hover-revealed actions */
+.project-row {
+  display: flex;
+  align-items: center;
+  padding: 0 6px 0 12px;
+  transition: background 0.1s ease;
+}
+.project-row:hover {
+  background: var(--hover);
+}
+
+.project-list-select {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  padding: 7px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Project rows are FLUSH like the reference — no selection pill on the project.
+   The selection highlight belongs on session rows (added when sessions exist),
+   not on the project name. */
+.project-list-select.selected {
+  background: transparent;
+}
+
+.project-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.003em;
+}
+
+.project-list-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.project-list-icon-placeholder {
+  background: var(--elevated);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+/* (no selected-state icon tint — project rows stay flush) */
+
+/* actions are always visible (like the reference), not hover-revealed */
+.project-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.project-row-chevron,
+.project-row-add-session {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted-fg);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.14s ease, color 0.12s ease, background 0.12s ease;
+}
+.project-row-chevron:hover,
+.project-row-add-session:not(:disabled):hover {
+  color: var(--fg);
+  background: var(--elevated);
+}
+.project-row-chevron.expanded {
+  transform: rotate(90deg);
+}
+.project-row-add-session:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.project-row-sessions-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 1px 0 3px 40px;
+  padding: 4px 6px;
+  color: var(--faint-fg);
+  font-size: 12px;
+}
+.project-row-sessions-icon {
+  color: var(--border-strong);
+  display: inline-flex;
+}
+
+/* nested session rows under an expanded project — flush + indented, ADE-style */
+.project-row-sessions {
+  list-style: none;
+  margin: 1px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.session-row {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--muted-fg);
+  padding: 6px 12px 6px 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.session-row:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+/* selected session (ADE parity): full-width fill + a thin full-height
+   off-white bar at the very edge — no rounded floating card. */
+.session-row.selected {
+  background: var(--elevated);
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--fg);
+}
+.session-row-icon {
+  flex-shrink: 0;
+  color: var(--faint-fg);
+  display: inline-flex;
+}
+.session-row.selected .session-row-icon {
+  color: var(--muted-fg);
+}
+/* Repo-root workspace entry — gold accent, separated from work sessions. */
+.project-repo-entry {
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 2px;
+  padding-bottom: 2px;
+}
+.repo-row .session-row-icon {
+  color: var(--gold);
+}
+.repo-row .session-row-name {
+  font-weight: 600;
+}
+.repo-row.selected {
+  box-shadow: inset 2px 0 0 var(--gold);
+}
+.repo-row.selected .session-row-icon {
+  color: var(--gold);
+}
+.session-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.session-row-item {
+  position: relative;
+}
+.session-row-delete {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint-fg);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.1s ease, color 0.1s ease, background 0.1s ease;
+}
+.session-row-item:hover .session-row-delete {
+  opacity: 1;
+}
+.session-row-delete:hover {
+  color: var(--danger-fg);
+  background: var(--danger-bg);
+}
+
+.project-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--primary-ring);
+  color: var(--fg);
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+/* collapsed rail */
+.project-list-collapsed {
+  align-items: center;
+  gap: 3px;
+}
+.project-list-select-collapsed {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease;
+}
+.project-list-select-collapsed:hover {
+  background: var(--hover);
+}
+.project-list-select-collapsed.selected {
+  background: var(--elevated);
+  box-shadow: inset 0 0 0 1.5px var(--primary-ring);
+}
+
+/* ── Main area ──────────────────────────────────────────────── */
+.main-area {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.workspace-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px;
+  text-align: center;
+}
+.workspace-empty-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted-fg);
+}
+.workspace-empty-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--faint-fg);
+  max-width: 380px;
+}
+.workspace-empty-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.checkpoint-list-panel {
+  width: 328px;
+  flex-shrink: 0;
+  padding: 14px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+
+.checkpoint-detail-panel {
+  flex: 1;
+  padding: 18px 26px;
+  overflow-y: auto;
+}
+
+.checkpoint-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.checkpoint-list button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg);
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.checkpoint-list button:hover {
+  background: var(--hover);
+}
+.checkpoint-list button.selected {
+  background: var(--elevated);
+  border-color: var(--border-strong);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.checkpoint-feature {
+  flex: 1;
+  font-weight: 550;
+}
+
+.empty-state {
+  color: var(--faint-fg);
+  font-style: italic;
+  padding: 4px 8px;
+}
+
+.error-banner {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger-fg);
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+}
+
+/* ── Session view (Phase 2 stub) ────────────────────────────── */
+.session-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Draggable content titlebar (frameless-window parity with ADE). */
+.session-topbar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 44px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.session-topbar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+.session-topbar-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-topbar-kind {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+  flex-shrink: 0;
+}
+.session-topbar-kind-repo {
+  color: var(--gold);
+}
+.session-topbar-chip-repo {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: 10.5px;
+}
+.session-topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.session-topbar-chip {
+  font-size: 11px;
+  color: var(--muted-fg);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-topbar-chip-ok {
+  color: var(--fg);
+}
+.session-topbar-chip-pending {
+  color: var(--muted-fg);
+}
+.session-view-muted {
+  color: var(--faint-fg);
+}
+
+/* ADE-style tab strip: flat text tabs, bottom-aligned, active = ember underline. */
+.session-view-tabs {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 38px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  /* Many open tabs scroll horizontally instead of squishing / stacking. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.session-view-tabs::-webkit-scrollbar {
+  height: 6px;
+}
+.session-view-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+.session-view-tab-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.session-view-tab {
+  padding: 0 11px;
+  border: none;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: inset 0 -2px 0 transparent;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-view-tab:not(:disabled) {
+  cursor: pointer;
+}
+.session-view-tab:not(:disabled):hover {
+  color: var(--fg);
+}
+.session-view-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.session-view-tab.active {
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+.session-view-tab-close {
+  align-self: center;
+  margin: 0 2px 0 -4px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint-fg);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.session-view-tab-close:hover {
+  color: var(--danger-fg);
+  background: var(--hover);
+}
+/* File-tab close: an unsaved dot that turns into × on hover (VS Code pattern). */
+.session-view-tab-close .tab-close-dot {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+.session-view-tab-close.dirty .tab-close-dot {
+  display: inline-block;
+}
+.session-view-tab-close.dirty .tab-close-x {
+  display: none;
+}
+.session-view-tab-close.dirty:hover .tab-close-dot {
+  display: none;
+}
+.session-view-tab-close.dirty:hover .tab-close-x {
+  display: inline-flex;
+}
+.session-view-tab-add {
+  align-self: center;
+  margin-left: 4px;
+  width: 27px;
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 21px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.session-view-tab-add:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.session-view-tab-rename {
+  align-self: center;
+  width: 96px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  outline: none;
+}
+
+/* ── Session body: role / log / shell panels ────────────────── */
+.session-view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Log tab gets a padded scroll area; terminal tabs run full-bleed. */
+.session-log-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+/* Centered, card-less empty state for a pane (Log with no checkpoint, repo
+   workspace with no tab open). */
+.pane-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+.pane-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.pane-empty-hint {
+  font-size: 12.5px;
+  color: var(--muted-fg);
+}
+.pane-empty-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  color: var(--fg);
+}
+/* Keep-alive hosts set display:flex, which would override the `hidden`
+   attribute's UA display:none — restore it explicitly so only the active
+   session / tab is shown while the others stay mounted. */
+.session-view-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.session-view-host[hidden] {
+  display: none;
+}
+.session-terminal-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.session-terminal-host[hidden] {
+  display: none;
+}
+.session-terminal-host .terminal-pane {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+}
+.terminal-pane-warnings {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  padding: 5px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--danger);
+}
+/* "How to start" hint — a green callout at the top of a tab's terminal. */
+.terminal-hint {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 8px 8px 12px;
+  background: rgba(80, 168, 120, 0.12);
+  border-bottom: 1px solid rgba(80, 168, 120, 0.28);
+  border-left: 3px solid var(--green);
+  flex-shrink: 0;
+}
+.terminal-hint-icon {
+  flex-shrink: 0;
+  color: var(--green);
+}
+.terminal-hint-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+.terminal-hint-text code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(80, 168, 120, 0.18);
+  color: #8fd6ab;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.terminal-hint-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.terminal-hint-close:hover {
+  background: rgba(80, 168, 120, 0.2);
+  color: var(--fg);
+}
+.session-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 18px 20px;
+}
+.session-panel-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.session-panel-note {
+  margin: 0;
+  color: var(--faint-fg);
+  font-size: 13px;
+}
+.session-wf-hint {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--muted-fg);
+}
+.session-wf-hint code {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--fg);
+}
+.session-log-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.session-log-next {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  padding: 12px 16px;
+}
+.session-log-next-title {
+  margin: 0 0 10px;
+  font-weight: 600;
+  color: var(--primary);
+  font-size: 13px;
+}
+.session-log-next-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+}
+.session-log-next-grid > div {
+  display: contents;
+}
+.session-log-next-grid dt {
+  color: var(--faint-fg);
+  font-size: 12px;
+}
+.session-log-next-grid dd {
+  margin: 0;
+  font-size: 13px;
+  word-break: break-word;
+}
+.session-log-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.copy-button {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--muted-fg);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.copy-button:hover {
+  color: var(--fg);
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+.copy-button.copied {
+  color: var(--green);
+  border-color: rgba(80, 168, 120, 0.4);
+}
+
+/* ── Markdown file tab (preview / edit) ─────────────────────── */
+.file-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.file-view-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.file-view-modes {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+.file-view-mode {
+  padding: 3px 12px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.file-view-mode.active {
+  background: var(--card);
+  color: var(--fg);
+}
+.file-view-plainlabel {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+}
+.file-view-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.file-view-dirty {
+  font-size: 11px;
+  color: var(--gold);
+}
+.file-view-save {
+  padding: 4px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.file-view-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.file-view-save:not(:disabled):hover {
+  background: var(--hover);
+}
+.file-view-loading,
+.file-view-error {
+  padding: 20px;
+  color: var(--muted-fg);
+  font-size: 13px;
+}
+.file-view-error {
+  color: var(--danger-fg);
+}
+.file-view-addsel {
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.file-view-addsel:not(:disabled):hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+.file-view-addsel:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Composer ──────────────────────────────────────────────── */
+.composer {
+  flex-shrink: 0;
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.composer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 8px 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.composer-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.composer-hint {
+  font-size: 11px;
+  color: var(--faint-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.composer-flash {
+  font-size: 11px;
+  color: var(--green);
+  margin-right: 2px;
+}
+.composer-target {
+  height: 24px;
+  max-width: 160px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 12px;
+}
+.composer-send {
+  padding: 4px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.composer-send:not(:disabled):hover {
+  background: var(--hover);
+}
+.composer-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* "Send & Run" is the emphasized action (paste + Enter). */
+.composer-run {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--bg);
+}
+.composer-run:not(:disabled):hover {
+  background: var(--primary);
+  opacity: 0.88;
+}
+.composer-clear {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.composer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.composer-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.composer-text {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+}
+/* Floating "Add to composer" shown at a text selection in the editor. */
+.sel-float {
+  position: fixed;
+  z-index: 50;
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.sel-float:hover {
+  background: var(--hover);
+}
+
+/* ── Session git diff ───────────────────────────────────────── */
+.session-topbar-diff {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--muted-fg);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.session-topbar-diff:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.session-topbar-diff.active {
+  color: var(--fg);
+  border-color: var(--border-strong);
+  background: var(--sidebar);
+}
+
+/* Split: main tab area on the left, collapsible file tree on the right. */
+.session-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+.session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.session-files {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.session-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+}
+/* Worktree ⇄ repo-root toggle — shadcn-style segmented tabs: a dark inset list
+   with a raised, clearly-contrasted active segment. */
+.session-files-scope {
+  display: flex;
+  gap: 3px;
+  margin: 8px;
+  padding: 3px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.session-files-scope-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.session-files-scope-btn:hover:not(.active) {
+  color: var(--fg);
+}
+.session-files-scope-btn.active {
+  background: var(--elevated);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+/* "root" badge on a repo-root shell tab (gold = different context). */
+.tab-root-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(212, 168, 75, 0.18);
+  color: var(--gold);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.session-view-tab-add-root {
+  color: var(--gold);
+}
+.session-view-tab-add-root:hover {
+  color: var(--gold);
+  background: rgba(212, 168, 75, 0.14);
+}
+.session-files-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.session-files-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-fg);
+  cursor: pointer;
+}
+.session-files-refresh:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+.session-files-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.session-files-close:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+.session-files-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+
+/* Lazy file tree. */
+.filetree {
+  display: flex;
+  flex-direction: column;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 12px 3px 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tree-row:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+.tree-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--muted-fg);
+}
+.tree-chevron {
+  transition: transform 0.12s ease;
+}
+.tree-chevron.expanded {
+  transform: rotate(90deg);
+}
+.tree-fileglyph {
+  opacity: 0.65;
+}
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-loading {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--muted-fg);
+}
+.diff-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.diff-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.diff-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.diff-refresh {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.diff-refresh:hover {
+  background: var(--hover);
+}
+.diff-refresh.active {
+  border-color: var(--border-strong);
+  background: var(--sidebar);
+}
+.diff-empty {
+  padding: 24px;
+  color: var(--faint-fg);
+  font-size: 13px;
+}
+.diff-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.diff-filelist {
+  width: 300px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: 6px;
+}
+.diff-fileitem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.diff-fileitem:hover {
+  background: var(--hover);
+}
+.diff-fileitem.active {
+  background: var(--elevated);
+}
+.diff-filestatus {
+  flex-shrink: 0;
+  width: 15px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.diff-status-added {
+  color: #7fd18f;
+}
+.diff-status-deleted {
+  color: #e58a8a;
+}
+.diff-status-modified {
+  color: var(--gold);
+}
+.diff-status-renamed {
+  color: #7fb0e6;
+}
+.diff-filelabel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+}
+.diff-fname {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-fdir {
+  font-size: 11px;
+  color: var(--faint-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-filestat {
+  flex-shrink: 0;
+  display: flex;
+  gap: 5px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+}
+.diff-plus {
+  color: #7fd18f;
+}
+.diff-minus {
+  color: #e58a8a;
+}
+.diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  /* Opt back in to text selection (the app body sets user-select: none) so a
+     changed section can be selected and added to the composer. */
+  user-select: text;
+}
+.diff-line {
+  padding: 0 14px;
+  white-space: pre;
+  color: var(--muted-fg);
+}
+.diff-add {
+  color: #7fd18f;
+  background: rgba(80, 168, 120, 0.08);
+}
+.diff-del {
+  color: #e58a8a;
+  background: rgba(204, 68, 68, 0.08);
+}
+.diff-hunk {
+  color: #7fb0e6;
+  background: rgba(127, 176, 230, 0.06);
+}
+.diff-meta {
+  color: var(--faint-fg);
+}
+.diff-filehdr {
+  color: var(--fg);
+  font-weight: 600;
+}
+.file-view-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 48px;
+}
+.file-view-editor {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 20px 24px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-body {
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.65;
+  /* Fill the pane (symmetric padding on the container reads as centered). */
+  width: 100%;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1.4em 0 0.5em;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.markdown-body h1 {
+  font-size: 1.7em;
+}
+.markdown-body h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+.markdown-body p {
+  margin: 0.7em 0;
+}
+.markdown-body a {
+  color: #7fb0e6;
+  text-decoration: none;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.markdown-body li {
+  margin: 0.25em 0;
+}
+/* GFM task lists: drop the bullet and draw a clearly-visible custom checkbox. */
+.markdown-body li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.35em;
+  display: flex;
+  align-items: flex-start;
+}
+.markdown-body input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 2px 9px 0 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--elevated);
+  position: relative;
+  cursor: default;
+}
+.markdown-body input[type="checkbox"]:checked {
+  background: var(--green);
+  border-color: var(--green);
+}
+.markdown-body input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 9px;
+  border: solid #0d0b0a;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.markdown-body code {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.86em;
+}
+.markdown-body pre {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.9em 0;
+}
+.markdown-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12.5px;
+}
+.markdown-body blockquote {
+  margin: 0.9em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted-fg);
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-size: 0.92em;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.markdown-body th {
+  background: var(--elevated);
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.4em 0;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+.session-log-section-title {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.session-log-ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.session-log-ledger th,
+.session-log-ledger td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.session-log-ledger th {
+  color: var(--faint-fg);
+  font-weight: 600;
+}
+.session-log-latest {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--muted-fg);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ── Badges ─────────────────────────────────────────────────── */
+.badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--muted-fg);
+  border: 1px solid var(--border);
+}
+
+/* BLOCKED needs the human — reads as distinctly urgent, not another grey pill */
+.badge-attention {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px rgba(204, 68, 68, 0.35);
+}
+.badge-done {
+  background: rgba(80, 168, 120, 0.14);
+  color: #9fdcb8;
+  border-color: rgba(80, 168, 120, 0.4);
+}
+
+/* ── Definition lists / sections ────────────────────────────── */
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 5px 14px;
+  margin: 10px 0;
+}
+dl div {
+  display: contents;
+}
+dt {
+  color: var(--muted-fg);
+}
+dd {
+  margin: 0;
+}
+
+section {
+  margin: 22px 0;
+}
+section h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+  margin: 0 0 10px;
+}
+
+/* ── Role launcher buttons ──────────────────────────────────── */
+.role-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.role-button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 11px 12px;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--card);
+  text-align: left;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.role-button:not(:disabled):hover {
+  border-color: var(--primary-ring);
+  background: var(--elevated);
+}
+.role-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.role-button.out-of-turn {
+  border-color: rgba(212, 168, 75, 0.55);
+  background: rgba(212, 168, 75, 0.08);
+}
+.role-button-label {
+  font-weight: 600;
+}
+.role-button-command {
+  word-break: break-all;
+  color: var(--green);
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+}
+.role-button-cwd {
+  word-break: break-all;
+  color: var(--muted-fg);
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.warning {
+  color: var(--gold);
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+.warnings ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--gold);
+}
+
+/* ── Tables / pre ───────────────────────────────────────────── */
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--muted-fg);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+pre {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.worktree-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.worktree-missing button {
+  padding: 7px 14px;
+  border: 1px solid var(--primary-ring);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--fg);
+}
+
+/* ── Terminal panes ─────────────────────────────────────────── */
+.terminal-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 340px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #0e0b0a;
+}
+.terminal-pane.drag-over {
+  box-shadow: inset 0 0 0 2px var(--primary-ring);
+}
+.terminal-pane-surface {
+  flex: 1;
+  min-height: 0;
+  padding: 6px;
+}
+/* Drop hint overlay while dragging a file over the terminal. */
+.terminal-pane-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(14, 11, 10, 0.72);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.terminal-pane-exited {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.pane-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.pane-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--card);
+  transition: border-color 0.1s ease;
+}
+.pane-tab.active {
+  border-color: var(--primary-ring);
+  background: var(--elevated);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.pane-tab button {
+  background: transparent;
+  border: none;
+  padding: 6px 11px;
+}
+.pane-tab-close {
+  padding: 6px 8px !important;
+  color: var(--faint-fg);
+}
+.pane-tab-close:hover {
+  color: var(--danger-fg);
+}
+
+.pane-restore-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted-fg);
+}
+.pane-restore-prompt button {
+  padding: 7px 14px;
+  border: 1px solid var(--primary-ring);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--fg);
+}
+
+/* ── Modals ─────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  max-width: 420px;
+  box-shadow: var(--shadow-pop);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.modal-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+.modal-actions button:hover {
+  border-color: var(--border-strong);
+}
+.modal-confirm {
+  border-color: var(--primary-ring) !important;
+  background: var(--primary-soft) !important;
+  color: var(--fg);
+}
+.modal-confirm-danger {
+  padding: 7px 14px;
+  border: 1px solid var(--danger) !important;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg) !important;
+  color: var(--danger-fg);
+}
+
+/* ── New session dialog ─────────────────────────────────────── */
+.new-session-modal {
+  max-width: 440px;
+  width: 100%;
+}
+.new-session-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.new-session-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.new-session-field .field-label {
+  margin-top: 0;
+}
+.new-session-modal input[type="text"] {
+  width: 100%;
+}
+.new-session-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg);
+}
+.new-session-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+/* segmented kind toggle — active option carries the ember accent */
+.segmented {
+  display: flex;
+  gap: 6px;
+}
+.segmented-option {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--muted-fg);
+  font-weight: 500;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.segmented-option:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.segmented-option.selected {
+  border-color: var(--primary-ring);
+  background: var(--primary-soft);
+  color: var(--fg);
+}
+
+/* ── Context menu ───────────────────────────────────────────── */
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 188px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 5px;
+  box-shadow: var(--shadow-pop);
+}
+.context-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.context-menu button:hover {
+  background: var(--elevated);
+}
+.context-menu-icon {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--muted-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 6px;
+}
+.context-menu-danger {
+  color: var(--danger-fg) !important;
+}
+.context-menu-danger .context-menu-icon {
+  color: var(--danger-fg);
+}
+.context-menu-danger:hover {
+  background: var(--danger-bg) !important;
+}
+
+/* ── Project modal ──────────────────────────────────────────── */
+.project-modal {
+  max-width: 640px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.project-modal-basics {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.icon-picker {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 16px;
+  border: 1px dashed var(--border-strong);
+  background: var(--elevated);
+  color: var(--muted-fg);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+.icon-picker:hover {
+  border-color: var(--primary-ring);
+}
+.icon-picker img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.icon-picker-input {
+  display: none;
+}
+.project-modal-name {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.project-modal-name label,
+.project-modal-readonly-path {
+  font-size: 12px;
+  color: var(--muted-fg);
+}
+.project-modal-readonly-path {
+  margin-top: 12px;
+}
+
+input[type="text"],
+.project-modal-name input,
+.repo-source-fields input,
+.stage-config-table select,
+.stage-config-table input[type="text"] {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+input[type="text"]:focus,
+.project-modal-name input:focus,
+.repo-source-fields input:focus {
+  border-color: var(--primary-ring);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.repo-source {
+  margin-top: 16px;
+}
+.repo-source-radios {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+.repo-source-radios label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* stack the repo-source inputs vertically — never a cramped inline row */
+.repo-source-fields {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.repo-source-fields input {
+  width: 100%;
+}
+.repo-source-fields button {
+  align-self: flex-start;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+}
+.repo-source-fields code {
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* form field hierarchy: label + required marker + path chip + hint + preview */
+.field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-fg);
+  margin-top: 4px;
+}
+.req {
+  color: var(--primary);
+  font-weight: 700;
+}
+.field-hint {
+  font-size: 12px;
+  color: var(--faint-fg);
+  font-style: italic;
+}
+.path-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.path-picker button {
+  flex-shrink: 0;
+}
+.path-chip {
+  padding: 5px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted-fg);
+  font-size: 12px;
+  word-break: break-all;
+}
+.field-preview {
+  font-size: 12px;
+  color: var(--muted-fg);
+  margin: 0;
+}
+.field-preview code {
+  color: var(--green);
+}
+.repo-source-fields code {
+  color: var(--muted-fg);
+  word-break: break-all;
+}
+
+.stage-config-table {
+  font-size: 13px;
+}
+.stage-config-table th {
+  color: var(--muted-fg);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+.stage-config-table select,
+.stage-config-table input[type="text"] {
+  width: 100%;
+}
+.stage-config-dangerous {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stage-config-dangerous .warning {
+  font-size: 11px;
+  margin: 0;
+}
