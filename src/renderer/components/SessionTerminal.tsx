@@ -30,6 +30,9 @@ export interface SessionTerminalProps {
   // Shell tabs only: run in this directory instead of the session worktree
   // (e.g. the main repo root).
   cwdOverride?: string;
+  // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
+  // instead of only pre-typing it for the user to press Enter.
+  autoSubmitWf?: boolean;
 }
 
 // Bounded so the renderer's memory stays in check even for a busy session.
@@ -64,7 +67,7 @@ export interface SessionTerminalHandle {
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride } = props;
+  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
@@ -196,7 +199,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         window.agentCoordinator.terminal.write(ptyId, `${message}\r`);
       }
       if (wfPreType !== null) {
-        window.agentCoordinator.terminal.write(ptyId, wfPreType);
+        // Conductor-driven launches submit the wf command; a manual open only
+        // pre-types it (the user presses Enter).
+        window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${wfPreType}\r` : wfPreType);
       }
     }
 
