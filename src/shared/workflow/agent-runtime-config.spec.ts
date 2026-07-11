@@ -127,11 +127,26 @@ describe("buildAgentSetupMessages — opencode", () => {
   });
 });
 
+describe("buildAgentLaunchCommand — antigravity", () => {
+  it("builds a command with the model and always warns the CLI is unverified", () => {
+    const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", model: "some-model" }));
+    expect(result.command).toBe("antigravity --model some-model");
+    expect(result.warnings.some((w) => /unverified/i.test(w))).toBe(true);
+  });
+
+  it("does NOT invent effort/dangerous flags — warns instead", () => {
+    const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", effort: "high", dangerous: true }));
+    expect(result.command).toBe("antigravity --model opus");
+    expect(result.warnings.some((w) => /effort/i.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /dangerous/i.test(w))).toBe(true);
+  });
+});
+
 describe("createDefaultProjectRuntimeConfig", () => {
-  it("gives all 4 workflow stages a conservative (non-dangerous) default config", () => {
+  it("gives the 3 workflow stages a conservative (non-dangerous) default config", () => {
     const config = createDefaultProjectRuntimeConfig();
 
-    expect(Object.keys(config).sort()).toEqual(["architect", "implementer", "reviewer", "status"]);
+    expect(Object.keys(config).sort()).toEqual(["architect", "implementer", "reviewer"]);
     for (const stage of Object.values(config)) {
       expect(stage.dangerous).toBe(false);
     }

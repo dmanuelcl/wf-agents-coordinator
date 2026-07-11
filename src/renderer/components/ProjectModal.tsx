@@ -4,14 +4,13 @@ import { createDefaultProjectRuntimeConfig, DANGEROUS_SUPPORTED } from "../../sh
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
 import type { ProjectRecord } from "../../shared/ipc/contract";
 
-const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini"];
-const WORKFLOW_STAGES: WorkflowStage[] = ["architect", "implementer", "reviewer", "status"];
+const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini", "antigravity"];
+const WORKFLOW_STAGES: WorkflowStage[] = ["architect", "implementer", "reviewer"];
 
 const STAGE_LABELS: Record<WorkflowStage, string> = {
   architect: "Architect",
   implementer: "Implementer",
   reviewer: "Reviewer",
-  status: "Status",
 };
 
 const MODEL_PLACEHOLDERS: Record<AgentKind, string> = {
@@ -20,6 +19,7 @@ const MODEL_PLACEHOLDERS: Record<AgentKind, string> = {
   opencode: "anthropic/claude-opus-4-8",
   copilot: "(not applied)",
   gemini: "gemini-2.5-pro",
+  antigravity: "(unverified)",
 };
 
 const EFFORT_PLACEHOLDERS: Record<AgentKind, string> = {
@@ -28,6 +28,7 @@ const EFFORT_PLACEHOLDERS: Record<AgentKind, string> = {
   opencode: "not supported",
   copilot: "not supported",
   gemini: "not supported",
+  antigravity: "not supported",
 };
 
 type RepoSourceMode = "existing" | "new" | "clone";

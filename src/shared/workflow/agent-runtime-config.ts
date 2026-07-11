@@ -1,4 +1,4 @@
-export type AgentKind = "claude" | "codex" | "opencode" | "copilot" | "gemini";
+export type AgentKind = "claude" | "codex" | "opencode" | "copilot" | "gemini" | "antigravity";
 
 export interface AgentRuntimeConfig {
   kind: AgentKind;
@@ -7,7 +7,7 @@ export interface AgentRuntimeConfig {
   dangerous: boolean;
 }
 
-export type WorkflowStage = "architect" | "implementer" | "reviewer" | "status";
+export type WorkflowStage = "architect" | "implementer" | "reviewer";
 
 export type ProjectRuntimeConfig = Record<WorkflowStage, AgentRuntimeConfig>;
 
@@ -23,7 +23,6 @@ export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
     architect: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
     implementer: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
     reviewer: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
-    status: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
   };
 }
 
@@ -34,6 +33,7 @@ export const DANGEROUS_SUPPORTED: Record<AgentKind, boolean> = {
   copilot: true,
   gemini: true,
   opencode: false,
+  antigravity: false,
 };
 
 export interface AgentLaunchCommandResult {
@@ -123,6 +123,18 @@ function buildGeminiLaunchCommand(config: AgentRuntimeConfig): AgentLaunchComman
   return { command: parts.join(" "), warnings };
 }
 
+// antigravity [--model <model>]
+// Antigravity's CLI is not yet verified — the flags here are best-effort. Adjust
+// this builder once confirmed against the real binary.
+function buildAntigravityLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
+  const parts = ["antigravity"];
+  if (model(config)) parts.push("--model", model(config));
+  const warnings = ["Antigravity's CLI is unverified — check the launch command against the real binary."];
+  if (config.effort) warnings.push("Antigravity has no confirmed reasoning-effort flag; effort ignored.");
+  if (config.dangerous) warnings.push("Antigravity has no confirmed permission-bypass flag; dangerous ignored.");
+  return { command: parts.join(" "), warnings };
+}
+
 export function buildAgentLaunchCommand(
   config: AgentRuntimeConfig,
   session?: AgentSessionLaunch,
@@ -138,6 +150,8 @@ export function buildAgentLaunchCommand(
       return withUnwiredSessionWarning(buildCopilotLaunchCommand(config), config.kind, session);
     case "gemini":
       return withUnwiredSessionWarning(buildGeminiLaunchCommand(config), config.kind, session);
+    case "antigravity":
+      return withUnwiredSessionWarning(buildAntigravityLaunchCommand(config), config.kind, session);
   }
 }
 
