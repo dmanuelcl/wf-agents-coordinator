@@ -1257,6 +1257,48 @@ button:disabled {
   background: var(--sidebar);
 }
 
+.session-topbar-autopilot {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--muted-fg);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.session-topbar-autopilot:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.session-topbar-autopilot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted-fg);
+}
+.session-topbar-autopilot.on {
+  color: var(--fg);
+  border-color: var(--green);
+  background: rgba(80, 168, 120, 0.16);
+}
+.session-topbar-autopilot.on .session-topbar-autopilot-dot {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.session-conductor-strip {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  color: var(--green);
+  background: rgba(80, 168, 120, 0.1);
+  border-bottom: 1px solid rgba(80, 168, 120, 0.25);
+}
+
 /* Split: main tab area on the left, collapsible file tree on the right. */
 .session-split {
   flex: 1;

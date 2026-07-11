@@ -11,6 +11,10 @@ import { SESSION_AGENT_ROLES } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { LedgerRow, ParsedCheckpoint, WorkflowNext } from "../../shared/workflow/workflow-types";
+import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import type { ConductorAction } from "../../shared/workflow/conductor";
+import { useConductor } from "../hooks/useConductor";
 
 // A dynamic plain-shell tab. The `+` mints these; each carries a renameable
 // title so several shells in one session can be told apart. `root` shells run
@@ -47,6 +51,8 @@ interface SessionViewProps {
   // Restored on startup: which agent + shell tabs to reopen, and which is active.
   initialLayout?: SessionLayout;
   onLayoutChange?: (sessionId: string, layout: SessionLayout) => void;
+  // The owning project's auto-pilot conductor settings. Unused in repoMode.
+  autoPilotConfig?: AutoPilotConfig;
 }
 
 const KIND_LABELS: Record<WorkSessionKind, string> = {
@@ -221,7 +227,7 @@ function initialRoleTabs(layout: SessionLayout | undefined): Map<SessionAgentRol
 }
 
 export function SessionView(props: SessionViewProps): JSX.Element {
-  const { session, initialLayout, onLayoutChange, repoMode = false } = props;
+  const { session, initialLayout, onLayoutChange, repoMode = false, autoPilotConfig } = props;
   const kind = session.kind;
   const hasCheckpoint = session.checkpointPath !== null;
 
@@ -258,6 +264,11 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const [checkpoint, setCheckpoint] = useState<ParsedCheckpoint | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // Auto-pilot conductor: per-session on/off, the roles it opened (which auto-submit
+  // their wf command), and the last action line shown in the feedback strip.
+  const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
+  const [conductorAutoRoles, setConductorAutoRoles] = useState<Set<SessionAgentRole>>(() => new Set());
+  const [conductorLog, setConductorLog] = useState<string | null>(null);
   // Live terminal handles keyed by tab id (role name or shell tab id), so a
   // file's composer can deliver text into the chosen one.
   const terminalHandles = useRef<Map<string, SessionTerminalHandle>>(new Map());
@@ -432,6 +443,42 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const repoRoot = repoRootOf(session.worktreePath);
   const hasSeparateRoot = repoRoot !== session.worktreePath;
   const filesRootPath = filesScope === "repo" && hasSeparateRoot ? repoRoot : session.worktreePath;
+
+  // Deliver a conductor decision to the tabs. A forward step to a role tab that
+  // isn't open yet opens it and lets the tab's own launch follow-up submit the
+  // wf command (autoSubmitWf); a step to an already-open tab sends straight into
+  // the live agent. Pause pre-types (no Enter) so the human runs it.
+  function performConductorAction(action: ConductorAction): void {
+    if (action.kind === "noop") return;
+    if (action.kind === "send") {
+      const role = action.role;
+      if (openedRoleTabs.has(role)) {
+        terminalHandles.current.get(role)?.sendText(action.command, true);
+        setActiveTab(role);
+      } else {
+        setConductorAutoRoles((current) => new Set(current).add(role));
+        selectRole(role);
+      }
+      setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
+      return;
+    }
+    // pause
+    if (action.role && openedRoleTabs.has(action.role) && action.command) {
+      terminalHandles.current.get(action.role)?.sendText(action.command, false);
+      setActiveTab(action.role);
+    } else if (action.role) {
+      selectRole(action.role);
+    }
+    setConductorLog(`paused · ${action.reason}`);
+  }
+
+  useConductor({
+    session,
+    repoRoot,
+    enabled: !repoMode && autoPilotEnabled && hasCheckpoint,
+    getConfig: () => autoPilotConfig ?? createDefaultAutoPilotConfig(),
+    onAction: performConductorAction,
+  });
   // In repo mode there are no agent/Log tabs; if the active tab isn't a shell,
   // file, or the diff, nothing is open (show an empty state instead of a blank).
   const repoActiveTabExists =
@@ -451,6 +498,23 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           )}
         </div>
         <div className="session-topbar-meta">
+          {!repoMode && (
+            <button
+              type="button"
+              className={`session-topbar-autopilot${autoPilotEnabled ? " on" : ""}`}
+              disabled={!hasCheckpoint}
+              title={
+                hasCheckpoint
+                  ? "Auto-pilot: run each ▶ NEXT command automatically"
+                  : "Auto-pilot activates once a checkpoint exists"
+              }
+              aria-pressed={autoPilotEnabled}
+              onClick={() => setAutoPilotEnabled((value) => !value)}
+            >
+              <span className="session-topbar-autopilot-dot" />
+              Auto-pilot
+            </button>
+          )}
           <button
             type="button"
             className={`session-topbar-diff${filesOpen ? " active" : ""}`}
@@ -496,6 +560,10 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           )}
         </div>
       </header>
+
+      {!repoMode && autoPilotEnabled && conductorLog && (
+        <div className="session-conductor-strip">{conductorLog}</div>
+      )}
 
       <div className="session-split">
       <div className="session-main">
@@ -688,6 +756,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                 mode={mode}
                 onOpenPath={handleOpenPath}
                 hint={roleHint(role, kind, hasCheckpoint)}
+                autoSubmitWf={conductorAutoRoles.has(role)}
               />
             </div>
           ))}

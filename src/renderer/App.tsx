@@ -301,6 +301,7 @@ export function App(): JSX.Element {
               repoMode={isRepoSessionId(session.id)}
               initialLayout={restoredLayoutsRef.current[session.id]}
               onLayoutChange={handleSessionLayoutChange}
+              autoPilotConfig={projects.find((project) => project.id === session.projectId)?.autoPilot}
             />
           </div>
         ))}
