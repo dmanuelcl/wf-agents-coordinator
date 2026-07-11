@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
+import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import { scanProjectCheckpoints } from "./checkpoint-scanner";
 import type { ProjectRecord } from "./project-registry";
 
@@ -39,6 +40,7 @@ function makeProject(rootPath: string): ProjectRecord {
     checkpointGlobs: ["docs/workflow/checkpoints/*-checkpoint.md"],
     iconDataUrl: null,
     runtimeConfig: createDefaultProjectRuntimeConfig(),
+    autoPilot: createDefaultAutoPilotConfig(),
     createdAtEpochMs: 0,
     updatedAtEpochMs: 0,
   };

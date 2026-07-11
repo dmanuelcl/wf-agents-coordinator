@@ -8,7 +8,7 @@ import { defineProjectRegistryContractTests } from "./project-registry.contract"
 import { createSqliteProjectRegistry } from "./sqlite-project-registry";
 import type { ProjectRecord } from "./project-registry";
 
-type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig">;
+type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot">;
 
 let dir: string;
 let sqliteFilePath: string;
@@ -25,6 +25,23 @@ afterEach(() => {
 });
 
 defineProjectRegistryContractTests(() => createSqliteProjectRegistry({ sqliteFilePath }));
+
+describe("createSqliteProjectRegistry autoPilot", () => {
+  it("defaults autoPilot on add and round-trips an updated value across instances", async () => {
+    const registry = createSqliteProjectRegistry({ sqliteFilePath });
+    const created = await registry.addProject({ rootPath: "/repo/auto-pilot" });
+    expect(created.autoPilot).toEqual({ reloopLimit: 3, settleDelayMs: 4000 });
+
+    const updated = await registry.updateProject(created.id, {
+      autoPilot: { reloopLimit: 5, settleDelayMs: 6000 },
+    });
+    expect(updated.autoPilot).toEqual({ reloopLimit: 5, settleDelayMs: 6000 });
+
+    const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
+    const [listed] = await reloaded.listProjects();
+    expect(listed?.autoPilot).toEqual({ reloopLimit: 5, settleDelayMs: 6000 });
+  });
+});
 
 describe("createSqliteProjectRegistry migration", () => {
   function legacyRecord(overrides: Partial<LegacyProjectRecord>): LegacyProjectRecord {

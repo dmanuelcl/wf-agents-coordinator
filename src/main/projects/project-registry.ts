@@ -3,6 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import type { ProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
+import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 
 export interface ProjectRecord {
   id: string;
@@ -11,6 +13,7 @@ export interface ProjectRecord {
   checkpointGlobs: string[];
   iconDataUrl: string | null;
   runtimeConfig: ProjectRuntimeConfig;
+  autoPilot: AutoPilotConfig;
   createdAtEpochMs: number;
   updatedAtEpochMs: number;
 }
@@ -19,6 +22,7 @@ export interface ProjectUpdateInput {
   name?: string;
   iconDataUrl?: string | null;
   runtimeConfig?: ProjectRuntimeConfig;
+  autoPilot?: AutoPilotConfig;
 }
 
 export interface ProjectRegistry {
@@ -28,6 +32,7 @@ export interface ProjectRegistry {
     name?: string;
     iconDataUrl?: string | null;
     runtimeConfig?: ProjectRuntimeConfig;
+    autoPilot?: AutoPilotConfig;
   }): Promise<ProjectRecord>;
   updateProject(id: string, input: ProjectUpdateInput): Promise<ProjectRecord>;
   removeProject(id: string): Promise<void>;
@@ -75,6 +80,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         checkpointGlobs: [...DEFAULT_CHECKPOINT_GLOBS],
         iconDataUrl: input.iconDataUrl ?? null,
         runtimeConfig: input.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
+        autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };
@@ -97,6 +103,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         name: input.name ?? current.name,
         iconDataUrl: input.iconDataUrl !== undefined ? input.iconDataUrl : current.iconDataUrl,
         runtimeConfig: input.runtimeConfig ?? current.runtimeConfig,
+        autoPilot: input.autoPilot ?? current.autoPilot,
         updatedAtEpochMs: Date.now(),
       };
 

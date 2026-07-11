@@ -3,6 +3,7 @@ import type { WorktreeCreatePlan, WorktreeDetection } from "../../main/projects/
 import type { ProjectSessionState } from "../../main/terminals/session-state-store";
 import type { WorkspaceLayout } from "../../main/projects/workspace-layout-store";
 import type { ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
+import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
 import type { LaunchRole, RoleLaunchPlan } from "../workflow/role-launch-plan";
 import type { SessionAgentRole } from "../workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../workflow/work-session";
@@ -39,6 +40,7 @@ export interface ProjectCreateInput {
   name?: string;
   iconDataUrl?: string | null;
   runtimeConfig?: ProjectRuntimeConfig;
+  autoPilot?: AutoPilotConfig;
 }
 
 export interface SessionCreateInput {

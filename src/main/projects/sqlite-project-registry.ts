@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import type { ProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
+import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ProjectRecord, ProjectRegistry, ProjectUpdateInput } from "./project-registry";
 
 const DEFAULT_CHECKPOINT_GLOBS = ["docs/workflow/checkpoints/*-checkpoint.md"];
@@ -16,6 +18,7 @@ interface ProjectRow {
   checkpoint_globs: string;
   icon_data_url: string | null;
   runtime_config: string;
+  auto_pilot: string;
   created_at_epoch_ms: number;
   updated_at_epoch_ms: number;
 }
@@ -49,6 +52,13 @@ function ensureSchema(db: Database.Database): void {
     const defaultConfigJson = escapeSqlString(JSON.stringify(createDefaultProjectRuntimeConfig()));
     db.exec(`ALTER TABLE projects ADD COLUMN runtime_config TEXT NOT NULL DEFAULT '${defaultConfigJson}'`);
   }
+
+  if (!columnNames.has("auto_pilot")) {
+    // Same ADD COLUMN ... DEFAULT backfill: pre-conductor rows get a real
+    // default AutoPilotConfig, not NULL.
+    const defaultAutoPilotJson = escapeSqlString(JSON.stringify(createDefaultAutoPilotConfig()));
+    db.exec(`ALTER TABLE projects ADD COLUMN auto_pilot TEXT NOT NULL DEFAULT '${defaultAutoPilotJson}'`);
+  }
 }
 
 function rowToRecord(row: ProjectRow): ProjectRecord {
@@ -59,6 +69,7 @@ function rowToRecord(row: ProjectRow): ProjectRecord {
     checkpointGlobs: JSON.parse(row.checkpoint_globs) as string[],
     iconDataUrl: row.icon_data_url,
     runtimeConfig: JSON.parse(row.runtime_config) as ProjectRuntimeConfig,
+    autoPilot: JSON.parse(row.auto_pilot) as AutoPilotConfig,
     createdAtEpochMs: row.created_at_epoch_ms,
     updatedAtEpochMs: row.updated_at_epoch_ms,
   };
@@ -66,8 +77,8 @@ function rowToRecord(row: ProjectRow): ProjectRecord {
 
 function insertRecord(db: Database.Database, record: ProjectRecord): void {
   db.prepare(
-    `INSERT INTO projects (id, name, root_path, checkpoint_globs, icon_data_url, runtime_config, created_at_epoch_ms, updated_at_epoch_ms)
-     VALUES (@id, @name, @rootPath, @checkpointGlobs, @iconDataUrl, @runtimeConfig, @createdAtEpochMs, @updatedAtEpochMs)`,
+    `INSERT INTO projects (id, name, root_path, checkpoint_globs, icon_data_url, runtime_config, auto_pilot, created_at_epoch_ms, updated_at_epoch_ms)
+     VALUES (@id, @name, @rootPath, @checkpointGlobs, @iconDataUrl, @runtimeConfig, @autoPilot, @createdAtEpochMs, @updatedAtEpochMs)`,
   ).run({
     id: record.id,
     name: record.name,
@@ -75,6 +86,7 @@ function insertRecord(db: Database.Database, record: ProjectRecord): void {
     checkpointGlobs: JSON.stringify(record.checkpointGlobs),
     iconDataUrl: record.iconDataUrl,
     runtimeConfig: JSON.stringify(record.runtimeConfig),
+    autoPilot: JSON.stringify(record.autoPilot),
     createdAtEpochMs: record.createdAtEpochMs,
     updatedAtEpochMs: record.updatedAtEpochMs,
   });
@@ -92,16 +104,18 @@ function updateRecord(db: Database.Database, id: string, input: ProjectUpdateInp
     name: input.name ?? current.name,
     iconDataUrl: input.iconDataUrl !== undefined ? input.iconDataUrl : current.iconDataUrl,
     runtimeConfig: input.runtimeConfig ?? current.runtimeConfig,
+    autoPilot: input.autoPilot ?? current.autoPilot,
     updatedAtEpochMs: Date.now(),
   };
 
   db.prepare(
-    "UPDATE projects SET name = @name, icon_data_url = @iconDataUrl, runtime_config = @runtimeConfig, updated_at_epoch_ms = @updatedAtEpochMs WHERE id = @id",
+    "UPDATE projects SET name = @name, icon_data_url = @iconDataUrl, runtime_config = @runtimeConfig, auto_pilot = @autoPilot, updated_at_epoch_ms = @updatedAtEpochMs WHERE id = @id",
   ).run({
     id: updated.id,
     name: updated.name,
     iconDataUrl: updated.iconDataUrl,
     runtimeConfig: JSON.stringify(updated.runtimeConfig),
+    autoPilot: JSON.stringify(updated.autoPilot),
     updatedAtEpochMs: updated.updatedAtEpochMs,
   });
 
@@ -130,6 +144,7 @@ async function migrateFromLegacyJson(db: Database.Database, legacyJsonFilePath: 
         checkpointGlobs: legacy.checkpointGlobs ?? [...DEFAULT_CHECKPOINT_GLOBS],
         iconDataUrl: legacy.iconDataUrl ?? null,
         runtimeConfig: legacy.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
+        autoPilot: legacy.autoPilot ?? createDefaultAutoPilotConfig(),
         createdAtEpochMs: legacy.createdAtEpochMs ?? Date.now(),
         updatedAtEpochMs: legacy.updatedAtEpochMs ?? Date.now(),
       };
@@ -179,6 +194,7 @@ export function createSqliteProjectRegistry(params: {
         checkpointGlobs: [...DEFAULT_CHECKPOINT_GLOBS],
         iconDataUrl: input.iconDataUrl ?? null,
         runtimeConfig: input.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
+        autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };
