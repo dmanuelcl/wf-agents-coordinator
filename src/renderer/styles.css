@@ -2372,3 +2372,27 @@ input[type="text"]:focus,
   font-size: 11px;
   margin: 0;
 }
+
+.section-hint {
+  font-size: 12px;
+  color: var(--muted-fg);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+.section-hint code {
+  color: var(--green);
+}
+.autopilot-config {
+  display: flex;
+  gap: 16px;
+}
+.autopilot-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted-fg);
+}
+.autopilot-config input[type="number"] {
+  width: 120px;
+}

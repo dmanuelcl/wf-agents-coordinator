@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { createDefaultProjectRuntimeConfig, DANGEROUS_SUPPORTED } from "../../shared/workflow/agent-runtime-config";
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
+import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ProjectRecord } from "../../shared/ipc/contract";
 
 const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini", "antigravity"];
@@ -89,6 +91,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   const [runtimeConfig, setRuntimeConfig] = useState<ProjectRuntimeConfig>(
     project?.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
   );
+  const [autoPilot, setAutoPilot] = useState<AutoPilotConfig>(project?.autoPilot ?? createDefaultAutoPilotConfig());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,6 +159,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           name: trimmedName || undefined,
           iconDataUrl,
           runtimeConfig,
+          autoPilot,
         });
         onSaved(created);
       } else {
@@ -163,6 +167,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           name: trimmedName || undefined,
           iconDataUrl,
           runtimeConfig,
+          autoPilot,
         });
         onSaved(updated);
       }
@@ -402,6 +407,39 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                 })}
               </tbody>
             </table>
+          </section>
+
+          <section>
+            <h3>Auto-pilot</h3>
+            <p className="section-hint">
+              When enabled per session, the conductor auto-runs each <code>▶ NEXT</code> command. It auto-runs a
+              reviewer→implementer fix-loop up to the re-loop limit, then pauses. The settle delay is how long the
+              checkpoint must be quiet before it acts (so it never fires mid-write).
+            </p>
+            <div className="autopilot-config">
+              <label>
+                Re-loop limit
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={autoPilot.reloopLimit}
+                  onChange={(event) => setAutoPilot((c) => ({ ...c, reloopLimit: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                Settle delay (seconds)
+                <input
+                  type="number"
+                  min={0.5}
+                  step={0.5}
+                  value={autoPilot.settleDelayMs / 1000}
+                  onChange={(event) =>
+                    setAutoPilot((c) => ({ ...c, settleDelayMs: Math.round(Number(event.target.value) * 1000) }))
+                  }
+                />
+              </label>
+            </div>
           </section>
 
           {error && <p className="error-banner">{error}</p>}
