@@ -1,4 +1,18 @@
+import type { VcsHost } from "./vcs-config";
+
 export type WorkSessionKind = "feature" | "fix" | "review";
+
+// A review session created from a PR link carries this so it can post back to
+// the PR and run progressively. Null for manual reviews and non-review sessions.
+export interface PrLink {
+  host: VcsHost;
+  workspace: string;
+  repo: string;
+  prId: string;
+  url: string;
+  // The source-branch SHA of the most recent posted review; null until first post.
+  lastReviewedSha: string | null;
+}
 
 // A project's "repo root" workspace is modelled as a synthetic session whose id
 // is this prefix + the project id. It has no worktree (it IS the repo root) and
@@ -23,6 +37,8 @@ export interface WorkSession {
   branch: string;
   // The branch a review session reviews AGAINST. Null for feature/fix sessions.
   baseBranch: string | null;
+  // Set for a review session created from a PR link; null otherwise.
+  pr: PrLink | null;
   worktreePath: string;
   checkpointPath: string | null;
   createdAtEpochMs: number;

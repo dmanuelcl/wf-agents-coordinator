@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { slugifySessionName } from "../../shared/workflow/work-session";
-import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
+import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import { buildWorktreeCreatePlan, createWorktree } from "./worktree-manager";
 
 export interface SessionRegistry {
@@ -21,6 +21,7 @@ export interface SessionRegistry {
     name: string;
     reviewBranch: string;
     baseBranch: string;
+    pr?: PrLink | null;
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
@@ -135,6 +136,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         slug,
         branch,
         baseBranch: null,
+        pr: null,
         worktreePath,
         checkpointPath: null,
         createdAtEpochMs: Date.now(),
@@ -145,7 +147,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return record;
     },
 
-    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch }) {
+    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr }) {
       const slug = slugifySessionName(name);
       if (!slug) {
         throw new Error("Session name cannot be empty");
@@ -166,6 +168,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         slug,
         branch: reviewBranch,
         baseBranch,
+        pr: pr ?? null,
         worktreePath,
         checkpointPath: null,
         createdAtEpochMs: Date.now(),

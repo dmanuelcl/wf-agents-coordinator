@@ -21,6 +21,7 @@ function repoSessionFor(project: ProjectRecord): WorkSession {
     slug: "repo",
     branch: "",
     baseBranch: null,
+    pr: null,
     worktreePath: project.rootPath,
     checkpointPath: null,
     createdAtEpochMs: 0,
