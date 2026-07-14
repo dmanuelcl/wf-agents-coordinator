@@ -4,6 +4,7 @@ import type { ProjectSessionState } from "../../main/terminals/session-state-sto
 import type { WorkspaceLayout } from "../../main/projects/workspace-layout-store";
 import type { ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
 import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
+import type { ReviewConfig } from "../workflow/review-config";
 import type { LaunchRole, RoleLaunchPlan } from "../workflow/role-launch-plan";
 import type { SessionAgentRole } from "../workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../workflow/work-session";
@@ -41,6 +42,7 @@ export interface ProjectCreateInput {
   iconDataUrl?: string | null;
   runtimeConfig?: ProjectRuntimeConfig;
   autoPilot?: AutoPilotConfig;
+  review?: ReviewConfig;
 }
 
 export interface SessionCreateInput {

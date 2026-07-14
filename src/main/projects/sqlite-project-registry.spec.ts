@@ -8,7 +8,7 @@ import { defineProjectRegistryContractTests } from "./project-registry.contract"
 import { createSqliteProjectRegistry } from "./sqlite-project-registry";
 import type { ProjectRecord } from "./project-registry";
 
-type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot">;
+type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot" | "review">;
 
 let dir: string;
 let sqliteFilePath: string;
@@ -40,6 +40,24 @@ describe("createSqliteProjectRegistry autoPilot", () => {
     const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
     const [listed] = await reloaded.listProjects();
     expect(listed?.autoPilot).toEqual({ reloopLimit: 5, settleDelayMs: 6000 });
+  });
+});
+
+describe("createSqliteProjectRegistry review config", () => {
+  it("defaults review on add and round-trips an updated value across instances", async () => {
+    const registry = createSqliteProjectRegistry({ sqliteFilePath });
+    const created = await registry.addProject({ rootPath: "/repo/review" });
+    expect(created.review.slackChannel).toBe("");
+    expect(created.review.kickoff).toContain("{branch}");
+
+    const updated = await registry.updateProject(created.id, {
+      review: { slackChannel: "#pr-reviews", kickoff: "review {branch} vs {base}" },
+    });
+    expect(updated.review).toEqual({ slackChannel: "#pr-reviews", kickoff: "review {branch} vs {base}" });
+
+    const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
+    const [listed] = await reloaded.listProjects();
+    expect(listed?.review).toEqual({ slackChannel: "#pr-reviews", kickoff: "review {branch} vs {base}" });
   });
 });
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import { createDefaultReviewConfig } from "../../shared/workflow/review-config";
 import { createCheckpointWatchManager } from "./checkpoint-watch-manager";
 import type { WatcherHandle } from "./checkpoint-watcher";
 import type { ProjectRecord } from "./project-registry";
@@ -43,6 +44,7 @@ function makeProject(rootPath: string): ProjectRecord {
     iconDataUrl: null,
     runtimeConfig: createDefaultProjectRuntimeConfig(),
     autoPilot: createDefaultAutoPilotConfig(),
+    review: createDefaultReviewConfig(),
     createdAtEpochMs: 0,
     updatedAtEpochMs: 0,
   };

@@ -5,6 +5,8 @@ import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-r
 import type { ProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import { createDefaultReviewConfig } from "../../shared/workflow/review-config";
+import type { ReviewConfig } from "../../shared/workflow/review-config";
 
 export interface ProjectRecord {
   id: string;
@@ -14,6 +16,7 @@ export interface ProjectRecord {
   iconDataUrl: string | null;
   runtimeConfig: ProjectRuntimeConfig;
   autoPilot: AutoPilotConfig;
+  review: ReviewConfig;
   createdAtEpochMs: number;
   updatedAtEpochMs: number;
 }
@@ -23,6 +26,7 @@ export interface ProjectUpdateInput {
   iconDataUrl?: string | null;
   runtimeConfig?: ProjectRuntimeConfig;
   autoPilot?: AutoPilotConfig;
+  review?: ReviewConfig;
 }
 
 export interface ProjectRegistry {
@@ -33,6 +37,7 @@ export interface ProjectRegistry {
     iconDataUrl?: string | null;
     runtimeConfig?: ProjectRuntimeConfig;
     autoPilot?: AutoPilotConfig;
+    review?: ReviewConfig;
   }): Promise<ProjectRecord>;
   updateProject(id: string, input: ProjectUpdateInput): Promise<ProjectRecord>;
   removeProject(id: string): Promise<void>;
@@ -81,6 +86,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         iconDataUrl: input.iconDataUrl ?? null,
         runtimeConfig: input.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
         autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
+        review: input.review ?? createDefaultReviewConfig(),
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };
@@ -104,6 +110,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         iconDataUrl: input.iconDataUrl !== undefined ? input.iconDataUrl : current.iconDataUrl,
         runtimeConfig: input.runtimeConfig ?? current.runtimeConfig,
         autoPilot: input.autoPilot ?? current.autoPilot,
+        review: input.review ?? current.review,
         updatedAtEpochMs: Date.now(),
       };
 
