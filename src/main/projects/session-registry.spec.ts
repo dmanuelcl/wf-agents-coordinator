@@ -84,6 +84,28 @@ describe("SessionRegistry", () => {
     expect(branchExists(repoDir, "fix/broken-login")).toBe(true);
   });
 
+  it("createReviewSession detaches a worktree at the branch and stores baseBranch", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/to-review"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createReviewSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Review to-review",
+      reviewBranch: "feature/to-review",
+      baseBranch: "develop",
+    });
+
+    expect(session.kind).toBe("review");
+    expect(session.branch).toBe("feature/to-review");
+    expect(session.baseBranch).toBe("develop");
+    expect(session.checkpointPath).toBeNull();
+    expect(existsSync(session.worktreePath)).toBe(true);
+    // Detached: the review branch is NOT "checked out" as a worktree branch.
+    expect(branchExists(repoDir, "feature/to-review")).toBe(true);
+  });
+
   it("rejects a blank / punctuation-only name before creating anything", async () => {
     initGitRepo(repoDir);
     const registry = createSessionRegistry({ storeFilePath });

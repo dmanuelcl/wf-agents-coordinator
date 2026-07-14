@@ -55,6 +55,8 @@ export async function createWorktree(params: {
   branch: string;
   /** When true, create the branch with the worktree (`-b`) instead of checking out an existing one. */
   createBranch?: boolean;
+  /** When true, check out `branch` in DETACHED HEAD (for reviewing an existing ref, incl. `origin/…`). */
+  detach?: boolean;
   execFileImpl?: typeof execFileAsync;
 }): Promise<void> {
   const plan = buildWorktreeCreatePlan(params);
@@ -65,9 +67,11 @@ export async function createWorktree(params: {
   }
 
   const exec = params.execFileImpl ?? execFileAsync;
-  const args = params.createBranch
-    ? ["worktree", "add", "-b", params.branch, plan.path]
-    : ["worktree", "add", plan.path, params.branch];
+  const args = params.detach
+    ? ["worktree", "add", "--detach", plan.path, params.branch]
+    : params.createBranch
+      ? ["worktree", "add", "-b", params.branch, plan.path]
+      : ["worktree", "add", plan.path, params.branch];
   await exec("git", args, { cwd: params.projectRoot });
 }
 

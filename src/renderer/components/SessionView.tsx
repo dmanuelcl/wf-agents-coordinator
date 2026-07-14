@@ -58,12 +58,15 @@ interface SessionViewProps {
 const KIND_LABELS: Record<WorkSessionKind, string> = {
   feature: "Feature",
   fix: "Bug fix",
+  review: "PR review",
 };
 
 // The architect tab is framed as "Diagnose" for a fix — same role, same slot.
+// Review sessions have no architect tab, but the map must cover every kind.
 const ARCHITECT_TAB_LABEL: Record<WorkSessionKind, string> = {
   feature: "Architect",
   fix: "Diagnose",
+  review: "Reviewer",
 };
 
 function roleLabel(role: SessionAgentRole, kind: WorkSessionKind): string {

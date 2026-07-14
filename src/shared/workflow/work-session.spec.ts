@@ -49,6 +49,7 @@ describe("WorkSession shape", () => {
       kind,
       slug: "fix-login",
       branch: "fix/fix-login",
+      baseBranch: null,
       worktreePath: "/repo/.worktrees/fix-login",
       checkpointPath: null,
       createdAtEpochMs: 1_700_000_000_000,

@@ -1,4 +1,4 @@
-export type WorkSessionKind = "feature" | "fix";
+export type WorkSessionKind = "feature" | "fix" | "review";
 
 // A project's "repo root" workspace is modelled as a synthetic session whose id
 // is this prefix + the project id. It has no worktree (it IS the repo root) and
@@ -21,6 +21,8 @@ export interface WorkSession {
   kind: WorkSessionKind;
   slug: string;
   branch: string;
+  // The branch a review session reviews AGAINST. Null for feature/fix sessions.
+  baseBranch: string | null;
   worktreePath: string;
   checkpointPath: string | null;
   createdAtEpochMs: number;

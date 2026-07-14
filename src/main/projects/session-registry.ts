@@ -15,6 +15,13 @@ export interface SessionRegistry {
     kind: WorkSessionKind;
     copyEnv?: boolean;
   }): Promise<WorkSession>;
+  createReviewSession(params: {
+    projectId: string;
+    projectRoot: string;
+    name: string;
+    reviewBranch: string;
+    baseBranch: string;
+  }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
 }
@@ -127,6 +134,38 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         kind,
         slug,
         branch,
+        baseBranch: null,
+        worktreePath,
+        checkpointPath: null,
+        createdAtEpochMs: Date.now(),
+      };
+
+      records.push(record);
+      await writeAll(records);
+      return record;
+    },
+
+    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch }) {
+      const slug = slugifySessionName(name);
+      if (!slug) {
+        throw new Error("Session name cannot be empty");
+      }
+
+      const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch: reviewBranch }).path;
+      // Detached at the ref under review (works for local and `origin/…` remote
+      // branches); non-destructive and never conflicts with a branch checked out
+      // elsewhere. The branch was already fetched by the dialog's listBranches.
+      await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
+
+      const records = await readAll();
+      const record: WorkSession = {
+        id: randomUUID(),
+        projectId,
+        name,
+        kind: "review",
+        slug,
+        branch: reviewBranch,
+        baseBranch,
         worktreePath,
         checkpointPath: null,
         createdAtEpochMs: Date.now(),
