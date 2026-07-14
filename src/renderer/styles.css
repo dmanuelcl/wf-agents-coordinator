@@ -2149,6 +2149,13 @@ pre {
 .new-session-modal select {
   width: 100%;
 }
+.pr-url-row {
+  display: flex;
+  gap: 8px;
+}
+.pr-url-row input {
+  flex: 1;
+}
 
 .branch-combobox {
   position: relative;

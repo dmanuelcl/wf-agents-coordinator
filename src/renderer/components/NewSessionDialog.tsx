@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { BranchList } from "../../shared/ipc/contract";
+import type { BranchList, ResolvedPr } from "../../shared/ipc/contract";
 import { BranchCombobox } from "./BranchCombobox";
+
+type ReviewSource = "manual" | "link";
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -27,19 +29,29 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [baseBranch, setBaseBranch] = useState("");
   const [branches, setBranches] = useState<BranchList | null>(null);
   const [loadingBranches, setLoadingBranches] = useState(false);
+  const [reviewSource, setReviewSource] = useState<ReviewSource>("manual");
+  const [prUrl, setPrUrl] = useState("");
+  const [preview, setPreview] = useState<ResolvedPr | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [hasVcsCreds, setHasVcsCreds] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Whether the PR-link source is available (a VCS host + token is configured).
+  useEffect(() => {
+    void window.agentCoordinator.projects.hasVcsCreds(projectId).then(setHasVcsCreds);
+  }, [projectId]);
+
   // Load local + remote branches the first time Review is picked (fetches remotes).
   useEffect(() => {
-    if (kind !== "review" || branches || loadingBranches) return;
+    if (kind !== "review" || reviewSource !== "manual" || branches || loadingBranches) return;
     setLoadingBranches(true);
     window.agentCoordinator.git
       .listBranches(projectId)
       .then((list) => setBranches(list))
       .catch((caught) => setError(String(caught)))
       .finally(() => setLoadingBranches(false));
-  }, [kind, branches, loadingBranches, projectId]);
+  }, [kind, reviewSource, branches, loadingBranches, projectId]);
 
   function chooseBranch(branch: string): void {
     setReviewBranch(branch);
@@ -51,9 +63,26 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     setNameTouched(true);
   }
 
+  async function resolvePreview(): Promise<void> {
+    if (!prUrl.trim()) return;
+    setResolving(true);
+    setError(null);
+    setPreview(null);
+    try {
+      setPreview(await window.agentCoordinator.git.resolvePrUrl(projectId, prUrl.trim()));
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  const isLinkReview = kind === "review" && reviewSource === "link";
   const canSubmit =
     kind === "review"
-      ? name.trim().length > 0 && reviewBranch.length > 0 && baseBranch.trim().length > 0
+      ? isLinkReview
+        ? prUrl.trim().length > 0
+        : name.trim().length > 0 && reviewBranch.length > 0 && baseBranch.trim().length > 0
       : name.trim().length > 0;
 
   async function handleSubmit(event: FormEvent): Promise<void> {
@@ -62,18 +91,18 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     setSubmitting(true);
     setError(null);
     try {
-      const session =
-        kind === "review"
-          ? await window.agentCoordinator.sessions.createReview(projectId, {
-              name: name.trim(),
-              reviewBranch,
-              baseBranch: baseBranch.trim(),
-            })
-          : await window.agentCoordinator.sessions.create(projectId, {
-              name: name.trim(),
-              kind,
-              copyEnv,
-            });
+      let session: WorkSession;
+      if (isLinkReview) {
+        session = await window.agentCoordinator.sessions.createReviewFromPr(projectId, { url: prUrl.trim() });
+      } else if (kind === "review") {
+        session = await window.agentCoordinator.sessions.createReview(projectId, {
+          name: name.trim(),
+          reviewBranch,
+          baseBranch: baseBranch.trim(),
+        });
+      } else {
+        session = await window.agentCoordinator.sessions.create(projectId, { name: name.trim(), kind, copyEnv });
+      }
       onCreated(session);
     } catch (caught) {
       setError(String(caught));
@@ -108,43 +137,102 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
           {kind === "review" ? (
             <>
               <div className="new-session-field">
-                <label htmlFor="review-branch" className="field-label">
-                  Branch to review <span className="req">*</span>
-                </label>
-                <BranchCombobox
-                  inputId="review-branch"
-                  branches={branches}
-                  loading={loadingBranches}
-                  value={reviewBranch}
-                  onChange={chooseBranch}
-                />
+                <span className="field-label">Source</span>
+                <div className="segmented" role="radiogroup" aria-label="Review source">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={reviewSource === "manual"}
+                    className={`segmented-option${reviewSource === "manual" ? " selected" : ""}`}
+                    onClick={() => setReviewSource("manual")}
+                  >
+                    Manual (branch + base)
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={reviewSource === "link"}
+                    disabled={!hasVcsCreds}
+                    title={hasVcsCreds ? undefined : "Configure a VCS host + token in project settings first"}
+                    className={`segmented-option${reviewSource === "link" ? " selected" : ""}`}
+                    onClick={() => setReviewSource("link")}
+                  >
+                    From PR link
+                  </button>
+                </div>
+                {!hasVcsCreds && (
+                  <p className="field-hint">From-link needs a VCS host + API token in the project settings.</p>
+                )}
               </div>
 
-              <div className="new-session-field">
-                <label htmlFor="review-base" className="field-label">
-                  Base branch <span className="req">*</span>
-                </label>
-                <input
-                  id="review-base"
-                  type="text"
-                  placeholder="main / develop"
-                  value={baseBranch}
-                  onChange={(event) => setBaseBranch(event.target.value)}
-                />
-              </div>
+              {reviewSource === "link" ? (
+                <div className="new-session-field">
+                  <label htmlFor="review-pr-url" className="field-label">
+                    PR link <span className="req">*</span>
+                  </label>
+                  <div className="pr-url-row">
+                    <input
+                      id="review-pr-url"
+                      type="text"
+                      placeholder="https://bitbucket.org/workspace/repo/pull-requests/482"
+                      value={prUrl}
+                      onChange={(event) => {
+                        setPrUrl(event.target.value);
+                        setPreview(null);
+                      }}
+                    />
+                    <button type="button" onClick={() => void resolvePreview()} disabled={!prUrl.trim() || resolving}>
+                      {resolving ? "Resolving…" : "Check"}
+                    </button>
+                  </div>
+                  {preview && (
+                    <p className="field-preview">
+                      <code>{preview.source}</code> → <code>{preview.target}</code> · {preview.title}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="new-session-field">
+                    <label htmlFor="review-branch" className="field-label">
+                      Branch to review <span className="req">*</span>
+                    </label>
+                    <BranchCombobox
+                      inputId="review-branch"
+                      branches={branches}
+                      loading={loadingBranches}
+                      value={reviewBranch}
+                      onChange={chooseBranch}
+                    />
+                  </div>
 
-              <div className="new-session-field">
-                <label htmlFor="session-name" className="field-label">
-                  Session name <span className="req">*</span>
-                </label>
-                <input
-                  id="session-name"
-                  type="text"
-                  placeholder="Auto-filled from the branch"
-                  value={name}
-                  onChange={(event) => editName(event.target.value)}
-                />
-              </div>
+                  <div className="new-session-field">
+                    <label htmlFor="review-base" className="field-label">
+                      Base branch <span className="req">*</span>
+                    </label>
+                    <input
+                      id="review-base"
+                      type="text"
+                      placeholder="main / develop"
+                      value={baseBranch}
+                      onChange={(event) => setBaseBranch(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="new-session-field">
+                    <label htmlFor="session-name" className="field-label">
+                      Session name <span className="req">*</span>
+                    </label>
+                    <input
+                      id="session-name"
+                      type="text"
+                      placeholder="Auto-filled from the branch"
+                      value={name}
+                      onChange={(event) => editName(event.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </>
           ) : (
             <>

@@ -7,6 +7,7 @@ import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
 import type { ReviewConfig } from "../workflow/review-config";
 import type { VcsConfig } from "../workflow/vcs-config";
 import type { ResolvedPr } from "../../main/vcs/vcs-provider";
+export type { ResolvedPr };
 import type { LaunchRole, RoleLaunchPlan } from "../workflow/role-launch-plan";
 import type { SessionAgentRole } from "../workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../workflow/work-session";
