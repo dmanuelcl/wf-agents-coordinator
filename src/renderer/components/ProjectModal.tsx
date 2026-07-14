@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { createDefaultProjectRuntimeConfig, DANGEROUS_SUPPORTED } from "../../shared/workflow/agent-runtime-config";
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
@@ -6,7 +6,11 @@ import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-c
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import { createDefaultReviewConfig, DEFAULT_REVIEW_KICKOFF } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
+import { createDefaultVcsConfig } from "../../shared/workflow/vcs-config";
+import type { VcsConfig, VcsHost } from "../../shared/workflow/vcs-config";
 import type { ProjectRecord } from "../../shared/ipc/contract";
+
+const VCS_HOSTS: (VcsHost | "none")[] = ["none", "bitbucket", "github"];
 
 const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini", "antigravity"];
 const WORKFLOW_STAGES: WorkflowStage[] = ["architect", "implementer", "reviewer"];
@@ -95,10 +99,21 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   );
   const [autoPilot, setAutoPilot] = useState<AutoPilotConfig>(project?.autoPilot ?? createDefaultAutoPilotConfig());
   const [review, setReview] = useState<ReviewConfig>(project?.review ?? createDefaultReviewConfig());
+  const [vcs, setVcs] = useState<VcsConfig>(project?.vcs ?? createDefaultVcsConfig());
+  const [vcsToken, setVcsToken] = useState("");
+  const [vcsTokenTouched, setVcsTokenTouched] = useState(false);
+  const [hasVcsCreds, setHasVcsCreds] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Whether a token is already stored (edit mode) — so the token field can show
+  // "configured" without ever reading the token back into the renderer.
+  useEffect(() => {
+    if (mode !== "edit" || !project) return;
+    void window.agentCoordinator.projects.hasVcsCreds(project.id).then(setHasVcsCreds);
+  }, [mode, project]);
 
   function updateStage(stage: WorkflowStage, patch: Partial<ProjectRuntimeConfig[WorkflowStage]>): void {
     setRuntimeConfig((current) => ({
@@ -164,7 +179,9 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           runtimeConfig,
           autoPilot,
           review,
+          vcs,
         });
+        if (vcsToken.trim()) await window.agentCoordinator.projects.setVcsToken(created.id, vcsToken.trim());
         onSaved(created);
       } else {
         const updated = await window.agentCoordinator.projects.update(project!.id, {
@@ -173,7 +190,9 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           runtimeConfig,
           autoPilot,
           review,
+          vcs,
         });
+        if (vcsTokenTouched) await window.agentCoordinator.projects.setVcsToken(project!.id, vcsToken.trim());
         onSaved(updated);
       }
       onClose();
@@ -473,6 +492,70 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                   onChange={(event) => setReview((c) => ({ ...c, kickoff: event.target.value }))}
                 />
               </label>
+            </div>
+          </section>
+
+          <section>
+            <h3>VCS host</h3>
+            <p className="section-hint">
+              Lets you create a review from a <strong>PR link</strong> and post the review as a PR comment. The API
+              token is stored encrypted (OS keychain) — never in plaintext. Bitbucket: leave email empty for an access
+              token (Bearer), or set email for an API token (Basic).
+            </p>
+            <div className="review-config">
+              <label>
+                Host
+                <select value={vcs.host} onChange={(event) => setVcs((c) => ({ ...c, host: event.target.value as VcsHost | "none" }))}>
+                  {VCS_HOSTS.map((host) => (
+                    <option key={host} value={host}>
+                      {host}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {vcs.host !== "none" && (
+                <>
+                  <label>
+                    Workspace / owner
+                    <input
+                      type="text"
+                      placeholder="acme"
+                      value={vcs.workspace}
+                      onChange={(event) => setVcs((c) => ({ ...c, workspace: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Repo
+                    <input
+                      type="text"
+                      placeholder="web"
+                      value={vcs.repo}
+                      onChange={(event) => setVcs((c) => ({ ...c, repo: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Email <span className="field-hint-inline">(Bitbucket API token only)</span>
+                    <input
+                      type="text"
+                      placeholder="you@company.com (leave empty for a Bearer access token)"
+                      value={vcs.email}
+                      onChange={(event) => setVcs((c) => ({ ...c, email: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    API token
+                    <input
+                      type="password"
+                      placeholder={hasVcsCreds ? "configured ✓ — type to replace" : "paste the API token"}
+                      value={vcsToken}
+                      onChange={(event) => {
+                        setVcsToken(event.target.value);
+                        setVcsTokenTouched(true);
+                      }}
+                    />
+                  </label>
+                </>
+              )}
             </div>
           </section>
 

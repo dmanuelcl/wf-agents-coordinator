@@ -2528,3 +2528,12 @@ input[type="text"]:focus,
   min-height: 64px;
   font-family: inherit;
 }
+.review-config select,
+.review-config input[type="password"] {
+  width: 100%;
+}
+.field-hint-inline {
+  font-size: 11px;
+  color: var(--muted-fg);
+  font-weight: 400;
+}
