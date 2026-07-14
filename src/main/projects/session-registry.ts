@@ -1,9 +1,17 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { slugifySessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import { buildWorktreeCreatePlan, createWorktree } from "./worktree-manager";
+import { addWorktreeExclude } from "./worktree-exclude";
+
+// The gitignored review artifact a PR-review reviewer writes; posted to the PR.
+export const REVIEW_ARTIFACT = ".agent-review.md";
 
 export interface SessionRegistry {
   listSessions(params: { projectId: string }): Promise<WorkSession[]>;
@@ -22,6 +30,8 @@ export interface SessionRegistry {
     reviewBranch: string;
     baseBranch: string;
     pr?: PrLink | null;
+    // Fetch remotes before creating the worktree (PR-link reviews check out a remote ref).
+    fetchFirst?: boolean;
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
@@ -147,10 +157,15 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return record;
     },
 
-    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr }) {
+    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst }) {
       const slug = slugifySessionName(name);
       if (!slug) {
         throw new Error("Session name cannot be empty");
+      }
+
+      if (fetchFirst) {
+        // A PR-link review checks out a remote ref (origin/…) — make it current.
+        await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot }).catch(() => {});
       }
 
       const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch: reviewBranch }).path;
@@ -158,6 +173,9 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       // branches); non-destructive and never conflicts with a branch checked out
       // elsewhere. The branch was already fetched by the dialog's listBranches.
       await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
+      // Keep the review artifact out of git status/diffs without touching the
+      // tracked .gitignore on the branch (best-effort).
+      await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
 
       const records = await readAll();
       const record: WorkSession = {

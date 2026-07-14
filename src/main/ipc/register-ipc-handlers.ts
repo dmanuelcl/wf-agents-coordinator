@@ -243,6 +243,31 @@ export function registerIpcHandlers(params: {
     return getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
   });
 
+  ipcMain.handle(IPC_CHANNELS.sessionsCreateReviewFromPr, async (_event, projectId: string, input: { url: string }) => {
+    const project = await findProject(projectRegistry, projectId);
+    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
+    const ref = parsePrUrl(project.vcs.host, input.url);
+    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
+    const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
+    // Review the PR's pushed state: origin/<source> against origin/<target>.
+    return sessionRegistry.createReviewSession({
+      projectId,
+      projectRoot: project.rootPath,
+      name: `PR #${resolved.prId}: ${resolved.title}`,
+      reviewBranch: `origin/${resolved.source}`,
+      baseBranch: `origin/${resolved.target}`,
+      pr: {
+        host: resolved.host,
+        workspace: resolved.workspace,
+        repo: resolved.repo,
+        prId: resolved.prId,
+        url: resolved.url,
+        lastReviewedSha: null,
+      },
+      fetchFirst: true,
+    });
+  });
+
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
     await sessionCheckpointWatchManager.unwatchSession(sessionId);
     // User-confirmed delete (the renderer gates this): remove the git worktree,
