@@ -14,7 +14,10 @@ const FILE_PATH_RE = /(?:[~.]{0,2}\/)?(?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z][\w]{0,7}
 // How long to wait after the agent's first output before sending follow-up
 // input, so its input box has rendered. Heuristic — the real timing can only be
 // confirmed on-device against each agent CLI.
-const SETTLE_MS = 600;
+// How long the agent's output must stay QUIET before we send the follow-up —
+// long enough that a fresh TUI (claude etc.) has rendered its input box and will
+// accept a paste. The timer resets on every output chunk (see the data handler).
+const SETTLE_MS = 900;
 
 export interface SessionTerminalProps {
   session: WorkSession;
@@ -193,15 +196,17 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     function sendFollowUp(setupMessages: string[], wfPreType: string | null): void {
       if (disposed || !ptyId || followUpSent) return;
       followUpSent = true;
-      // Setup messages (e.g. `/effort high`) ARE submitted; the wf command is
-      // only pre-typed — the user presses Enter to run it.
+      // Setup messages (e.g. `/effort high`) are always submitted.
       for (const message of setupMessages) {
         window.agentCoordinator.terminal.write(ptyId, `${message}\r`);
       }
       if (wfPreType !== null) {
-        // Conductor-driven launches submit the wf command; a manual open only
-        // pre-types it (the user presses Enter).
-        window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${wfPreType}\r` : wfPreType);
+        // Bracketed paste (like sendText) so the command lands in the agent's
+        // input box as one unit — robust for multi-word/long text (e.g. a review
+        // kickoff). Conductor/review launches submit it (append CR); a manual
+        // open only pre-types it (the user presses Enter).
+        const paste = `\x1b[200~${wfPreType}\x1b[201~`;
+        window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${paste}\r` : paste);
       }
     }
 
@@ -277,8 +282,13 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (e.sessionId !== ptyId) return;
         term.write(e.data);
 
-        // On the first agent output, wait a beat for its input box, then send.
-        if (hasFollowUp && !followUpSent && settleTimer === null) {
+        // Send the follow-up once the agent's output goes QUIET for SETTLE_MS —
+        // i.e. it finished rendering its TUI and is waiting for input. A fixed
+        // delay after the FIRST byte fires too early on a fresh agent (the input
+        // box isn't ready yet, so a paste is dropped). Reset the timer on every
+        // chunk so we only fire after the startup burst settles.
+        if (hasFollowUp && !followUpSent) {
+          if (settleTimer) clearTimeout(settleTimer);
           settleTimer = setTimeout(() => {
             settleTimer = null;
             sendFollowUp(setupMessages, wfPreType);
