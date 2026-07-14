@@ -2142,7 +2142,8 @@ pre {
 .new-session-field .field-label {
   margin-top: 0;
 }
-.new-session-modal input[type="text"] {
+.new-session-modal input[type="text"],
+.new-session-modal select {
   width: 100%;
 }
 .new-session-check {
