@@ -9,6 +9,8 @@ import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-c
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import { createDefaultReviewConfig } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
+import { createDefaultVcsConfig } from "../../shared/workflow/vcs-config";
+import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import type { ProjectRecord, ProjectRegistry, ProjectUpdateInput } from "./project-registry";
 
 const DEFAULT_CHECKPOINT_GLOBS = ["docs/workflow/checkpoints/*-checkpoint.md"];
@@ -22,6 +24,7 @@ interface ProjectRow {
   runtime_config: string;
   auto_pilot: string;
   review: string;
+  vcs: string;
   created_at_epoch_ms: number;
   updated_at_epoch_ms: number;
 }
@@ -67,6 +70,11 @@ function ensureSchema(db: Database.Database): void {
     const defaultReviewJson = escapeSqlString(JSON.stringify(createDefaultReviewConfig()));
     db.exec(`ALTER TABLE projects ADD COLUMN review TEXT NOT NULL DEFAULT '${defaultReviewJson}'`);
   }
+
+  if (!columnNames.has("vcs")) {
+    const defaultVcsJson = escapeSqlString(JSON.stringify(createDefaultVcsConfig()));
+    db.exec(`ALTER TABLE projects ADD COLUMN vcs TEXT NOT NULL DEFAULT '${defaultVcsJson}'`);
+  }
 }
 
 function rowToRecord(row: ProjectRow): ProjectRecord {
@@ -79,6 +87,7 @@ function rowToRecord(row: ProjectRow): ProjectRecord {
     runtimeConfig: JSON.parse(row.runtime_config) as ProjectRuntimeConfig,
     autoPilot: JSON.parse(row.auto_pilot) as AutoPilotConfig,
     review: JSON.parse(row.review) as ReviewConfig,
+    vcs: JSON.parse(row.vcs) as VcsConfig,
     createdAtEpochMs: row.created_at_epoch_ms,
     updatedAtEpochMs: row.updated_at_epoch_ms,
   };
@@ -86,8 +95,8 @@ function rowToRecord(row: ProjectRow): ProjectRecord {
 
 function insertRecord(db: Database.Database, record: ProjectRecord): void {
   db.prepare(
-    `INSERT INTO projects (id, name, root_path, checkpoint_globs, icon_data_url, runtime_config, auto_pilot, review, created_at_epoch_ms, updated_at_epoch_ms)
-     VALUES (@id, @name, @rootPath, @checkpointGlobs, @iconDataUrl, @runtimeConfig, @autoPilot, @review, @createdAtEpochMs, @updatedAtEpochMs)`,
+    `INSERT INTO projects (id, name, root_path, checkpoint_globs, icon_data_url, runtime_config, auto_pilot, review, vcs, created_at_epoch_ms, updated_at_epoch_ms)
+     VALUES (@id, @name, @rootPath, @checkpointGlobs, @iconDataUrl, @runtimeConfig, @autoPilot, @review, @vcs, @createdAtEpochMs, @updatedAtEpochMs)`,
   ).run({
     id: record.id,
     name: record.name,
@@ -97,6 +106,7 @@ function insertRecord(db: Database.Database, record: ProjectRecord): void {
     runtimeConfig: JSON.stringify(record.runtimeConfig),
     autoPilot: JSON.stringify(record.autoPilot),
     review: JSON.stringify(record.review),
+    vcs: JSON.stringify(record.vcs),
     createdAtEpochMs: record.createdAtEpochMs,
     updatedAtEpochMs: record.updatedAtEpochMs,
   });
@@ -116,11 +126,12 @@ function updateRecord(db: Database.Database, id: string, input: ProjectUpdateInp
     runtimeConfig: input.runtimeConfig ?? current.runtimeConfig,
     autoPilot: input.autoPilot ?? current.autoPilot,
     review: input.review ?? current.review,
+    vcs: input.vcs ?? current.vcs,
     updatedAtEpochMs: Date.now(),
   };
 
   db.prepare(
-    "UPDATE projects SET name = @name, icon_data_url = @iconDataUrl, runtime_config = @runtimeConfig, auto_pilot = @autoPilot, review = @review, updated_at_epoch_ms = @updatedAtEpochMs WHERE id = @id",
+    "UPDATE projects SET name = @name, icon_data_url = @iconDataUrl, runtime_config = @runtimeConfig, auto_pilot = @autoPilot, review = @review, vcs = @vcs, updated_at_epoch_ms = @updatedAtEpochMs WHERE id = @id",
   ).run({
     id: updated.id,
     name: updated.name,
@@ -128,6 +139,7 @@ function updateRecord(db: Database.Database, id: string, input: ProjectUpdateInp
     runtimeConfig: JSON.stringify(updated.runtimeConfig),
     autoPilot: JSON.stringify(updated.autoPilot),
     review: JSON.stringify(updated.review),
+    vcs: JSON.stringify(updated.vcs),
     updatedAtEpochMs: updated.updatedAtEpochMs,
   });
 
@@ -158,6 +170,7 @@ async function migrateFromLegacyJson(db: Database.Database, legacyJsonFilePath: 
         runtimeConfig: legacy.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
         autoPilot: legacy.autoPilot ?? createDefaultAutoPilotConfig(),
         review: legacy.review ?? createDefaultReviewConfig(),
+        vcs: legacy.vcs ?? createDefaultVcsConfig(),
         createdAtEpochMs: legacy.createdAtEpochMs ?? Date.now(),
         updatedAtEpochMs: legacy.updatedAtEpochMs ?? Date.now(),
       };
@@ -209,6 +222,7 @@ export function createSqliteProjectRegistry(params: {
         runtimeConfig: input.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
         autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
         review: input.review ?? createDefaultReviewConfig(),
+        vcs: input.vcs ?? createDefaultVcsConfig(),
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };

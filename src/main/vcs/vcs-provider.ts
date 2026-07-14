@@ -1,4 +1,6 @@
-export type VcsHost = "bitbucket" | "github";
+import type { VcsHost } from "../../shared/workflow/vcs-config";
+
+export type { VcsHost };
 
 // The hidden marker appended to every review comment this tool posts, so a
 // later (progressive) run can find its own prior reports regardless of which

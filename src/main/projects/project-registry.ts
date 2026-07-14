@@ -7,6 +7,8 @@ import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-c
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import { createDefaultReviewConfig } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
+import { createDefaultVcsConfig } from "../../shared/workflow/vcs-config";
+import type { VcsConfig } from "../../shared/workflow/vcs-config";
 
 export interface ProjectRecord {
   id: string;
@@ -17,6 +19,7 @@ export interface ProjectRecord {
   runtimeConfig: ProjectRuntimeConfig;
   autoPilot: AutoPilotConfig;
   review: ReviewConfig;
+  vcs: VcsConfig;
   createdAtEpochMs: number;
   updatedAtEpochMs: number;
 }
@@ -27,6 +30,7 @@ export interface ProjectUpdateInput {
   runtimeConfig?: ProjectRuntimeConfig;
   autoPilot?: AutoPilotConfig;
   review?: ReviewConfig;
+  vcs?: VcsConfig;
 }
 
 export interface ProjectRegistry {
@@ -38,6 +42,7 @@ export interface ProjectRegistry {
     runtimeConfig?: ProjectRuntimeConfig;
     autoPilot?: AutoPilotConfig;
     review?: ReviewConfig;
+    vcs?: VcsConfig;
   }): Promise<ProjectRecord>;
   updateProject(id: string, input: ProjectUpdateInput): Promise<ProjectRecord>;
   removeProject(id: string): Promise<void>;
@@ -87,6 +92,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         runtimeConfig: input.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
         autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
         review: input.review ?? createDefaultReviewConfig(),
+        vcs: input.vcs ?? createDefaultVcsConfig(),
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };
@@ -111,6 +117,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         runtimeConfig: input.runtimeConfig ?? current.runtimeConfig,
         autoPilot: input.autoPilot ?? current.autoPilot,
         review: input.review ?? current.review,
+        vcs: input.vcs ?? current.vcs,
         updatedAtEpochMs: Date.now(),
       };
 

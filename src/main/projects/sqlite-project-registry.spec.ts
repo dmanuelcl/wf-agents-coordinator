@@ -8,7 +8,7 @@ import { defineProjectRegistryContractTests } from "./project-registry.contract"
 import { createSqliteProjectRegistry } from "./sqlite-project-registry";
 import type { ProjectRecord } from "./project-registry";
 
-type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot" | "review">;
+type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot" | "review" | "vcs">;
 
 let dir: string;
 let sqliteFilePath: string;
@@ -58,6 +58,22 @@ describe("createSqliteProjectRegistry review config", () => {
     const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
     const [listed] = await reloaded.listProjects();
     expect(listed?.review).toEqual({ slackChannel: "#pr-reviews", kickoff: "review {branch} vs {base}" });
+  });
+});
+
+describe("createSqliteProjectRegistry vcs config", () => {
+  it("defaults vcs on add and round-trips an updated value across instances", async () => {
+    const registry = createSqliteProjectRegistry({ sqliteFilePath });
+    const created = await registry.addProject({ rootPath: "/repo/vcs" });
+    expect(created.vcs).toEqual({ host: "none", workspace: "", repo: "", email: "" });
+
+    const vcs = { host: "bitbucket" as const, workspace: "acme", repo: "web", email: "me@acme.co" };
+    const updated = await registry.updateProject(created.id, { vcs });
+    expect(updated.vcs).toEqual(vcs);
+
+    const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
+    const [listed] = await reloaded.listProjects();
+    expect(listed?.vcs).toEqual(vcs);
   });
 });
 
