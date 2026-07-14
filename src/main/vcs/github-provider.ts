@@ -66,6 +66,12 @@ async function ghFetch(url: string, creds: VcsCredentials, init?: RequestInit): 
 export const githubProvider: VcsHostProvider = {
   host: "github",
 
+  async verifyAccess(target, creds) {
+    const res = await ghFetch(`${API}/repos/${target.workspace}/${target.repo}`, creds);
+    const json = (await res.json()) as { full_name?: string };
+    return { detail: json.full_name ?? `${target.workspace}/${target.repo}` };
+  },
+
   async resolvePr(ref, creds) {
     const res = await ghFetch(`${API}/repos/${ref.workspace}/${ref.repo}/pulls/${ref.prId}`, creds);
     return mapPullRequest(await res.json(), ref);

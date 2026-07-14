@@ -48,6 +48,7 @@ const api: AgentCoordinatorApi = {
   git: {
     listBranches: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.gitListBranches, projectId),
     resolvePrUrl: (projectId, url) => ipcRenderer.invoke(IPC_CHANNELS.gitResolvePrUrl, projectId, url),
+    testVcs: (input) => ipcRenderer.invoke(IPC_CHANNELS.gitTestVcs, input),
   },
   sessions: {
     list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsList, projectId),

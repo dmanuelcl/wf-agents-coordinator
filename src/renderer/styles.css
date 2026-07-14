@@ -2559,3 +2559,19 @@ input[type="text"]:focus,
   color: var(--muted-fg);
   font-weight: 400;
 }
+.vcs-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.vcs-test-result {
+  font-size: 12px;
+  word-break: break-word;
+}
+.vcs-test-result.ok {
+  color: var(--green);
+}
+.vcs-test-result.err {
+  color: #e5766b;
+}

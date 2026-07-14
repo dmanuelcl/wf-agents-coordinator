@@ -17,6 +17,7 @@ import type {
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
+import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
 import { REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
@@ -286,6 +287,23 @@ export function registerIpcHandlers(params: {
   ipcMain.handle(IPC_CHANNELS.projectsHasVcsCreds, async (_event, projectId: string) => {
     return vcsSecretStore.hasToken(projectId);
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.gitTestVcs,
+    async (_event, input: { config: VcsConfig; token: string | null; projectId: string | null }) => {
+      const { config } = input;
+      if (config.host === "none") throw new Error("Pick a VCS host first.");
+      if (!config.workspace.trim() || !config.repo.trim()) throw new Error("Set the workspace and repo first.");
+      let token = input.token?.trim() || null;
+      if (!token && input.projectId) token = await vcsSecretStore.getToken(input.projectId);
+      if (!token) throw new Error("Enter an API token to test.");
+      const creds = config.email.trim() ? { token, email: config.email.trim() } : { token };
+      return getProvider(config.host).verifyAccess(
+        { workspace: config.workspace.trim(), repo: config.repo.trim() },
+        creds,
+      );
+    },
+  );
 
   ipcMain.handle(IPC_CHANNELS.gitResolvePrUrl, async (_event, projectId: string, url: string) => {
     const project = await findProject(projectRegistry, projectId);

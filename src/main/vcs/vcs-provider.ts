@@ -37,6 +37,9 @@ export interface VcsCredentials {
 
 export interface VcsHostProvider {
   host: VcsHost;
+  // Authenticated read of the repo — used by the "Test" button to confirm the
+  // host, workspace/repo, and token all work. Returns the repo's full name.
+  verifyAccess(target: { workspace: string; repo: string }, creds: VcsCredentials): Promise<{ detail: string }>;
   resolvePr(ref: PrRef, creds: VcsCredentials): Promise<ResolvedPr>;
   listReviewComments(ref: PrRef, creds: VcsCredentials): Promise<ReviewComment[]>;
   postComment(ref: PrRef, body: string, creds: VcsCredentials): Promise<{ url: string }>;

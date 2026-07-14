@@ -97,6 +97,7 @@ export const IPC_CHANNELS = {
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
   gitResolvePrUrl: "git:resolve-pr-url",
+  gitTestVcs: "git:test-vcs",
   projectsSetVcsToken: "projects:set-vcs-token",
   projectsHasVcsCreds: "projects:has-vcs-creds",
   sessionsReadCheckpoint: "sessions:read-checkpoint",
@@ -216,6 +217,10 @@ export interface AgentCoordinatorApi {
   git: {
     listBranches(projectId: string): Promise<BranchList>;
     resolvePrUrl(projectId: string, url: string): Promise<ResolvedPr>;
+    // Verify VCS creds/host/repo. token is the just-typed value (or null to use
+    // the stored one for projectId). Resolves with the repo's full name, rejects
+    // with the host error on failure.
+    testVcs(input: { config: VcsConfig; token: string | null; projectId: string | null }): Promise<{ detail: string }>;
   };
   sessions: {
     list(projectId: string): Promise<WorkSession[]>;

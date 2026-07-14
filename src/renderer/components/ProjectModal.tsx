@@ -103,6 +103,8 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   const [vcsToken, setVcsToken] = useState("");
   const [vcsTokenTouched, setVcsTokenTouched] = useState(false);
   const [hasVcsCreds, setHasVcsCreds] = useState(false);
+  const [vcsTesting, setVcsTesting] = useState(false);
+  const [vcsTestResult, setVcsTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,6 +137,23 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
       setIconDataUrl(dataUrl);
     } catch (caught) {
       setError(String(caught));
+    }
+  }
+
+  async function handleTestVcs(): Promise<void> {
+    setVcsTesting(true);
+    setVcsTestResult(null);
+    try {
+      const { detail } = await window.agentCoordinator.git.testVcs({
+        config: vcs,
+        token: vcsToken.trim() || null,
+        projectId: project?.id ?? null,
+      });
+      setVcsTestResult({ ok: true, message: `Connected ✓ ${detail}` });
+    } catch (caught) {
+      setVcsTestResult({ ok: false, message: `Failed — ${String(caught)}` });
+    } finally {
+      setVcsTesting(false);
     }
   }
 
@@ -551,9 +570,24 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                       onChange={(event) => {
                         setVcsToken(event.target.value);
                         setVcsTokenTouched(true);
+                        setVcsTestResult(null);
                       }}
                     />
                   </label>
+                  <div className="vcs-test-row">
+                    <button
+                      type="button"
+                      onClick={() => void handleTestVcs()}
+                      disabled={vcsTesting || (!vcsToken.trim() && !hasVcsCreds)}
+                    >
+                      {vcsTesting ? "Testing…" : "Test connection"}
+                    </button>
+                    {vcsTestResult && (
+                      <span className={`vcs-test-result ${vcsTestResult.ok ? "ok" : "err"}`}>
+                        {vcsTestResult.message}
+                      </span>
+                    )}
+                  </div>
                 </>
               )}
             </div>

@@ -63,6 +63,12 @@ async function bbFetch(url: string, creds: VcsCredentials, init?: RequestInit): 
 export const bitbucketProvider: VcsHostProvider = {
   host: "bitbucket",
 
+  async verifyAccess(target, creds) {
+    const res = await bbFetch(`${API}/repositories/${target.workspace}/${target.repo}`, creds);
+    const json = (await res.json()) as { full_name?: string };
+    return { detail: json.full_name ?? `${target.workspace}/${target.repo}` };
+  },
+
   async resolvePr(ref, creds) {
     const res = await bbFetch(`${API}/repositories/${ref.workspace}/${ref.repo}/pullrequests/${ref.prId}`, creds);
     return mapPullRequest(await res.json(), ref);
