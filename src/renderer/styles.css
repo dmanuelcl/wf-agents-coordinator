@@ -2171,6 +2171,18 @@ pre {
 .pr-url-row input {
   flex: 1;
 }
+.pr-url-row button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pr-url-row button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
 
 .branch-combobox {
   position: relative;
@@ -2564,6 +2576,17 @@ input[type="text"]:focus,
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+.vcs-test-row button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--fg);
+  font-size: 13px;
+}
+.vcs-test-row button:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 .vcs-test-result {
   font-size: 12px;
