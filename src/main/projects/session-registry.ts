@@ -34,6 +34,7 @@ export interface SessionRegistry {
     fetchFirst?: boolean;
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
+  setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
 }
 
@@ -206,6 +207,16 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
       const current = records[index] as WorkSession;
       records[index] = { ...current, checkpointPath };
+      await writeAll(records);
+    },
+
+    async setReviewedSha({ sessionId, sha }) {
+      const records = await readAll();
+      const index = records.findIndex((record) => record.id === sessionId);
+      if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+      const current = records[index] as WorkSession;
+      if (!current.pr) throw new Error("Session has no PR to update.");
+      records[index] = { ...current, pr: { ...current.pr, lastReviewedSha: sha } };
       await writeAll(records);
     },
 

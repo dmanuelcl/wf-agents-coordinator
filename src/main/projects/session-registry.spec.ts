@@ -106,6 +106,25 @@ describe("SessionRegistry", () => {
     expect(branchExists(repoDir, "feature/to-review")).toBe(true);
   });
 
+  it("setReviewedSha updates a PR review session's lastReviewedSha", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/pr"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+    const session = await registry.createReviewSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "PR review",
+      reviewBranch: "feature/pr",
+      baseBranch: "main",
+      pr: { host: "bitbucket", workspace: "a", repo: "b", prId: "1", url: "u", lastReviewedSha: null },
+    });
+
+    await registry.setReviewedSha({ sessionId: session.id, sha: "deadbeef" });
+
+    const reloaded = await registry.getSession({ sessionId: session.id });
+    expect(reloaded?.pr?.lastReviewedSha).toBe("deadbeef");
+  });
+
   it("rejects a blank / punctuation-only name before creating anything", async () => {
     initGitRepo(repoDir);
     const registry = createSessionRegistry({ storeFilePath });

@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import type {
   AgentLaunchMode,
@@ -11,10 +15,18 @@ import type {
   SessionRoleLaunch,
 } from "../../shared/ipc/contract";
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
+import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
+import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import { listGitBranches } from "../projects/git-branches";
+import { REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
-import { parsePrUrl } from "../vcs/vcs-provider";
+import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
+import type { PrRef } from "../vcs/vcs-provider";
 import type { VcsSecretStore } from "../vcs/vcs-secret-store";
+
+function prRefOf(pr: PrLink): PrRef {
+  return { host: pr.host, workspace: pr.workspace, repo: pr.repo, prId: pr.prId, url: pr.url };
+}
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/workflow/agent-runtime-config";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
@@ -76,6 +88,41 @@ export function registerIpcHandlers(params: {
     const token = await vcsSecretStore.getToken(project.id);
     if (!token) throw new Error("No VCS token configured for this project.");
     return project.vcs.email ? { token, email: project.vcs.email } : { token };
+  }
+
+  // The command auto-typed into a reviewer/agent tab: a `wf` command normally, a
+  // review kickoff for a review session, or the progressive PR kickoff (with
+  // prior reports pulled from the PR) for a PR-link review.
+  async function buildReviewOrWfCommand(
+    session: WorkSession,
+    project: ProjectRecord,
+    role: SessionAgentRole,
+  ): Promise<string | null> {
+    if (session.kind !== "review" || role !== "reviewer") {
+      return wfCommandForSessionRole(role, session.checkpointPath);
+    }
+    if (!session.pr) {
+      return substituteReviewKickoff(project.review.kickoff, { branch: session.branch, base: session.baseBranch ?? "" });
+    }
+    let priorReports: string[] = [];
+    try {
+      const comments = await getProvider(session.pr.host).listReviewComments(
+        prRefOf(session.pr),
+        await vcsCredentialsFor(project),
+      );
+      priorReports = comments.filter((c) => c.authoredByTool).map((c) => c.body);
+    } catch {
+      // Offline / no prior comments — fall back to a non-progressive kickoff.
+      priorReports = [];
+    }
+    return buildPrReviewKickoff({
+      template: project.review.kickoff,
+      branch: session.branch,
+      base: session.baseBranch ?? "",
+      priorReports,
+      lastReviewedSha: session.pr.lastReviewedSha,
+      artifactFile: REVIEW_ARTIFACT,
+    });
   }
 
   ipcMain.handle(IPC_CHANNELS.projectsList, async () => {
@@ -268,6 +315,45 @@ export function registerIpcHandlers(params: {
     });
   });
 
+  ipcMain.handle(IPC_CHANNELS.sessionsPostReview, async (_event, sessionId: string) => {
+    const session = await sessionRegistry.getSession({ sessionId });
+    if (!session || !session.pr) throw new Error("This session has no PR to post to.");
+    const project = await findProject(projectRegistry, session.projectId);
+
+    const artifactPath = join(session.worktreePath, REVIEW_ARTIFACT);
+    let report: string;
+    try {
+      report = await readFile(artifactPath, "utf8");
+    } catch {
+      throw new Error(`No review file (${REVIEW_ARTIFACT}) yet — let the review finish writing it, then post.`);
+    }
+    if (!report.trim()) throw new Error(`The review file (${REVIEW_ARTIFACT}) is empty.`);
+
+    const body = `${report.trim()}\n\n${REVIEW_COMMENT_MARKER}`;
+    const posted = await getProvider(session.pr.host).postComment(
+      prRefOf(session.pr),
+      body,
+      await vcsCredentialsFor(project),
+    );
+
+    // Record what we reviewed so the next run is incremental.
+    const head = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: session.worktreePath });
+    await sessionRegistry.setReviewedSha({ sessionId, sha: head.stdout.trim() });
+
+    return { commentUrl: posted.url };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sessionsReviewArtifactExists, async (_event, sessionId: string) => {
+    const session = await sessionRegistry.getSession({ sessionId });
+    if (!session) return false;
+    try {
+      await stat(join(session.worktreePath, REVIEW_ARTIFACT));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
     await sessionCheckpointWatchManager.unwatchSession(sessionId);
     // User-confirmed delete (the renderer gates this): remove the git worktree,
@@ -345,13 +431,7 @@ export function registerIpcHandlers(params: {
       const launch = buildAgentLaunchCommand(agentConfig, { id: uuid, mode: effectiveMode });
       // A review session's reviewer auto-runs the project's review kickoff (with
       // branch/base substituted) instead of a `wf` command — it has no checkpoint.
-      const wfCommand =
-        session.kind === "review" && role === "reviewer"
-          ? substituteReviewKickoff(project.review.kickoff, {
-              branch: session.branch,
-              base: session.baseBranch ?? "",
-            })
-          : wfCommandForSessionRole(role, session.checkpointPath);
+      const wfCommand = await buildReviewOrWfCommand(session, project, role);
       return {
         agentCommand: launch.command,
         wfCommand,

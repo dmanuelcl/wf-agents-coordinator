@@ -91,6 +91,8 @@ export const IPC_CHANNELS = {
   sessionsCreate: "sessions:create",
   sessionsCreateReview: "sessions:create-review",
   sessionsCreateReviewFromPr: "sessions:create-review-from-pr",
+  sessionsPostReview: "sessions:post-review",
+  sessionsReviewArtifactExists: "sessions:review-artifact-exists",
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
   gitResolvePrUrl: "git:resolve-pr-url",
@@ -219,6 +221,8 @@ export interface AgentCoordinatorApi {
     create(projectId: string, input: SessionCreateInput): Promise<WorkSession>;
     createReview(projectId: string, input: ReviewSessionCreateInput): Promise<WorkSession>;
     createReviewFromPr(projectId: string, input: { url: string }): Promise<WorkSession>;
+    postReview(sessionId: string): Promise<{ commentUrl: string }>;
+    reviewArtifactExists(sessionId: string): Promise<boolean>;
     remove(sessionId: string): Promise<void>;
     readCheckpoint(sessionId: string): Promise<ParsedCheckpoint | null>;
     watchCheckpoint(sessionId: string): Promise<void>;
