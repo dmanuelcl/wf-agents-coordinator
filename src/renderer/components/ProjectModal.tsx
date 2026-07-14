@@ -518,8 +518,9 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
             <h3>VCS host</h3>
             <p className="section-hint">
               Lets you create a review from a <strong>PR link</strong> and post the review as a PR comment. The API
-              token is stored encrypted (OS keychain) — never in plaintext. Bitbucket: leave email empty for an access
-              token (Bearer), or set email for an API token (Basic).
+              token is stored encrypted (OS keychain) — never in plaintext. Bitbucket: for an <strong>Access Token</strong>{" "}
+              (starts with <code>ATCTT…</code>) leave email empty; for an <strong>Atlassian API token</strong> set your
+              account email.
             </p>
             <div className="review-config">
               <label>

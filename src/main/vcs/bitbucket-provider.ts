@@ -3,13 +3,18 @@ import type { PrRef, ResolvedPr, ReviewComment, VcsCredentials, VcsHostProvider 
 
 const API = "https://api.bitbucket.org/2.0";
 
-// Bitbucket API tokens authenticate with Basic (email:token); workspace/repo
-// access tokens use Bearer (no email). Pick by whether an email is configured.
-function authHeader(creds: VcsCredentials): string {
-  if (creds.email) {
-    return `Basic ${Buffer.from(`${creds.email}:${creds.token}`).toString("base64")}`;
-  }
-  return `Bearer ${creds.token}`;
+function basic(user: string, pass: string): string {
+  return `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
+}
+
+// Auth schemes to try, in order, for the given creds:
+// - email set → Atlassian API token: Basic(email:token).
+// - no email → an Access Token (ATCTT…): try Bearer first, then the
+//   `x-token-auth:token` Basic scheme (what `git clone` uses) — some access
+//   tokens only accept one of the two on the REST API.
+function authSchemes(creds: VcsCredentials): string[] {
+  if (creds.email) return [basic(creds.email, creds.token)];
+  return [`Bearer ${creds.token}`, basic("x-token-auth", creds.token)];
 }
 
 interface BitbucketPr {
@@ -50,14 +55,22 @@ export function mapComments(values: BitbucketComment[]): ReviewComment[] {
 }
 
 async function bbFetch(url: string, creds: VcsCredentials, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { Authorization: authHeader(creds), Accept: "application/json", ...(init?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    throw new Error(`Bitbucket ${init?.method ?? "GET"} ${url} → ${res.status}: ${await res.text()}`);
+  const schemes = authSchemes(creds);
+  let lastStatus = 0;
+  let lastBody = "";
+  for (const auth of schemes) {
+    const res = await fetch(url, {
+      ...init,
+      headers: { Authorization: auth, Accept: "application/json", ...(init?.headers ?? {}) },
+    });
+    if (res.ok) return res;
+    lastStatus = res.status;
+    lastBody = await res.text();
+    // Only an auth rejection is worth retrying with the next scheme; a 404 etc.
+    // means the request is wrong, so stop.
+    if (res.status !== 401 && res.status !== 403) break;
   }
-  return res;
+  throw new Error(`Bitbucket ${init?.method ?? "GET"} ${url} → ${lastStatus}: ${lastBody}`);
 }
 
 export const bitbucketProvider: VcsHostProvider = {
