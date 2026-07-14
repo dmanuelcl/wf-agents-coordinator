@@ -15,6 +15,8 @@ import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-c
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ConductorAction } from "../../shared/workflow/conductor";
 import { useConductor } from "../hooks/useConductor";
+import { buildSlackPostCommand } from "../../shared/workflow/review-config";
+import type { ReviewConfig } from "../../shared/workflow/review-config";
 
 // A dynamic plain-shell tab. The `+` mints these; each carries a renameable
 // title so several shells in one session can be told apart. `root` shells run
@@ -53,6 +55,8 @@ interface SessionViewProps {
   onLayoutChange?: (sessionId: string, layout: SessionLayout) => void;
   // The owning project's auto-pilot conductor settings. Unused in repoMode.
   autoPilotConfig?: AutoPilotConfig;
+  // The owning project's PR-review settings (Slack channel + kickoff).
+  reviewConfig?: ReviewConfig;
 }
 
 const KIND_LABELS: Record<WorkSessionKind, string> = {
@@ -60,6 +64,9 @@ const KIND_LABELS: Record<WorkSessionKind, string> = {
   fix: "Bug fix",
   review: "PR review",
 };
+
+// A review session shows only the Reviewer tab (no architect/implementer).
+const REVIEW_ROLES: readonly SessionAgentRole[] = ["reviewer"];
 
 // The architect tab is framed as "Diagnose" for a fix — same role, same slot.
 // Review sessions have no architect tab, but the map must cover every kind.
@@ -78,6 +85,9 @@ function roleLabel(role: SessionAgentRole, kind: WorkSessionKind): string {
 // segments render as inline code. This is guidance only — distinct from the
 // checkpoint's ▶ NEXT command (which is pre-typed into the terminal).
 function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: boolean): string {
+  if (kind === "review") {
+    return "This review auto-runs the kickoff against the branch when the agent loads. When it's done, use `Post to Slack` to publish it.";
+  }
   if (role === "architect") {
     if (hasCheckpoint) {
       return "Checkpoint ready — this tab pre-types the `wf verify` review command below. Press Enter, or open Log to see ▶ NEXT.";
@@ -229,9 +239,16 @@ function initialRoleTabs(layout: SessionLayout | undefined): Map<SessionAgentRol
   return new Map<SessionAgentRole, AgentLaunchMode>([["architect", "fresh"]]);
 }
 
+// A review session opens straight on the Reviewer tab (resuming it if restored).
+function initialReviewTabs(layout: SessionLayout | undefined): Map<SessionAgentRole, AgentLaunchMode> {
+  const restored = layout?.openedRoleTabs?.includes("reviewer") ?? false;
+  return new Map<SessionAgentRole, AgentLaunchMode>([["reviewer", restored ? "resume" : "fresh"]]);
+}
+
 export function SessionView(props: SessionViewProps): JSX.Element {
-  const { session, initialLayout, onLayoutChange, repoMode = false, autoPilotConfig } = props;
+  const { session, initialLayout, onLayoutChange, repoMode = false, autoPilotConfig, reviewConfig } = props;
   const kind = session.kind;
+  const reviewMode = kind === "review";
   const hasCheckpoint = session.checkpointPath !== null;
 
   // A fresh repo workspace opens with exactly one shell, seeded here (not via an
@@ -243,14 +260,14 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   );
 
   const [activeTab, setActiveTab] = useState<string>(
-    () => initialLayout?.activeTab ?? seedRepoShell?.id ?? "architect",
+    () => initialLayout?.activeTab ?? seedRepoShell?.id ?? (reviewMode ? "reviewer" : "architect"),
   );
   // Agent tabs opened at least once, each with its launch mode; their terminals
   // stay mounted (agents keep running) while another tab is shown. This
   // component is keyed by session.id in the parent, so these initialisers run
   // once per session and the restored layout is not clobbered on re-render.
   const [openedRoleTabs, setOpenedRoleTabs] = useState<Map<SessionAgentRole, AgentLaunchMode>>(() =>
-    repoMode ? new Map() : initialRoleTabs(initialLayout),
+    repoMode ? new Map() : reviewMode ? initialReviewTabs(initialLayout) : initialRoleTabs(initialLayout),
   );
   const [shellTabs, setShellTabs] = useState<ShellTab[]>(() =>
     initialLayout?.shellTabs?.length ? initialLayout.shellTabs : seedRepoShell ? [seedRepoShell] : [],
@@ -309,6 +326,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   }, []);
 
   function isRoleDisabled(role: SessionAgentRole): boolean {
+    // A review session's reviewer is always live — it has no checkpoint gate.
+    if (reviewMode) return false;
     return (role === "implementer" || role === "reviewer") && !hasCheckpoint;
   }
 
@@ -496,12 +515,39 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           <span className="session-topbar-name">{session.name}</span>
           {repoMode ? (
             <span className="session-topbar-kind session-topbar-kind-repo">REPO ROOT</span>
+          ) : reviewMode ? (
+            <span
+              className="session-topbar-kind session-topbar-kind-review"
+              title={session.baseBranch ? `${session.branch} vs ${session.baseBranch}` : session.branch}
+            >
+              PR REVIEW
+            </span>
           ) : (
             <span className="session-topbar-kind">{KIND_LABELS[kind]}</span>
           )}
         </div>
         <div className="session-topbar-meta">
-          {!repoMode && (
+          {reviewMode && (
+            <button
+              type="button"
+              className="session-topbar-diff"
+              disabled={!reviewConfig?.slackChannel}
+              title={
+                reviewConfig?.slackChannel
+                  ? `Post the review to ${reviewConfig.slackChannel}`
+                  : "Set a Slack channel in project config first"
+              }
+              onClick={() => {
+                const channel = reviewConfig?.slackChannel;
+                if (!channel) return;
+                terminalHandles.current.get("reviewer")?.sendText(buildSlackPostCommand(channel), true);
+                setActiveTab("reviewer");
+              }}
+            >
+              Post to Slack
+            </button>
+          )}
+          {!repoMode && !reviewMode && (
             <button
               type="button"
               className={`session-topbar-autopilot${autoPilotEnabled ? " on" : ""}`}
@@ -564,7 +610,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         </div>
       </header>
 
-      {!repoMode && autoPilotEnabled && conductorLog && (
+      {!repoMode && !reviewMode && autoPilotEnabled && conductorLog && (
         <div className="session-conductor-strip">{conductorLog}</div>
       )}
 
@@ -572,7 +618,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       <div className="session-main">
       <div className="session-view-tabs" role="tablist" aria-label="Session tabs">
         {!repoMode &&
-          SESSION_AGENT_ROLES.map((role) => {
+          (reviewMode ? REVIEW_ROLES : SESSION_AGENT_ROLES).map((role) => {
             const disabled = isRoleDisabled(role);
             const active = activeTab === role;
             return (
@@ -592,7 +638,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             );
           })}
 
-        {!repoMode && (
+        {!repoMode && !reviewMode && (
           <div className={`session-view-tab-wrap${activeTab === "log" ? " active" : ""}`}>
             <button
               type="button"
@@ -759,7 +805,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                 mode={mode}
                 onOpenPath={handleOpenPath}
                 hint={roleHint(role, kind, hasCheckpoint)}
-                autoSubmitWf={conductorAutoRoles.has(role)}
+                autoSubmitWf={(reviewMode && role === "reviewer") || conductorAutoRoles.has(role)}
               />
             </div>
           ))}

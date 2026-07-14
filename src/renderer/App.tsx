@@ -87,6 +87,7 @@ export function App(): JSX.Element {
     ? (allSessions.find((session) => session.id === selectedSessionId) ?? null)
     : null;
   const selectedSessionCheckpoint = selectedSession?.checkpointPath ?? null;
+  const selectedSessionKind = selectedSession?.kind ?? null;
   const openedSessions = openedSessionIds
     .map((id) => allSessions.find((session) => session.id === id))
     .filter((session): session is WorkSession => session !== undefined);
@@ -202,14 +203,17 @@ export function App(): JSX.Element {
   }, []);
 
   // While the selected session has no checkpoint, watch its worktree for one to
-  // appear; stop the moment it does (or the session is deselected).
+  // appear; stop the moment it does (or the session is deselected). Review
+  // sessions never have a checkpoint of their own — and their reviewed branch may
+  // itself CONTAIN checkpoint files — so they are never watched.
   useEffect(() => {
     if (!selectedSessionId || isRepoSessionId(selectedSessionId) || selectedSessionCheckpoint !== null) return;
+    if (selectedSessionKind === "review") return;
     void window.agentCoordinator.sessions.watchCheckpoint(selectedSessionId);
     return () => {
       void window.agentCoordinator.sessions.unwatchCheckpoint(selectedSessionId);
     };
-  }, [selectedSessionId, selectedSessionCheckpoint]);
+  }, [selectedSessionId, selectedSessionCheckpoint, selectedSessionKind]);
 
   async function refreshProjects(): Promise<void> {
     try {
@@ -303,6 +307,7 @@ export function App(): JSX.Element {
               initialLayout={restoredLayoutsRef.current[session.id]}
               onLayoutChange={handleSessionLayoutChange}
               autoPilotConfig={projects.find((project) => project.id === session.projectId)?.autoPilot}
+              reviewConfig={projects.find((project) => project.id === session.projectId)?.review}
             />
           </div>
         ))}

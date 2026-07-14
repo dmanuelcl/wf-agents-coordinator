@@ -597,6 +597,9 @@ button:disabled {
 .session-topbar-kind-repo {
   color: var(--gold);
 }
+.session-topbar-kind-review {
+  color: var(--green);
+}
 .session-topbar-chip-repo {
   font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
   font-size: 10.5px;
