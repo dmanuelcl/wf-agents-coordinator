@@ -52,6 +52,19 @@ export interface SessionCreateInput {
   copyEnv?: boolean;
 }
 
+export interface ReviewSessionCreateInput {
+  name: string;
+  // The branch under review (local like "feature/x" or remote like "origin/feature/x").
+  reviewBranch: string;
+  // The branch to review against (e.g. "main" / "develop").
+  baseBranch: string;
+}
+
+export interface BranchList {
+  local: string[];
+  remote: string[];
+}
+
 export const IPC_CHANNELS = {
   projectsList: "projects:list",
   projectsAdd: "projects:add",
@@ -72,7 +85,9 @@ export const IPC_CHANNELS = {
   launchBuild: "launch:build",
   sessionsList: "sessions:list",
   sessionsCreate: "sessions:create",
+  sessionsCreateReview: "sessions:create-review",
   sessionsRemove: "sessions:remove",
+  gitListBranches: "git:list-branches",
   sessionsReadCheckpoint: "sessions:read-checkpoint",
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
@@ -185,9 +200,13 @@ export interface AgentCoordinatorApi {
   launch: {
     build(projectId: string, checkpointPath: string, role: LaunchRole): Promise<RoleLaunchPlan>;
   };
+  git: {
+    listBranches(projectId: string): Promise<BranchList>;
+  };
   sessions: {
     list(projectId: string): Promise<WorkSession[]>;
     create(projectId: string, input: SessionCreateInput): Promise<WorkSession>;
+    createReview(projectId: string, input: ReviewSessionCreateInput): Promise<WorkSession>;
     remove(sessionId: string): Promise<void>;
     readCheckpoint(sessionId: string): Promise<ParsedCheckpoint | null>;
     watchCheckpoint(sessionId: string): Promise<void>;

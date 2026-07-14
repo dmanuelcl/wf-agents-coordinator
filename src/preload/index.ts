@@ -43,9 +43,13 @@ const api: AgentCoordinatorApi = {
     build: (projectId, checkpointPath, role) =>
       ipcRenderer.invoke(IPC_CHANNELS.launchBuild, projectId, checkpointPath, role),
   },
+  git: {
+    listBranches: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.gitListBranches, projectId),
+  },
   sessions: {
     list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsList, projectId),
     create: (projectId, input) => ipcRenderer.invoke(IPC_CHANNELS.sessionsCreate, projectId, input),
+    createReview: (projectId, input) => ipcRenderer.invoke(IPC_CHANNELS.sessionsCreateReview, projectId, input),
     remove: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsRemove, sessionId),
     readCheckpoint: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsReadCheckpoint, sessionId),
     watchCheckpoint: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsWatchCheckpoint, sessionId),

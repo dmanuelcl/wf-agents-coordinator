@@ -3,7 +3,15 @@ import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
-import type { AgentLaunchMode, ProjectCreateInput, SessionCreateInput, SessionRoleLaunch } from "../../shared/ipc/contract";
+import type {
+  AgentLaunchMode,
+  ProjectCreateInput,
+  ReviewSessionCreateInput,
+  SessionCreateInput,
+  SessionRoleLaunch,
+} from "../../shared/ipc/contract";
+import { substituteReviewKickoff } from "../../shared/workflow/review-config";
+import { listGitBranches } from "../projects/git-branches";
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/workflow/agent-runtime-config";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
@@ -186,6 +194,25 @@ export function registerIpcHandlers(params: {
     });
   });
 
+  ipcMain.handle(
+    IPC_CHANNELS.sessionsCreateReview,
+    async (_event, projectId: string, input: ReviewSessionCreateInput) => {
+      const project = await findProject(projectRegistry, projectId);
+      return sessionRegistry.createReviewSession({
+        projectId,
+        projectRoot: project.rootPath,
+        name: input.name,
+        reviewBranch: input.reviewBranch,
+        baseBranch: input.baseBranch,
+      });
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.gitListBranches, async (_event, projectId: string) => {
+    const project = await findProject(projectRegistry, projectId);
+    return listGitBranches({ projectRoot: project.rootPath });
+  });
+
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
     await sessionCheckpointWatchManager.unwatchSession(sessionId);
     // User-confirmed delete (the renderer gates this): remove the git worktree,
@@ -261,9 +288,18 @@ export function registerIpcHandlers(params: {
       }
 
       const launch = buildAgentLaunchCommand(agentConfig, { id: uuid, mode: effectiveMode });
+      // A review session's reviewer auto-runs the project's review kickoff (with
+      // branch/base substituted) instead of a `wf` command — it has no checkpoint.
+      const wfCommand =
+        session.kind === "review" && role === "reviewer"
+          ? substituteReviewKickoff(project.review.kickoff, {
+              branch: session.branch,
+              base: session.baseBranch ?? "",
+            })
+          : wfCommandForSessionRole(role, session.checkpointPath);
       return {
         agentCommand: launch.command,
-        wfCommand: wfCommandForSessionRole(role, session.checkpointPath),
+        wfCommand,
         cwd: session.worktreePath,
         sessionUuid: uuid,
         setupMessages: buildAgentSetupMessages(agentConfig),
