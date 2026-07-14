@@ -12,6 +12,9 @@ import type {
 } from "../../shared/ipc/contract";
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { listGitBranches } from "../projects/git-branches";
+import { getProvider } from "../vcs/get-provider";
+import { parsePrUrl } from "../vcs/vcs-provider";
+import type { VcsSecretStore } from "../vcs/vcs-secret-store";
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/workflow/agent-runtime-config";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
@@ -56,6 +59,7 @@ export function registerIpcHandlers(params: {
   sessionCheckpointWatchManager: SessionCheckpointWatchManager;
   sessionAgentUuidStore: SessionAgentUuidStore;
   workspaceLayoutStore: WorkspaceLayoutStore;
+  vcsSecretStore: VcsSecretStore;
 }): void {
   const {
     projectRegistry,
@@ -64,7 +68,15 @@ export function registerIpcHandlers(params: {
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
     workspaceLayoutStore,
+    vcsSecretStore,
   } = params;
+
+  // Combine the project's non-secret VCS config with its stored token.
+  async function vcsCredentialsFor(project: ProjectRecord): Promise<{ token: string; email?: string }> {
+    const token = await vcsSecretStore.getToken(project.id);
+    if (!token) throw new Error("No VCS token configured for this project.");
+    return project.vcs.email ? { token, email: project.vcs.email } : { token };
+  }
 
   ipcMain.handle(IPC_CHANNELS.projectsList, async () => {
     return projectRegistry.listProjects();
@@ -211,6 +223,24 @@ export function registerIpcHandlers(params: {
   ipcMain.handle(IPC_CHANNELS.gitListBranches, async (_event, projectId: string) => {
     const project = await findProject(projectRegistry, projectId);
     return listGitBranches({ projectRoot: project.rootPath });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {
+    // A blank token clears it.
+    if (token.trim()) await vcsSecretStore.setToken(projectId, token.trim());
+    else await vcsSecretStore.deleteToken(projectId);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.projectsHasVcsCreds, async (_event, projectId: string) => {
+    return vcsSecretStore.hasToken(projectId);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.gitResolvePrUrl, async (_event, projectId: string, url: string) => {
+    const project = await findProject(projectRegistry, projectId);
+    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
+    const ref = parsePrUrl(project.vcs.host, url);
+    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
+    return getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {

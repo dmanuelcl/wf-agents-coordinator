@@ -25,6 +25,8 @@ const api: AgentCoordinatorApi = {
     createEmptyRepo: (parentPath, name) => ipcRenderer.invoke(IPC_CHANNELS.projectsCreateEmptyRepo, parentPath, name),
     cloneRepo: (url, parentPath, name) => ipcRenderer.invoke(IPC_CHANNELS.projectsCloneRepo, url, parentPath, name),
     openInFileManager: (rootPath) => ipcRenderer.invoke(IPC_CHANNELS.projectsOpenInFileManager, rootPath),
+    setVcsToken: (projectId, token) => ipcRenderer.invoke(IPC_CHANNELS.projectsSetVcsToken, projectId, token),
+    hasVcsCreds: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.projectsHasVcsCreds, projectId),
   },
   checkpoints: {
     list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointsList, projectId),
@@ -45,6 +47,7 @@ const api: AgentCoordinatorApi = {
   },
   git: {
     listBranches: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.gitListBranches, projectId),
+    resolvePrUrl: (projectId, url) => ipcRenderer.invoke(IPC_CHANNELS.gitResolvePrUrl, projectId, url),
   },
   sessions: {
     list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsList, projectId),

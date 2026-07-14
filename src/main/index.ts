@@ -10,6 +10,7 @@ import { createSessionCheckpointWatchManager } from "./projects/session-checkpoi
 import { createSessionRegistry } from "./projects/session-registry";
 import { createSqliteProjectRegistry } from "./projects/sqlite-project-registry";
 import { createWorkspaceLayoutStore } from "./projects/workspace-layout-store";
+import { createVcsSecretStore } from "./vcs/vcs-secret-store";
 import { spawnRealPty } from "./terminals/node-pty-adapter";
 import { createPtySessionManager } from "./terminals/pty-session-manager";
 import { createSessionAgentUuidStore } from "./terminals/session-agent-uuid-store";
@@ -88,6 +89,10 @@ void app.whenReady().then(() => {
     storeFilePath: join(app.getPath("userData"), "workspace-layout.json"),
   });
 
+  const vcsSecretStore = createVcsSecretStore({
+    storeFilePath: join(app.getPath("userData"), "vcs-secrets.json"),
+  });
+
   const checkpointWatchManager = createCheckpointWatchManager({
     createWatcher: createChokidarWatcher,
     onCheckpointChanged: (projectId, checkpoint) => {
@@ -118,6 +123,7 @@ void app.whenReady().then(() => {
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
     workspaceLayoutStore,
+    vcsSecretStore,
   });
 
   void projectRegistry.listProjects().then((projects) => {

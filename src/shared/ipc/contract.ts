@@ -6,6 +6,7 @@ import type { ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
 import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
 import type { ReviewConfig } from "../workflow/review-config";
 import type { VcsConfig } from "../workflow/vcs-config";
+import type { ResolvedPr } from "../../main/vcs/vcs-provider";
 import type { LaunchRole, RoleLaunchPlan } from "../workflow/role-launch-plan";
 import type { SessionAgentRole } from "../workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../workflow/work-session";
@@ -90,6 +91,9 @@ export const IPC_CHANNELS = {
   sessionsCreateReview: "sessions:create-review",
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
+  gitResolvePrUrl: "git:resolve-pr-url",
+  projectsSetVcsToken: "projects:set-vcs-token",
+  projectsHasVcsCreds: "projects:has-vcs-creds",
   sessionsReadCheckpoint: "sessions:read-checkpoint",
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
@@ -193,6 +197,8 @@ export interface AgentCoordinatorApi {
     createEmptyRepo(parentPath: string, name: string): Promise<string>;
     cloneRepo(url: string, parentPath: string, name: string): Promise<string>;
     openInFileManager(rootPath: string): Promise<void>;
+    setVcsToken(projectId: string, token: string): Promise<void>;
+    hasVcsCreds(projectId: string): Promise<boolean>;
   };
   checkpoints: {
     list(projectId: string): Promise<ParsedCheckpoint[]>;
@@ -204,6 +210,7 @@ export interface AgentCoordinatorApi {
   };
   git: {
     listBranches(projectId: string): Promise<BranchList>;
+    resolvePrUrl(projectId: string, url: string): Promise<ResolvedPr>;
   };
   sessions: {
     list(projectId: string): Promise<WorkSession[]>;
