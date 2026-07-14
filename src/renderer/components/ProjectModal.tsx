@@ -4,6 +4,8 @@ import { createDefaultProjectRuntimeConfig, DANGEROUS_SUPPORTED } from "../../sh
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
+import { createDefaultReviewConfig, DEFAULT_REVIEW_KICKOFF } from "../../shared/workflow/review-config";
+import type { ReviewConfig } from "../../shared/workflow/review-config";
 import type { ProjectRecord } from "../../shared/ipc/contract";
 
 const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini", "antigravity"];
@@ -92,6 +94,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
     project?.runtimeConfig ?? createDefaultProjectRuntimeConfig(),
   );
   const [autoPilot, setAutoPilot] = useState<AutoPilotConfig>(project?.autoPilot ?? createDefaultAutoPilotConfig());
+  const [review, setReview] = useState<ReviewConfig>(project?.review ?? createDefaultReviewConfig());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,6 +163,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           iconDataUrl,
           runtimeConfig,
           autoPilot,
+          review,
         });
         onSaved(created);
       } else {
@@ -168,6 +172,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           iconDataUrl,
           runtimeConfig,
           autoPilot,
+          review,
         });
         onSaved(updated);
       }
@@ -437,6 +442,35 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                   onChange={(event) =>
                     setAutoPilot((c) => ({ ...c, settleDelayMs: Math.round(Number(event.target.value) * 1000) }))
                   }
+                />
+              </label>
+            </div>
+          </section>
+
+          <section>
+            <h3>PR Review</h3>
+            <p className="section-hint">
+              A <strong>PR review</strong> session auto-runs the reviewer against a branch. Set a Slack channel to
+              enable the <code>Post to Slack</code> button (the agent posts the review there). The kickoff is what the
+              reviewer is told to do — <code>{"{branch}"}</code> and <code>{"{base}"}</code> are substituted.
+            </p>
+            <div className="review-config">
+              <label>
+                Slack channel
+                <input
+                  type="text"
+                  placeholder="#pr-reviews (leave empty to disable)"
+                  value={review.slackChannel}
+                  onChange={(event) => setReview((c) => ({ ...c, slackChannel: event.target.value }))}
+                />
+              </label>
+              <label>
+                Review kickoff
+                <textarea
+                  rows={4}
+                  placeholder={DEFAULT_REVIEW_KICKOFF}
+                  value={review.kickoff}
+                  onChange={(event) => setReview((c) => ({ ...c, kickoff: event.target.value }))}
                 />
               </label>
             </div>

@@ -2438,3 +2438,24 @@ input[type="text"]:focus,
 .autopilot-config input[type="number"] {
   width: 120px;
 }
+.review-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.review-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted-fg);
+}
+.review-config input[type="text"],
+.review-config textarea {
+  width: 100%;
+}
+.review-config textarea {
+  resize: vertical;
+  min-height: 64px;
+  font-family: inherit;
+}
