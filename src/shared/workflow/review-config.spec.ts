@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSlackPostCommand,
+  buildSlackSummaryCommand,
   createDefaultReviewConfig,
   DEFAULT_REVIEW_KICKOFF,
   substituteReviewKickoff,
@@ -39,5 +40,13 @@ describe("buildSlackPostCommand", () => {
     expect(buildSlackPostCommand("#pr-reviews")).toBe(
       "Publica el resumen completo del review en el canal de Slack #pr-reviews.",
     );
+  });
+});
+
+describe("buildSlackSummaryCommand", () => {
+  it("includes the channel and the comment url", () => {
+    const out = buildSlackSummaryCommand("#pr-reviews", "https://bitbucket.org/a/b/pull-requests/1#comment-9");
+    expect(out).toContain("#pr-reviews");
+    expect(out).toContain("https://bitbucket.org/a/b/pull-requests/1#comment-9");
   });
 });

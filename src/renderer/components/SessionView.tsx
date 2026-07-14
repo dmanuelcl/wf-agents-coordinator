@@ -15,7 +15,7 @@ import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-c
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ConductorAction } from "../../shared/workflow/conductor";
 import { useConductor } from "../hooks/useConductor";
-import { buildSlackPostCommand } from "../../shared/workflow/review-config";
+import { buildSlackPostCommand, buildSlackSummaryCommand } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
 
 // A dynamic plain-shell tab. The `+` mints these; each carries a renameable
@@ -468,6 +468,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       const { commentUrl } = await window.agentCoordinator.sessions.postReview(session.id);
       setReviewPostMsg(`Posted ✓ ${commentUrl}`);
       void window.agentCoordinator.system.openExternal(commentUrl);
+      // Optional secondary record: relay a short Slack summary via the agent.
+      if (reviewConfig?.slackChannel) {
+        terminalHandles.current
+          .get("reviewer")
+          ?.sendText(buildSlackSummaryCommand(reviewConfig.slackChannel, commentUrl), true);
+      }
     } catch (caught) {
       setReviewPostMsg(`Post failed — ${String(caught)}`);
     } finally {

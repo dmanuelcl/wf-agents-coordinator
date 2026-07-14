@@ -25,3 +25,8 @@ export function substituteReviewKickoff(template: string, vars: { branch: string
 export function buildSlackPostCommand(channel: string): string {
   return `Publica el resumen completo del review en el canal de Slack ${channel}.`;
 }
+
+/** After a PR post, relay a short Slack SUMMARY with a link to the posted comment. */
+export function buildSlackSummaryCommand(channel: string, commentUrl: string): string {
+  return `Publica en el canal de Slack ${channel} un resumen de 2–3 líneas del review que se subió como comentario del PR: ${commentUrl}`;
+}
