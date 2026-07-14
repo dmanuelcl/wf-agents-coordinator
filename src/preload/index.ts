@@ -98,6 +98,7 @@ const api: AgentCoordinatorApi = {
   },
   system: {
     openPath: (pathToken, cwd) => ipcRenderer.invoke(IPC_CHANNELS.systemOpenPath, pathToken, cwd),
+    openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.systemOpenExternal, url),
     copyText: (text) => ipcRenderer.invoke(IPC_CHANNELS.systemCopyText, text),
     resolveFile: (pathToken, cwd) => ipcRenderer.invoke(IPC_CHANNELS.systemResolveFile, pathToken, cwd),
     readFile: (absPath) => ipcRenderer.invoke(IPC_CHANNELS.systemReadFile, absPath),

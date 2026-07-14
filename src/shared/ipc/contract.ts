@@ -79,6 +79,7 @@ export const IPC_CHANNELS = {
   projectsCloneRepo: "projects:clone-repo",
   projectsOpenInFileManager: "projects:open-in-file-manager",
   systemOpenPath: "system:open-path",
+  systemOpenExternal: "system:open-external",
   systemCopyText: "system:copy-text",
   systemResolveFile: "system:resolve-file",
   systemReadFile: "system:read-file",
@@ -244,6 +245,7 @@ export interface AgentCoordinatorApi {
     // absolute, `~`-prefixed, or carry a `:line:col` suffix; resolved against
     // `cwd` in the main process and opened in the OS default app.
     openPath(pathToken: string, cwd: string): Promise<void>;
+    openExternal(url: string): Promise<void>;
     copyText(text: string): Promise<void>;
     // Resolve a clicked terminal token to decide how to open it (in-app md tab
     // vs OS app).

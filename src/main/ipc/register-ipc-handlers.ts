@@ -176,6 +176,11 @@ export function registerIpcHandlers(params: {
     clipboard.writeText(text);
   });
 
+  ipcMain.handle(IPC_CHANNELS.systemOpenExternal, async (_event, url: string) => {
+    // Only open http(s) links in the browser — never arbitrary schemes.
+    if (/^https?:\/\//.test(url)) await shell.openExternal(url);
+  });
+
   ipcMain.handle(IPC_CHANNELS.systemResolveFile, async (_event, pathToken: string, cwd: string) => {
     const absPath = resolveTokenPath(pathToken, cwd);
     let exists = false;

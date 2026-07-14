@@ -289,6 +289,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
   const [conductorAutoRoles, setConductorAutoRoles] = useState<Set<SessionAgentRole>>(() => new Set());
   const [conductorLog, setConductorLog] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+  const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
   // Live terminal handles keyed by tab id (role name or shell tab id), so a
   // file's composer can deliver text into the chosen one.
   const terminalHandles = useRef<Map<string, SessionTerminalHandle>>(new Map());
@@ -457,6 +459,22 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     return true;
   }
 
+  // Post the review artifact (.agent-review.md) as a PR comment, then open it.
+  async function handlePostToPr(): Promise<void> {
+    if (!session.pr || posting) return;
+    setPosting(true);
+    setReviewPostMsg("Posting the review to the PR…");
+    try {
+      const { commentUrl } = await window.agentCoordinator.sessions.postReview(session.id);
+      setReviewPostMsg(`Posted ✓ ${commentUrl}`);
+      void window.agentCoordinator.system.openExternal(commentUrl);
+    } catch (caught) {
+      setReviewPostMsg(`Post failed — ${String(caught)}`);
+    } finally {
+      setPosting(false);
+    }
+  }
+
   function registerTerminalHandle(key: string, handle: SessionTerminalHandle | null): void {
     if (handle) terminalHandles.current.set(key, handle);
     else terminalHandles.current.delete(key);
@@ -516,18 +534,41 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           {repoMode ? (
             <span className="session-topbar-kind session-topbar-kind-repo">REPO ROOT</span>
           ) : reviewMode ? (
-            <span
-              className="session-topbar-kind session-topbar-kind-review"
-              title={session.baseBranch ? `${session.branch} vs ${session.baseBranch}` : session.branch}
-            >
-              PR REVIEW
-            </span>
+            <>
+              <span
+                className="session-topbar-kind session-topbar-kind-review"
+                title={session.baseBranch ? `${session.branch} vs ${session.baseBranch}` : session.branch}
+              >
+                PR REVIEW
+              </span>
+              {session.pr && (
+                <button
+                  type="button"
+                  className="session-topbar-pr-chip"
+                  title={session.pr.url}
+                  onClick={() => session.pr && void window.agentCoordinator.system.openExternal(session.pr.url)}
+                >
+                  PR #{session.pr.prId}
+                </button>
+              )}
+            </>
           ) : (
             <span className="session-topbar-kind">{KIND_LABELS[kind]}</span>
           )}
         </div>
         <div className="session-topbar-meta">
-          {reviewMode && (
+          {reviewMode && session.pr && (
+            <button
+              type="button"
+              className="session-topbar-diff"
+              disabled={posting}
+              title="Post the review (from .agent-review.md) as a comment on the PR"
+              onClick={() => void handlePostToPr()}
+            >
+              {posting ? "Posting…" : "Post to PR"}
+            </button>
+          )}
+          {reviewMode && !session.pr && (
             <button
               type="button"
               className="session-topbar-diff"
@@ -613,6 +654,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       {!repoMode && !reviewMode && autoPilotEnabled && conductorLog && (
         <div className="session-conductor-strip">{conductorLog}</div>
       )}
+
+      {reviewMode && reviewPostMsg && <div className="session-conductor-strip">{reviewPostMsg}</div>}
 
       <div className="session-split">
       <div className="session-main">
