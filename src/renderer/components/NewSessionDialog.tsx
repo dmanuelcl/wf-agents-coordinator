@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { BranchList } from "../../shared/ipc/contract";
+import { BranchCombobox } from "./BranchCombobox";
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -110,27 +111,13 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                 <label htmlFor="review-branch" className="field-label">
                   Branch to review <span className="req">*</span>
                 </label>
-                <select id="review-branch" value={reviewBranch} onChange={(event) => chooseBranch(event.target.value)}>
-                  <option value="">{loadingBranches ? "Loading branches…" : "Select a branch…"}</option>
-                  {branches && branches.remote.length > 0 && (
-                    <optgroup label="Remote">
-                      {branches.remote.map((branch) => (
-                        <option key={branch} value={branch}>
-                          {branch}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {branches && branches.local.length > 0 && (
-                    <optgroup label="Local">
-                      {branches.local.map((branch) => (
-                        <option key={branch} value={branch}>
-                          {branch}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                <BranchCombobox
+                  inputId="review-branch"
+                  branches={branches}
+                  loading={loadingBranches}
+                  value={reviewBranch}
+                  onChange={chooseBranch}
+                />
               </div>
 
               <div className="new-session-field">
