@@ -130,13 +130,13 @@ describe("buildAgentSetupMessages — opencode", () => {
 describe("buildAgentLaunchCommand — antigravity", () => {
   it("builds a command with the model and always warns the CLI is unverified", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", model: "some-model" }));
-    expect(result.command).toBe("antigravity --model some-model");
+    expect(result.command).toBe("agy --model some-model");
     expect(result.warnings.some((w) => /unverified/i.test(w))).toBe(true);
   });
 
   it("does NOT invent effort/dangerous flags — warns instead", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", effort: "high", dangerous: true }));
-    expect(result.command).toBe("antigravity --model opus");
+    expect(result.command).toBe("agy --model opus");
     expect(result.warnings.some((w) => /effort/i.test(w))).toBe(true);
     expect(result.warnings.some((w) => /dangerous/i.test(w))).toBe(true);
   });
