@@ -26,6 +26,8 @@ export interface ReviewComment {
   body: string; // raw markdown
   createdAtEpochMs: number;
   authoredByTool: boolean; // body contains REVIEW_COMMENT_MARKER
+  // Set for an inline (file/line) comment; absent for a general PR comment.
+  inline?: { path: string; line: number | null };
 }
 
 export interface VcsCredentials {

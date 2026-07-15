@@ -40,4 +40,9 @@ describe("mapComments", () => {
   it("handles empty/missing content", () => {
     expect(mapComments([{ id: 3 }])).toEqual([{ id: "3", body: "", createdAtEpochMs: 0, authoredByTool: false }]);
   });
+
+  it("captures inline file/line context", () => {
+    const [comment] = mapComments([{ id: 4, content: { raw: "fix this" }, inline: { path: "src/a.ts", to: 42 } }]);
+    expect(comment?.inline).toEqual({ path: "src/a.ts", line: 42 });
+  });
 });

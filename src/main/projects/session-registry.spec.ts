@@ -125,6 +125,29 @@ describe("SessionRegistry", () => {
     expect(reloaded?.pr?.lastReviewedSha).toBe("deadbeef");
   });
 
+  it("createFixSession checks out a WRITABLE branch worktree (not detached)", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/fixme"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+    const session = await registry.createFixSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Fix fixme",
+      branch: "feature/fixme",
+      baseBranch: "main",
+      pr: { host: "bitbucket", workspace: "a", repo: "b", prId: "1", url: "u", lastReviewedSha: null },
+    });
+
+    expect(session.kind).toBe("pr-fix");
+    expect(session.branch).toBe("feature/fixme");
+    expect(existsSync(session.worktreePath)).toBe(true);
+    // On the branch (writable), not a detached HEAD.
+    const head = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: session.worktreePath })
+      .toString()
+      .trim();
+    expect(head).toBe("feature/fixme");
+  });
+
   it("rejects a blank / punctuation-only name before creating anything", async () => {
     initGitRepo(repoDir);
     const registry = createSessionRegistry({ storeFilePath });

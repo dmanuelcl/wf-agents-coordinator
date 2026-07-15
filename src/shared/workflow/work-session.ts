@@ -1,6 +1,6 @@
 import type { VcsHost } from "./vcs-config";
 
-export type WorkSessionKind = "feature" | "fix" | "review";
+export type WorkSessionKind = "feature" | "fix" | "review" | "pr-fix";
 
 // A review session created from a PR link carries this so it can post back to
 // the PR and run progressively. Null for manual reviews and non-review sessions.

@@ -33,6 +33,14 @@ export interface SessionRegistry {
     // Fetch remotes before creating the worktree (PR-link reviews check out a remote ref).
     fetchFirst?: boolean;
   }): Promise<WorkSession>;
+  createFixSession(params: {
+    projectId: string;
+    projectRoot: string;
+    name: string;
+    branch: string; // the PR source branch (writable checkout)
+    baseBranch: string; // diff context (e.g. origin/<target>)
+    pr: PrLink;
+  }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
@@ -188,6 +196,39 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         branch: reviewBranch,
         baseBranch,
         pr: pr ?? null,
+        worktreePath,
+        checkpointPath: null,
+        createdAtEpochMs: Date.now(),
+      };
+
+      records.push(record);
+      await writeAll(records);
+      return record;
+    },
+
+    async createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr }) {
+      const slug = slugifySessionName(name);
+      if (!slug) {
+        throw new Error("Session name cannot be empty");
+      }
+
+      // Make origin/<branch> current, then a WRITABLE checkout of the branch. Git
+      // DWIMs a tracking branch from origin when the local branch doesn't exist,
+      // so a later `git push` updates the PR. (Detach is only for read-only review.)
+      await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot }).catch(() => {});
+      const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
+      await createWorktree({ projectRoot, slug, branch });
+
+      const records = await readAll();
+      const record: WorkSession = {
+        id: randomUUID(),
+        projectId,
+        name,
+        kind: "pr-fix",
+        slug,
+        branch,
+        baseBranch,
+        pr,
         worktreePath,
         checkpointPath: null,
         createdAtEpochMs: Date.now(),

@@ -16,6 +16,7 @@ import type {
 } from "../../shared/ipc/contract";
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
+import { buildPrFixKickoff } from "../../shared/workflow/pr-fix-kickoff";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
@@ -99,6 +100,29 @@ export function registerIpcHandlers(params: {
     project: ProjectRecord,
     role: SessionAgentRole,
   ): Promise<string | null> {
+    // PR fix: the implementer reads ALL PR comments and implements them.
+    if (session.kind === "pr-fix" && role === "implementer" && session.pr) {
+      let comments: { body: string; inline?: { path: string; line: number | null } }[] = [];
+      try {
+        const all = await getProvider(session.pr.host).listReviewComments(
+          prRefOf(session.pr),
+          await vcsCredentialsFor(project),
+        );
+        comments = all
+          .slice()
+          .sort((a, b) => a.createdAtEpochMs - b.createdAtEpochMs)
+          .map((c) => ({ body: c.body, inline: c.inline }));
+      } catch {
+        comments = [];
+      }
+      return buildPrFixKickoff({
+        title: session.name,
+        source: session.branch,
+        target: session.baseBranch ?? "",
+        comments,
+      });
+    }
+
     if (session.kind !== "review" || role !== "reviewer") {
       return wfCommandForSessionRole(role, session.checkpointPath);
     }
@@ -336,6 +360,39 @@ export function registerIpcHandlers(params: {
       },
       fetchFirst: true,
     });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (_event, projectId: string, input: { url: string }) => {
+    const project = await findProject(projectRegistry, projectId);
+    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
+    const ref = parsePrUrl(project.vcs.host, input.url);
+    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
+    const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
+    // Writable checkout of the PR source branch; base kept for diff context.
+    return sessionRegistry.createFixSession({
+      projectId,
+      projectRoot: project.rootPath,
+      name: `Fix PR #${resolved.prId}: ${resolved.title}`,
+      branch: resolved.source,
+      baseBranch: `origin/${resolved.target}`,
+      pr: {
+        host: resolved.host,
+        workspace: resolved.workspace,
+        repo: resolved.repo,
+        prId: resolved.prId,
+        url: resolved.url,
+        lastReviewedSha: null,
+      },
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sessionsPushFixBranch, async (_event, sessionId: string) => {
+    const session = await sessionRegistry.getSession({ sessionId });
+    if (!session) throw new Error("Session not found.");
+    if (session.kind !== "pr-fix") throw new Error("Only a PR fix session can push.");
+    // The branch tracks origin/<source>, so a bare push updates the PR.
+    const res = await execFileAsync("git", ["push"], { cwd: session.worktreePath });
+    return { output: `${res.stdout}${res.stderr}`.trim() || "Pushed." };
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsPostReview, async (_event, sessionId: string) => {

@@ -39,18 +39,23 @@ interface BitbucketComment {
   content?: { raw?: string };
   created_on?: string;
   links?: { html?: { href?: string } };
+  inline?: { path?: string; to?: number | null; from?: number | null };
 }
 
 /** Pure paginated-comments JSON → ReviewComment[] mapping (unit-tested). */
 export function mapComments(values: BitbucketComment[]): ReviewComment[] {
   return values.map((c) => {
     const body = c.content?.raw ?? "";
-    return {
+    const comment: ReviewComment = {
       id: String(c.id ?? ""),
       body,
       createdAtEpochMs: c.created_on ? Date.parse(c.created_on) : 0,
       authoredByTool: body.includes(REVIEW_COMMENT_MARKER),
     };
+    if (c.inline?.path) {
+      comment.inline = { path: c.inline.path, line: c.inline.to ?? c.inline.from ?? null };
+    }
+    return comment;
   });
 }
 

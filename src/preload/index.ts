@@ -56,6 +56,8 @@ const api: AgentCoordinatorApi = {
     createReview: (projectId, input) => ipcRenderer.invoke(IPC_CHANNELS.sessionsCreateReview, projectId, input),
     createReviewFromPr: (projectId, input) =>
       ipcRenderer.invoke(IPC_CHANNELS.sessionsCreateReviewFromPr, projectId, input),
+    createFixFromPr: (projectId, input) => ipcRenderer.invoke(IPC_CHANNELS.sessionsCreateFixFromPr, projectId, input),
+    pushFixBranch: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsPushFixBranch, sessionId),
     postReview: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsPostReview, sessionId),
     reviewArtifactExists: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsReviewArtifactExists, sessionId),
     remove: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsRemove, sessionId),

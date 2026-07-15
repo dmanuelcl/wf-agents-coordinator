@@ -63,9 +63,10 @@ const KIND_LABELS: Record<WorkSessionKind, string> = {
   feature: "Feature",
   fix: "Bug fix",
   review: "PR review",
+  "pr-fix": "PR fix",
 };
 
-// A review session shows only the Reviewer tab (no architect/implementer).
+// A PR review/fix session shows only its single agent tab.
 const REVIEW_ROLES: readonly SessionAgentRole[] = ["reviewer"];
 
 // The architect tab is framed as "Diagnose" for a fix — same role, same slot.
@@ -74,6 +75,7 @@ const ARCHITECT_TAB_LABEL: Record<WorkSessionKind, string> = {
   feature: "Architect",
   fix: "Diagnose",
   review: "Reviewer",
+  "pr-fix": "Implementer",
 };
 
 function roleLabel(role: SessionAgentRole, kind: WorkSessionKind): string {
