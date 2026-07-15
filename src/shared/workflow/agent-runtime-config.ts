@@ -56,6 +56,13 @@ function model(config: AgentRuntimeConfig): string {
   return config.model.trim();
 }
 
+function escapeShellArg(arg: string): string {
+  if (/^[a-zA-Z0-9_\-\/\.\:]+$/.test(arg)) {
+    return arg;
+  }
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
 /** Append the "resume is not wired" warning when a non-claude kind is asked to resume/restore. */
 function withUnwiredSessionWarning(
   result: AgentLaunchCommandResult,
@@ -76,8 +83,8 @@ function buildClaudeLaunchCommand(
   session: AgentSessionLaunch | undefined,
 ): AgentLaunchCommandResult {
   const parts = ["claude"];
-  if (session) parts.push(session.mode === "resume" ? "--resume" : "--session-id", session.id);
-  if (model(config)) parts.push("--model", model(config));
+  if (session) parts.push(session.mode === "resume" ? "--resume" : "--session-id", escapeShellArg(session.id));
+  if (model(config)) parts.push("--model", escapeShellArg(model(config)));
   if (config.dangerous) parts.push("--dangerously-skip-permissions");
   return { command: parts.join(" "), warnings: [] };
 }
@@ -86,7 +93,7 @@ function buildClaudeLaunchCommand(
 //       -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true
 function buildCodexLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
   const parts = ["codex"];
-  if (model(config)) parts.push("--model", model(config));
+  if (model(config)) parts.push("--model", escapeShellArg(model(config)));
   if (config.effort) parts.push("-c", `model_reasoning_effort="${config.effort}"`);
   if (config.dangerous) parts.push("--ask-for-approval", "never", "--sandbox", "danger-full-access");
   parts.push("-c", 'model_reasoning_summary="detailed"', "-c", "model_supports_reasoning_summaries=true");
@@ -106,7 +113,7 @@ function buildCopilotLaunchCommand(config: AgentRuntimeConfig): AgentLaunchComma
 // opencode [--model provider/model]   (no confirmed effort/dangerous flags)
 function buildOpencodeLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
   const parts = ["opencode"];
-  if (model(config)) parts.push("--model", model(config));
+  if (model(config)) parts.push("--model", escapeShellArg(model(config)));
   const warnings: string[] = [];
   if (config.effort) warnings.push("OpenCode has no confirmed reasoning-effort flag; effort ignored.");
   if (config.dangerous) warnings.push("OpenCode has no confirmed permission-bypass flag; dangerous ignored.");
@@ -116,7 +123,7 @@ function buildOpencodeLaunchCommand(config: AgentRuntimeConfig): AgentLaunchComm
 // gemini [--model <model>] [--yolo]
 function buildGeminiLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
   const parts = ["gemini"];
-  if (model(config)) parts.push("--model", model(config));
+  if (model(config)) parts.push("--model", escapeShellArg(model(config)));
   if (config.dangerous) parts.push("--yolo");
   const warnings: string[] = [];
   if (config.effort) warnings.push("Gemini has no confirmed reasoning-effort flag; effort ignored.");
@@ -128,7 +135,7 @@ function buildGeminiLaunchCommand(config: AgentRuntimeConfig): AgentLaunchComman
 // this builder once confirmed against the real binary.
 function buildAntigravityLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
   const parts = ["agy"];
-  if (model(config)) parts.push("--model", model(config));
+  if (model(config)) parts.push("--model", escapeShellArg(model(config)));
   const warnings = ["Antigravity's CLI is unverified — check the launch command against the real binary."];
   if (config.effort) warnings.push("Antigravity has no confirmed reasoning-effort flag; effort ignored.");
   if (config.dangerous) warnings.push("Antigravity has no confirmed permission-bypass flag; dangerous ignored.");

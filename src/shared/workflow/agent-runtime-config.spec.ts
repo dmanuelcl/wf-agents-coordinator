@@ -134,6 +134,11 @@ describe("buildAgentLaunchCommand — antigravity", () => {
     expect(result.warnings.some((w) => /unverified/i.test(w))).toBe(true);
   });
 
+  it("escapes model names containing spaces and parentheses", () => {
+    const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", model: "Gemini 3.5 Flash (Medium)" }));
+    expect(result.command).toBe("agy --model 'Gemini 3.5 Flash (Medium)'");
+  });
+
   it("does NOT invent effort/dangerous flags — warns instead", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "antigravity", effort: "high", dangerous: true }));
     expect(result.command).toBe("agy --model opus");

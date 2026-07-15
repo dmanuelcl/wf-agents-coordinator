@@ -14,10 +14,10 @@
     "pretest:watch": "pnpm rebuild better-sqlite3",
     "test:watch": "vitest",
     "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
-    "package": "pnpm run build && electron-builder",
-    "package:mac": "pnpm run build && electron-builder --mac",
-    "package:win": "pnpm run build && electron-builder --win",
-    "package:linux": "pnpm run build && electron-builder --linux"
+    "package": "NODE_OPTIONS=\"--experimental-require-module\" pnpm run build && NODE_OPTIONS=\"--experimental-require-module\" electron-builder",
+    "package:mac": "NODE_OPTIONS=\"--experimental-require-module\" pnpm run build && NODE_OPTIONS=\"--experimental-require-module\" electron-builder --mac",
+    "package:win": "NODE_OPTIONS=\"--experimental-require-module\" pnpm run build && NODE_OPTIONS=\"--experimental-require-module\" electron-builder --win",
+    "package:linux": "NODE_OPTIONS=\"--experimental-require-module\" pnpm run build && NODE_OPTIONS=\"--experimental-require-module\" electron-builder --linux"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
