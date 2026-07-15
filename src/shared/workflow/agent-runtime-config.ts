@@ -123,11 +123,11 @@ function buildGeminiLaunchCommand(config: AgentRuntimeConfig): AgentLaunchComman
   return { command: parts.join(" "), warnings };
 }
 
-// antigravity [--model <model>]
+// agy [--model <model>]
 // Antigravity's CLI is not yet verified — the flags here are best-effort. Adjust
 // this builder once confirmed against the real binary.
 function buildAntigravityLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
-  const parts = ["antigravity"];
+  const parts = ["agy"];
   if (model(config)) parts.push("--model", model(config));
   const warnings = ["Antigravity's CLI is unverified — check the launch command against the real binary."];
   if (config.effort) warnings.push("Antigravity has no confirmed reasoning-effort flag; effort ignored.");
