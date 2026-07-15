@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { stageForSessionRole, wfCommandForSessionRole } from "./session-role-launch";
+import { shouldInjectRoleCommand, stageForSessionRole, wfCommandForSessionRole } from "./session-role-launch";
 
 describe("stageForSessionRole", () => {
   it("maps each session role onto the matching runtime-config stage", () => {
     expect(stageForSessionRole("architect")).toBe("architect");
     expect(stageForSessionRole("implementer")).toBe("implementer");
     expect(stageForSessionRole("reviewer")).toBe("reviewer");
+  });
+});
+
+describe("shouldInjectRoleCommand", () => {
+  it("injects the kickoff when a PR review or fix is first opened", () => {
+    expect(shouldInjectRoleCommand("review", "fresh")).toBe(true);
+    expect(shouldInjectRoleCommand("pr-fix", "fresh")).toBe(true);
+  });
+
+  it("does not inject the kickoff when a PR review or fix is restored", () => {
+    expect(shouldInjectRoleCommand("review", "resume")).toBe(false);
+    expect(shouldInjectRoleCommand("pr-fix", "resume")).toBe(false);
+  });
+
+  it("preserves command pre-typing for restored workflow sessions", () => {
+    expect(shouldInjectRoleCommand("feature", "resume")).toBe(true);
+    expect(shouldInjectRoleCommand("fix", "resume")).toBe(true);
   });
 });
 

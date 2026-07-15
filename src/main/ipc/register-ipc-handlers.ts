@@ -41,7 +41,11 @@ import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/w
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
 import type { LaunchRole } from "../../shared/workflow/role-launch-plan";
-import { stageForSessionRole, wfCommandForSessionRole } from "../../shared/workflow/session-role-launch";
+import {
+  shouldInjectRoleCommand,
+  stageForSessionRole,
+  wfCommandForSessionRole,
+} from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { CheckpointWatchManager } from "../projects/checkpoint-watch-manager";
 import { scanProjectCheckpoints } from "../projects/checkpoint-scanner";
@@ -516,9 +520,11 @@ export function registerIpcHandlers(params: {
       }
 
       const launch = buildAgentLaunchCommand(agentConfig, { id: uuid, mode: effectiveMode });
-      // A review session's reviewer auto-runs the project's review kickoff (with
-      // branch/base substituted) instead of a `wf` command — it has no checkpoint.
-      const wfCommand = await buildReviewOrWfCommand(session, project, role);
+      // A fresh PR session auto-runs its kickoff. A restored PR session only
+      // resumes the conversation: injecting it again would repeat the work.
+      const wfCommand = shouldInjectRoleCommand(session.kind, mode)
+        ? await buildReviewOrWfCommand(session, project, role)
+        : null;
       return {
         agentCommand: launch.command,
         wfCommand,
