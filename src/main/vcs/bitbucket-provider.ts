@@ -75,7 +75,13 @@ async function bbFetch(url: string, creds: VcsCredentials, init?: RequestInit): 
     // means the request is wrong, so stop.
     if (res.status !== 401 && res.status !== 403) break;
   }
-  throw new Error(`Bitbucket ${init?.method ?? "GET"} ${url} → ${lastStatus}: ${lastBody}`);
+  // Bitbucket Access Tokens return 401 with an EMPTY body when they lack a scope
+  // (a repo read passes, but /pullrequests fails). Point at the likely cause.
+  const scopeHint =
+    lastStatus === 401 && !lastBody.trim()
+      ? " — a 401 with an empty body usually means the Bitbucket Access Token is missing a scope (check 'Pull requests: Read')"
+      : "";
+  throw new Error(`Bitbucket ${init?.method ?? "GET"} ${url} → ${lastStatus}: ${lastBody}${scopeHint}`);
 }
 
 export const bitbucketProvider: VcsHostProvider = {
