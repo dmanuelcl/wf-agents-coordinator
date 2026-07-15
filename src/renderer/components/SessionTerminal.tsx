@@ -4,20 +4,25 @@ import type { ILink } from "@xterm/xterm";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentLaunchMode, SessionAgentRole, WorkSession } from "../../shared/ipc/contract";
+import type {
+  AgentLaunchMode,
+  SessionAgentRole,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  WorkSession,
+} from "../../shared/ipc/contract";
+import { createTerminalFollowUpGate } from "./terminal-follow-up-gate";
 
 // File-path-ish tokens in terminal output: optional dir prefix, a filename with
 // an extension, and an optional :line[:col] suffix. A token that isn't a real
 // file just no-ops on click, so occasional false positives are harmless.
 const FILE_PATH_RE = /(?:[~.]{0,2}\/)?(?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z][\w]{0,7}(?::\d+(?::\d+)?)?/g;
 
-// How long to wait after the agent's first output before sending follow-up
-// input, so its input box has rendered. Heuristic — the real timing can only be
-// confirmed on-device against each agent CLI.
 // How long the agent's output must stay QUIET before we send the follow-up —
 // long enough that a fresh TUI (claude etc.) has rendered its input box and will
-// accept a paste. The timer resets on every output chunk (see the data handler).
-const SETTLE_MS = 900;
+// accept a paste. A hard deadline handles CLIs that repaint continuously.
+const SETTLE_MS = 1_200;
+const MAX_FOLLOW_UP_WAIT_MS = 10_000;
 
 export interface SessionTerminalProps {
   session: WorkSession;
@@ -152,7 +157,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     let disposed = false;
     let followUpSent = false;
     let fellBackToShell = false;
-    let settleTimer: ReturnType<typeof setTimeout> | null = null;
     let shellCwd = cwdOverride ?? session.worktreePath;
     const isAgentTab = role !== "shell";
     const disposables: Array<() => void> = [];
@@ -257,6 +261,53 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
       }
 
+      const hasFollowUp = setupMessages.length > 0 || wfPreType !== null;
+      const followUpGate = hasFollowUp
+        ? createTerminalFollowUpGate({
+            settleMs: SETTLE_MS,
+            maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
+            deliver: () => sendFollowUp(setupMessages, wfPreType),
+          })
+        : null;
+
+      // Subscribe BEFORE creating the PTY. A fast agent can render its startup
+      // screen before the create IPC promise resolves; subscribing afterwards
+      // loses the output that schedules the kickoff.
+      const pendingData: TerminalDataEvent[] = [];
+      const pendingExits: TerminalExitEvent[] = [];
+
+      const handleData = (event: TerminalDataEvent): void => {
+        if (!ptyId) {
+          pendingData.push(event);
+          return;
+        }
+        if (event.sessionId !== ptyId) return;
+        term.write(event.data);
+        followUpGate?.onOutput();
+      };
+
+      const handleExit = (event: TerminalExitEvent): void => {
+        if (!ptyId) {
+          pendingExits.push(event);
+          return;
+        }
+        if (event.sessionId !== ptyId) return;
+        if (isAgentTab && !fellBackToShell) {
+          // Agent quit → become a usable shell instead of a dead pane.
+          fellBackToShell = true;
+          followUpSent = true; // never pre-type the wf command into the shell
+          followUpGate?.cancel();
+          term.write("\r\n\x1b[2m—— agent exited · dropped to shell ——\x1b[0m\r\n\r\n");
+          void fallBackToShell();
+        } else {
+          setExitCode(event.code);
+        }
+      };
+
+      const unsubscribeData = window.agentCoordinator.terminal.onData(handleData);
+      const unsubscribeExit = window.agentCoordinator.terminal.onExit(handleExit);
+      disposables.push(unsubscribeData, unsubscribeExit, () => followUpGate?.cancel());
+
       const id = await window.agentCoordinator.terminal.create({
         cwd: shellCwd,
         cols: term.cols,
@@ -271,49 +322,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       ptyId = id;
       ptyIdRef.current = id;
 
+      followUpGate?.start();
+      for (const event of pendingData) handleData(event);
+      for (const event of pendingExits) handleExit(event);
+
       const onDataDisposable = term.onData((data) => {
         if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);
       });
       disposables.push(() => onDataDisposable.dispose());
-
-      const hasFollowUp = setupMessages.length > 0 || wfPreType !== null;
-
-      const unsubscribeData = window.agentCoordinator.terminal.onData((e) => {
-        if (e.sessionId !== ptyId) return;
-        term.write(e.data);
-
-        // Send the follow-up once the agent's output goes QUIET for SETTLE_MS —
-        // i.e. it finished rendering its TUI and is waiting for input. A fixed
-        // delay after the FIRST byte fires too early on a fresh agent (the input
-        // box isn't ready yet, so a paste is dropped). Reset the timer on every
-        // chunk so we only fire after the startup burst settles.
-        if (hasFollowUp && !followUpSent) {
-          if (settleTimer) clearTimeout(settleTimer);
-          settleTimer = setTimeout(() => {
-            settleTimer = null;
-            sendFollowUp(setupMessages, wfPreType);
-          }, SETTLE_MS);
-        }
-      });
-      disposables.push(unsubscribeData);
-
-      const unsubscribeExit = window.agentCoordinator.terminal.onExit((e) => {
-        if (e.sessionId !== ptyId) return;
-        if (isAgentTab && !fellBackToShell) {
-          // Agent quit → become a usable shell instead of a dead pane.
-          fellBackToShell = true;
-          followUpSent = true; // never pre-type the wf command into the shell
-          if (settleTimer) {
-            clearTimeout(settleTimer);
-            settleTimer = null;
-          }
-          term.write("\r\n\x1b[2m—— agent exited · dropped to shell ——\x1b[0m\r\n\r\n");
-          void fallBackToShell();
-        } else {
-          setExitCode(e.code);
-        }
-      });
-      disposables.push(unsubscribeExit);
     }
 
     void start();
@@ -329,7 +345,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     return () => {
       disposed = true;
-      if (settleTimer) clearTimeout(settleTimer);
       resizeObserver.disconnect();
       disposables.forEach((dispose) => dispose());
       if (ptyId) window.agentCoordinator.terminal.kill(ptyId);
