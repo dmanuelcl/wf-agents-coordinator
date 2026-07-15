@@ -16,6 +16,7 @@ const KIND_OPTIONS: { value: WorkSessionKind; label: string }[] = [
   { value: "feature", label: "New feature" },
   { value: "fix", label: "Bug fix" },
   { value: "review", label: "PR review" },
+  { value: "pr-fix", label: "PR fix" },
 ];
 
 export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
@@ -77,13 +78,14 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     }
   }
 
-  const isLinkReview = kind === "review" && reviewSource === "link";
-  const canSubmit =
-    kind === "review"
-      ? isLinkReview
-        ? prUrl.trim().length > 0
-        : name.trim().length > 0 && reviewBranch.length > 0 && baseBranch.trim().length > 0
-      : name.trim().length > 0;
+  const isPrKind = kind === "review" || kind === "pr-fix";
+  // pr-fix is link-only; review uses the manual/link toggle.
+  const linkMode = kind === "pr-fix" || (kind === "review" && reviewSource === "link");
+  const canSubmit = isPrKind
+    ? linkMode
+      ? prUrl.trim().length > 0
+      : name.trim().length > 0 && reviewBranch.length > 0 && baseBranch.trim().length > 0
+    : name.trim().length > 0;
 
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -92,7 +94,9 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     setError(null);
     try {
       let session: WorkSession;
-      if (isLinkReview) {
+      if (kind === "pr-fix") {
+        session = await window.agentCoordinator.sessions.createFixFromPr(projectId, { url: prUrl.trim() });
+      } else if (kind === "review" && linkMode) {
         session = await window.agentCoordinator.sessions.createReviewFromPr(projectId, { url: prUrl.trim() });
       } else if (kind === "review") {
         session = await window.agentCoordinator.sessions.createReview(projectId, {
@@ -134,38 +138,44 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
             </div>
           </div>
 
-          {kind === "review" ? (
+          {isPrKind ? (
             <>
-              <div className="new-session-field">
-                <span className="field-label">Source</span>
-                <div className="segmented" role="radiogroup" aria-label="Review source">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={reviewSource === "manual"}
-                    className={`segmented-option${reviewSource === "manual" ? " selected" : ""}`}
-                    onClick={() => setReviewSource("manual")}
-                  >
-                    Manual (branch + base)
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={reviewSource === "link"}
-                    disabled={!hasVcsCreds}
-                    title={hasVcsCreds ? undefined : "Configure a VCS host + token in project settings first"}
-                    className={`segmented-option${reviewSource === "link" ? " selected" : ""}`}
-                    onClick={() => setReviewSource("link")}
-                  >
-                    From PR link
-                  </button>
+              {kind === "review" && (
+                <div className="new-session-field">
+                  <span className="field-label">Source</span>
+                  <div className="segmented" role="radiogroup" aria-label="Review source">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={reviewSource === "manual"}
+                      className={`segmented-option${reviewSource === "manual" ? " selected" : ""}`}
+                      onClick={() => setReviewSource("manual")}
+                    >
+                      Manual (branch + base)
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={reviewSource === "link"}
+                      disabled={!hasVcsCreds}
+                      title={hasVcsCreds ? undefined : "Configure a VCS host + token in project settings first"}
+                      className={`segmented-option${reviewSource === "link" ? " selected" : ""}`}
+                      onClick={() => setReviewSource("link")}
+                    >
+                      From PR link
+                    </button>
+                  </div>
+                  {!hasVcsCreds && (
+                    <p className="field-hint">From-link needs a VCS host + API token in the project settings.</p>
+                  )}
                 </div>
-                {!hasVcsCreds && (
-                  <p className="field-hint">From-link needs a VCS host + API token in the project settings.</p>
-                )}
-              </div>
+              )}
 
-              {reviewSource === "link" ? (
+              {kind === "pr-fix" && !hasVcsCreds && (
+                <p className="field-hint">PR fix needs a VCS host + API token in the project settings.</p>
+              )}
+
+              {linkMode ? (
                 <div className="new-session-field">
                   <label htmlFor="review-pr-url" className="field-label">
                     PR link <span className="req">*</span>
@@ -271,7 +281,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
               Cancel
             </button>
             <button type="submit" className="modal-confirm" disabled={submitting || !canSubmit}>
-              {kind === "review" ? "Start review" : "Create session"}
+              {kind === "review" ? "Start review" : kind === "pr-fix" ? "Start fix" : "Create session"}
             </button>
           </div>
         </form>

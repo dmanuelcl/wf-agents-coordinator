@@ -66,8 +66,6 @@ const KIND_LABELS: Record<WorkSessionKind, string> = {
   "pr-fix": "PR fix",
 };
 
-// A PR review/fix session shows only its single agent tab.
-const REVIEW_ROLES: readonly SessionAgentRole[] = ["reviewer"];
 
 // The architect tab is framed as "Diagnose" for a fix — same role, same slot.
 // Review sessions have no architect tab, but the map must cover every kind.
@@ -88,7 +86,10 @@ function roleLabel(role: SessionAgentRole, kind: WorkSessionKind): string {
 // checkpoint's ▶ NEXT command (which is pre-typed into the terminal).
 function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: boolean): string {
   if (kind === "review") {
-    return "This review auto-runs the kickoff against the branch when the agent loads. When it's done, use `Post to Slack` to publish it.";
+    return "This review auto-runs the kickoff against the branch when the agent loads. When it's done, use `Post to PR` (or `Post to Slack`) to publish it.";
+  }
+  if (kind === "pr-fix") {
+    return "This reads the PR comments and implements them on the branch (writable). The agent commits but won't push — use `Push to PR` when you're happy with the fixes.";
   }
   if (role === "architect") {
     if (hasCheckpoint) {
@@ -241,16 +242,23 @@ function initialRoleTabs(layout: SessionLayout | undefined): Map<SessionAgentRol
   return new Map<SessionAgentRole, AgentLaunchMode>([["architect", "fresh"]]);
 }
 
-// A review session opens straight on the Reviewer tab (resuming it if restored).
-function initialReviewTabs(layout: SessionLayout | undefined): Map<SessionAgentRole, AgentLaunchMode> {
-  const restored = layout?.openedRoleTabs?.includes("reviewer") ?? false;
-  return new Map<SessionAgentRole, AgentLaunchMode>([["reviewer", restored ? "resume" : "fresh"]]);
+// A PR session opens straight on its single agent tab (resuming it if restored).
+function initialPrTabs(
+  layout: SessionLayout | undefined,
+  role: SessionAgentRole,
+): Map<SessionAgentRole, AgentLaunchMode> {
+  const restored = layout?.openedRoleTabs?.includes(role) ?? false;
+  return new Map<SessionAgentRole, AgentLaunchMode>([[role, restored ? "resume" : "fresh"]]);
 }
 
 export function SessionView(props: SessionViewProps): JSX.Element {
   const { session, initialLayout, onLayoutChange, repoMode = false, autoPilotConfig, reviewConfig } = props;
   const kind = session.kind;
   const reviewMode = kind === "review";
+  const fixMode = kind === "pr-fix";
+  // Both review and pr-fix are single-agent "PR sessions" (from a PR link).
+  const prSession = reviewMode || fixMode;
+  const prRole: SessionAgentRole = fixMode ? "implementer" : "reviewer";
   const hasCheckpoint = session.checkpointPath !== null;
 
   // A fresh repo workspace opens with exactly one shell, seeded here (not via an
@@ -262,14 +270,14 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   );
 
   const [activeTab, setActiveTab] = useState<string>(
-    () => initialLayout?.activeTab ?? seedRepoShell?.id ?? (reviewMode ? "reviewer" : "architect"),
+    () => initialLayout?.activeTab ?? seedRepoShell?.id ?? (prSession ? prRole : "architect"),
   );
   // Agent tabs opened at least once, each with its launch mode; their terminals
   // stay mounted (agents keep running) while another tab is shown. This
   // component is keyed by session.id in the parent, so these initialisers run
   // once per session and the restored layout is not clobbered on re-render.
   const [openedRoleTabs, setOpenedRoleTabs] = useState<Map<SessionAgentRole, AgentLaunchMode>>(() =>
-    repoMode ? new Map() : reviewMode ? initialReviewTabs(initialLayout) : initialRoleTabs(initialLayout),
+    repoMode ? new Map() : prSession ? initialPrTabs(initialLayout, prRole) : initialRoleTabs(initialLayout),
   );
   const [shellTabs, setShellTabs] = useState<ShellTab[]>(() =>
     initialLayout?.shellTabs?.length ? initialLayout.shellTabs : seedRepoShell ? [seedRepoShell] : [],
@@ -330,8 +338,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   }, []);
 
   function isRoleDisabled(role: SessionAgentRole): boolean {
-    // A review session's reviewer is always live — it has no checkpoint gate.
-    if (reviewMode) return false;
+    // A PR session's single agent is always live — it has no checkpoint gate.
+    if (prSession) return false;
     return (role === "implementer" || role === "reviewer") && !hasCheckpoint;
   }
 
@@ -483,6 +491,21 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     }
   }
 
+  // Push the committed fixes to the PR branch (git push). Outward action — button only.
+  async function handlePushFix(): Promise<void> {
+    if (posting) return;
+    setPosting(true);
+    setReviewPostMsg("Pushing to the PR branch…");
+    try {
+      const { output } = await window.agentCoordinator.sessions.pushFixBranch(session.id);
+      setReviewPostMsg(`Pushed ✓ ${output}`);
+    } catch (caught) {
+      setReviewPostMsg(`Push failed — ${String(caught)}`);
+    } finally {
+      setPosting(false);
+    }
+  }
+
   function registerTerminalHandle(key: string, handle: SessionTerminalHandle | null): void {
     if (handle) terminalHandles.current.set(key, handle);
     else terminalHandles.current.delete(key);
@@ -541,13 +564,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           <span className="session-topbar-name">{session.name}</span>
           {repoMode ? (
             <span className="session-topbar-kind session-topbar-kind-repo">REPO ROOT</span>
-          ) : reviewMode ? (
+          ) : prSession ? (
             <>
               <span
-                className="session-topbar-kind session-topbar-kind-review"
+                className={`session-topbar-kind ${fixMode ? "session-topbar-kind-fix" : "session-topbar-kind-review"}`}
                 title={session.baseBranch ? `${session.branch} vs ${session.baseBranch}` : session.branch}
               >
-                PR REVIEW
+                {fixMode ? "PR FIX" : "PR REVIEW"}
               </span>
               {session.pr && (
                 <button
@@ -565,6 +588,17 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           )}
         </div>
         <div className="session-topbar-meta">
+          {fixMode && (
+            <button
+              type="button"
+              className="session-topbar-diff"
+              disabled={posting}
+              title="Push the committed fixes to the PR branch (git push)"
+              onClick={() => void handlePushFix()}
+            >
+              {posting ? "Pushing…" : "Push to PR"}
+            </button>
+          )}
           {reviewMode && session.pr && (
             <button
               type="button"
@@ -596,7 +630,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               Post to Slack
             </button>
           )}
-          {!repoMode && !reviewMode && (
+          {!repoMode && !prSession && (
             <button
               type="button"
               className={`session-topbar-autopilot${autoPilotEnabled ? " on" : ""}`}
@@ -659,17 +693,17 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         </div>
       </header>
 
-      {!repoMode && !reviewMode && autoPilotEnabled && conductorLog && (
+      {!repoMode && !prSession && autoPilotEnabled && conductorLog && (
         <div className="session-conductor-strip">{conductorLog}</div>
       )}
 
-      {reviewMode && reviewPostMsg && <div className="session-conductor-strip">{reviewPostMsg}</div>}
+      {prSession && reviewPostMsg && <div className="session-conductor-strip">{reviewPostMsg}</div>}
 
       <div className="session-split">
       <div className="session-main">
       <div className="session-view-tabs" role="tablist" aria-label="Session tabs">
         {!repoMode &&
-          (reviewMode ? REVIEW_ROLES : SESSION_AGENT_ROLES).map((role) => {
+          (prSession ? [prRole] : SESSION_AGENT_ROLES).map((role) => {
             const disabled = isRoleDisabled(role);
             const active = activeTab === role;
             return (
@@ -856,7 +890,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                 mode={mode}
                 onOpenPath={handleOpenPath}
                 hint={roleHint(role, kind, hasCheckpoint)}
-                autoSubmitWf={(reviewMode && role === "reviewer") || conductorAutoRoles.has(role)}
+                autoSubmitWf={(prSession && role === prRole) || conductorAutoRoles.has(role)}
               />
             </div>
           ))}

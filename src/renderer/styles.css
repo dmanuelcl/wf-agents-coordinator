@@ -600,6 +600,9 @@ button:disabled {
 .session-topbar-kind-review {
   color: var(--green);
 }
+.session-topbar-kind-fix {
+  color: var(--gold);
+}
 .session-topbar-pr-chip {
   -webkit-app-region: no-drag;
   padding: 2px 8px;

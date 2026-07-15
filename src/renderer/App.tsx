@@ -209,7 +209,7 @@ export function App(): JSX.Element {
   // itself CONTAIN checkpoint files — so they are never watched.
   useEffect(() => {
     if (!selectedSessionId || isRepoSessionId(selectedSessionId) || selectedSessionCheckpoint !== null) return;
-    if (selectedSessionKind === "review") return;
+    if (selectedSessionKind === "review" || selectedSessionKind === "pr-fix") return;
     void window.agentCoordinator.sessions.watchCheckpoint(selectedSessionId);
     return () => {
       void window.agentCoordinator.sessions.unwatchCheckpoint(selectedSessionId);
