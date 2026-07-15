@@ -2147,7 +2147,7 @@ pre {
 
 /* ── New session dialog ─────────────────────────────────────── */
 .new-session-modal {
-  max-width: 440px;
+  max-width: 560px;
   width: 100%;
 }
 .new-session-modal form {
@@ -2271,12 +2271,13 @@ pre {
 }
 .segmented-option {
   flex: 1;
-  padding: 9px 12px;
+  padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--card);
   color: var(--muted-fg);
   font-weight: 500;
+  white-space: nowrap;
   transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 .segmented-option:hover {
