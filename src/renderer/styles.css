@@ -2399,10 +2399,14 @@ input[type="text"],
 .project-modal-name input,
 .repo-source-fields input,
 .stage-config-table select,
-.stage-config-table input[type="text"] {
+.stage-config-table input[type="text"],
+.review-config input[type="password"],
+.review-config textarea,
+.review-config select {
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--fg);
+  font: inherit;
   padding: 7px 9px;
   border-radius: var(--radius-sm);
   outline: none;
@@ -2410,7 +2414,10 @@ input[type="text"],
 }
 input[type="text"]:focus,
 .project-modal-name input:focus,
-.repo-source-fields input:focus {
+.repo-source-fields input:focus,
+.review-config input[type="password"]:focus,
+.review-config textarea:focus,
+.review-config select:focus {
   border-color: var(--primary-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
