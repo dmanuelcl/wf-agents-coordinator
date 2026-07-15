@@ -12,6 +12,8 @@ import { addWorktreeExclude } from "./worktree-exclude";
 
 // The gitignored review artifact a PR-review reviewer writes; posted to the PR.
 export const REVIEW_ARTIFACT = ".agent-review.md";
+// Complete PR conversation read by review/fix agents instead of embedding it in a prompt.
+export const PR_CONTEXT_ARTIFACT = ".agent-pr-context.md";
 
 export interface SessionRegistry {
   listSessions(params: { projectId: string }): Promise<WorkSession[]>;
@@ -182,9 +184,10 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       // branches); non-destructive and never conflicts with a branch checked out
       // elsewhere. The branch was already fetched by the dialog's listBranches.
       await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
-      // Keep the review artifact out of git status/diffs without touching the
+      // Keep local agent artifacts out of git status/diffs without touching the
       // tracked .gitignore on the branch (best-effort).
       await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
+      await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
 
       const records = await readAll();
       const record: WorkSession = {
@@ -218,6 +221,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot }).catch(() => {});
       const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
       await createWorktree({ projectRoot, slug, branch });
+      await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
 
       const records = await readAll();
       const record: WorkSession = {

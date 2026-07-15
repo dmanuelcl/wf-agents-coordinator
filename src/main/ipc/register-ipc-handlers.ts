@@ -15,15 +15,16 @@ import type {
   SessionRoleLaunch,
 } from "../../shared/ipc/contract";
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
+import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
 import { buildPrFixKickoff } from "../../shared/workflow/pr-fix-kickoff";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
-import { REVIEW_ARTIFACT } from "../projects/session-registry";
+import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
 import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
-import type { PrRef } from "../vcs/vcs-provider";
+import type { PrRef, ReviewComment } from "../vcs/vcs-provider";
 import type { VcsSecretStore } from "../vcs/vcs-secret-store";
 
 function prRefOf(pr: PrLink): PrRef {
@@ -57,6 +58,7 @@ import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspac
 import { claudeConversationExists } from "../terminals/claude-session-store";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { getWorktreeDiff } from "../projects/worktree-diff";
+import { addWorktreeExclude } from "../projects/worktree-exclude";
 import { buildWorktreeCreatePlan, createWorktree, detectWorktree, removeWorktree } from "../projects/worktree-manager";
 
 async function findProject(registry: ProjectRegistry, projectId: string): Promise<ProjectRecord> {
@@ -103,34 +105,55 @@ export function registerIpcHandlers(params: {
     return credsFrom(project.vcs.email, token);
   }
 
-  // The command auto-typed into a reviewer/agent tab: a `wf` command normally, a
-  // review kickoff for a review session, or the progressive PR kickoff (with
-  // prior reports pulled from the PR) for a PR-link review.
+  async function refreshPrContextArtifact(
+    session: WorkSession,
+    project: ProjectRecord,
+    mode: "review" | "fix",
+  ): Promise<void> {
+    if (!session.pr) return;
+    let comments: ReviewComment[] = [];
+    let loadError: string | null = null;
+    try {
+      comments = await getProvider(session.pr.host).listReviewComments(
+        prRefOf(session.pr),
+        await vcsCredentialsFor(project),
+      );
+      comments.sort((a, b) => a.createdAtEpochMs - b.createdAtEpochMs);
+    } catch (caught) {
+      loadError = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    const content = buildPrContextArtifact({
+      mode,
+      comments: comments.map((comment) => ({
+        body: comment.body,
+        authoredByTool: comment.authoredByTool,
+        inline: comment.inline,
+      })),
+      loadError,
+    });
+    // Also apply this at launch so sessions created by older app versions gain
+    // the local exclude before the new context file is written.
+    await addWorktreeExclude(session.worktreePath, PR_CONTEXT_ARTIFACT);
+    if (mode === "review") await addWorktreeExclude(session.worktreePath, REVIEW_ARTIFACT);
+    await writeFile(join(session.worktreePath, PR_CONTEXT_ARTIFACT), content, "utf8");
+  }
+
+  // The command auto-typed into a reviewer/agent tab: a `wf` command normally,
+  // or a short PR kickoff pointing at the complete local context artifact.
   async function buildReviewOrWfCommand(
     session: WorkSession,
     project: ProjectRecord,
     role: SessionAgentRole,
   ): Promise<string | null> {
-    // PR fix: the implementer reads ALL PR comments and implements them.
+    // PR fix: write ALL comments locally, then keep the terminal prompt small.
     if (session.kind === "pr-fix" && role === "implementer" && session.pr) {
-      let comments: { body: string; inline?: { path: string; line: number | null } }[] = [];
-      try {
-        const all = await getProvider(session.pr.host).listReviewComments(
-          prRefOf(session.pr),
-          await vcsCredentialsFor(project),
-        );
-        comments = all
-          .slice()
-          .sort((a, b) => a.createdAtEpochMs - b.createdAtEpochMs)
-          .map((c) => ({ body: c.body, inline: c.inline }));
-      } catch {
-        comments = [];
-      }
+      await refreshPrContextArtifact(session, project, "fix");
       return buildPrFixKickoff({
         title: session.name,
         source: session.branch,
         target: session.baseBranch ?? "",
-        comments,
+        contextFile: PR_CONTEXT_ARTIFACT,
       });
     }
 
@@ -140,22 +163,12 @@ export function registerIpcHandlers(params: {
     if (!session.pr) {
       return substituteReviewKickoff(project.review.kickoff, { branch: session.branch, base: session.baseBranch ?? "" });
     }
-    let priorReports: string[] = [];
-    try {
-      const comments = await getProvider(session.pr.host).listReviewComments(
-        prRefOf(session.pr),
-        await vcsCredentialsFor(project),
-      );
-      priorReports = comments.filter((c) => c.authoredByTool).map((c) => c.body);
-    } catch {
-      // Offline / no prior comments — fall back to a non-progressive kickoff.
-      priorReports = [];
-    }
+    await refreshPrContextArtifact(session, project, "review");
     return buildPrReviewKickoff({
       template: project.review.kickoff,
       branch: session.branch,
       base: session.baseBranch ?? "",
-      priorReports,
+      contextFile: PR_CONTEXT_ARTIFACT,
       lastReviewedSha: session.pr.lastReviewedSha,
       artifactFile: REVIEW_ARTIFACT,
     });

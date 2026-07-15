@@ -33,12 +33,12 @@ describe("addWorktreeExclude", () => {
     expect(exclude.match(/\.agent-review\.md/g)).toHaveLength(1);
   });
 
-  it("resolves a worktree's gitdir (.git file) and excludes there", async () => {
+  it("resolves a linked worktree's common gitdir and creates an effective exclude", async () => {
     const wt = join(dir, "wt");
     execFileSync("git", ["worktree", "add", "--detach", wt], { cwd: dir });
     await addWorktreeExclude(wt, ".agent-review.md");
-    // The worktree's exclude lives under the main repo's worktrees/<name>/info/exclude.
-    const excludePath = join(dir, ".git", "worktrees", "wt", "info", "exclude");
+    const excludePath = join(dir, ".git", "info", "exclude");
     expect(readFileSync(excludePath, "utf8")).toContain(".agent-review.md");
+    expect(() => execFileSync("git", ["check-ignore", "-q", ".agent-review.md"], { cwd: wt })).not.toThrow();
   });
 });

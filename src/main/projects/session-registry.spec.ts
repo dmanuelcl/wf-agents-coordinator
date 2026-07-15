@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createSessionRegistry } from "./session-registry";
+import { createSessionRegistry, PR_CONTEXT_ARTIFACT } from "./session-registry";
 
 let repoDir: string;
 let storeDir: string;
@@ -102,6 +102,7 @@ describe("SessionRegistry", () => {
     expect(session.baseBranch).toBe("develop");
     expect(session.checkpointPath).toBeNull();
     expect(existsSync(session.worktreePath)).toBe(true);
+    expect(() => execFileSync("git", ["check-ignore", "-q", PR_CONTEXT_ARTIFACT], { cwd: session.worktreePath })).not.toThrow();
     // Detached: the review branch is NOT "checked out" as a worktree branch.
     expect(branchExists(repoDir, "feature/to-review")).toBe(true);
   });
@@ -141,6 +142,7 @@ describe("SessionRegistry", () => {
     expect(session.kind).toBe("pr-fix");
     expect(session.branch).toBe("feature/fixme");
     expect(existsSync(session.worktreePath)).toBe(true);
+    expect(() => execFileSync("git", ["check-ignore", "-q", PR_CONTEXT_ARTIFACT], { cwd: session.worktreePath })).not.toThrow();
     // On the branch (writable), not a detached HEAD.
     const head = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: session.worktreePath })
       .toString()

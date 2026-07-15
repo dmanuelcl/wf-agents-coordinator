@@ -2,10 +2,11 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 /**
- * Add a pattern to a worktree's LOCAL git exclude (`<gitdir>/info/exclude`), so
+ * Add a pattern to the repository's LOCAL git exclude (`<commondir>/info/exclude`), so
  * a generated file (e.g. `.agent-review.md`) stays out of `git status`/diffs
  * WITHOUT modifying the tracked `.gitignore` on the branch. For a linked
- * worktree, `<worktree>/.git` is a file pointing at the real gitdir; resolve it.
+ * worktree, `<worktree>/.git` points at a private gitdir whose `commondir` file
+ * points back to the repository gitdir Git uses for `info/exclude`.
  * Idempotent and best-effort at the call site.
  */
 export async function addWorktreeExclude(worktreePath: string, pattern: string): Promise<void> {
@@ -23,7 +24,15 @@ export async function addWorktreeExclude(worktreePath: string, pattern: string):
     gitDir = isAbsolute(raw) ? raw : resolve(worktreePath, raw);
   }
 
-  const excludePath = join(gitDir, "info", "exclude");
+  let commonDir = gitDir;
+  try {
+    const raw = (await readFile(join(gitDir, "commondir"), "utf8")).trim();
+    if (raw) commonDir = isAbsolute(raw) ? raw : resolve(gitDir, raw);
+  } catch {
+    // A main worktree has no commondir indirection.
+  }
+
+  const excludePath = join(commonDir, "info", "exclude");
   let existing = "";
   try {
     existing = await readFile(excludePath, "utf8");

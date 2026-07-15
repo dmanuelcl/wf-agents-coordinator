@@ -2,27 +2,26 @@ import { describe, expect, it } from "vitest";
 import { buildPrFixKickoff } from "./pr-fix-kickoff";
 
 describe("buildPrFixKickoff", () => {
-  it("names the PR and lists comments in order, with inline location", () => {
+  it("names the PR and requires reading the complete local context", () => {
     const out = buildPrFixKickoff({
       title: "Add contacts",
       source: "feature/contacts",
       target: "develop",
-      comments: [
-        { body: "rename this" },
-        { body: "wrong type", inline: { path: "src/a.ts", line: 42 } },
-      ],
+      contextFile: ".agent-pr-context.md",
     });
     expect(out).toContain("Add contacts");
     expect(out).toContain("feature/contacts");
     expect(out).toContain("develop");
-    expect(out).toContain("rename this");
-    expect(out).toContain("src/a.ts:42");
+    expect(out).toContain(".agent-pr-context.md");
+    expect(out).toMatch(/lee COMPLETO/i);
+    expect(out).toMatch(/por partes.*final del archivo/i);
+    expect(out).toMatch(/no implementes nada hasta/i);
     expect(out).toMatch(/commit/i);
     expect(out).toMatch(/no.*push/i);
   });
 
-  it("handles a PR with no comments", () => {
-    const out = buildPrFixKickoff({ title: "x", source: "a", target: "b", comments: [] });
-    expect(out).toMatch(/no hay comentarios/i);
+  it("does not embed comment bodies in the terminal prompt", () => {
+    const out = buildPrFixKickoff({ title: "x", source: "a", target: "b", contextFile: ".context.md" });
+    expect(out).not.toContain("Comentarios del PR (en orden)");
   });
 });
