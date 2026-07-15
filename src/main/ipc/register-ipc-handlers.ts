@@ -29,6 +29,13 @@ import type { VcsSecretStore } from "../vcs/vcs-secret-store";
 function prRefOf(pr: PrLink): PrRef {
   return { host: pr.host, workspace: pr.workspace, repo: pr.repo, prId: pr.prId, url: pr.url };
 }
+
+// Build provider creds from a (possibly whitespace) email + token. A blank email
+// → no email (Bearer / x-token-auth fallback); set → Basic(email:token). Shared
+// by every VCS call so the "Test" and "Check"/resolve paths can't diverge.
+function credsFrom(email: string, token: string): { token: string; email?: string } {
+  return email.trim() ? { token, email: email.trim() } : { token };
+}
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/workflow/agent-runtime-config";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
@@ -89,7 +96,7 @@ export function registerIpcHandlers(params: {
   async function vcsCredentialsFor(project: ProjectRecord): Promise<{ token: string; email?: string }> {
     const token = await vcsSecretStore.getToken(project.id);
     if (!token) throw new Error("No VCS token configured for this project.");
-    return project.vcs.email ? { token, email: project.vcs.email } : { token };
+    return credsFrom(project.vcs.email, token);
   }
 
   // The command auto-typed into a reviewer/agent tab: a `wf` command normally, a
@@ -321,7 +328,7 @@ export function registerIpcHandlers(params: {
       let token = input.token?.trim() || null;
       if (!token && input.projectId) token = await vcsSecretStore.getToken(input.projectId);
       if (!token) throw new Error("Enter an API token to test.");
-      const creds = config.email.trim() ? { token, email: config.email.trim() } : { token };
+      const creds = credsFrom(config.email, token);
       return getProvider(config.host).verifyAccess(
         { workspace: config.workspace.trim(), repo: config.repo.trim() },
         creds,
