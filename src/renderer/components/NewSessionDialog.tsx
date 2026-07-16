@@ -281,7 +281,15 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
               Cancel
             </button>
             <button type="submit" className="modal-confirm" disabled={submitting || !canSubmit}>
-              {kind === "review" ? "Start review" : kind === "pr-fix" ? "Start fix" : "Create session"}
+              {submitting
+                ? isPrKind
+                  ? "Setting up worktree…"
+                  : "Creating…"
+                : kind === "review"
+                  ? "Start review"
+                  : kind === "pr-fix"
+                    ? "Start fix"
+                    : "Create session"}
             </button>
           </div>
         </form>
