@@ -150,6 +150,18 @@ describe("SessionRegistry", () => {
     expect(head).toBe("feature/fixme");
   });
 
+  it("markSetupDone flips setupDone (so setup runs once per worktree)", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+    const session = await registry.createSession({ projectId: "p1", projectRoot: repoDir, name: "Feat", kind: "feature" });
+    expect(session.setupDone).toBe(false);
+
+    await registry.markSetupDone({ sessionId: session.id });
+
+    const reloaded = await registry.getSession({ sessionId: session.id });
+    expect(reloaded?.setupDone).toBe(true);
+  });
+
   it("rejects a blank / punctuation-only name before creating anything", async () => {
     initGitRepo(repoDir);
     const registry = createSessionRegistry({ storeFilePath });

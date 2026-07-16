@@ -20,6 +20,9 @@ export interface ProjectRecord {
   autoPilot: AutoPilotConfig;
   review: ReviewConfig;
   vcs: VcsConfig;
+  // Shell command run once in a fresh worktree before the agent starts (e.g.
+  // `pnpm install`). Empty = nothing. The agent waits for it to finish.
+  setupCommand: string;
   createdAtEpochMs: number;
   updatedAtEpochMs: number;
 }
@@ -31,6 +34,7 @@ export interface ProjectUpdateInput {
   autoPilot?: AutoPilotConfig;
   review?: ReviewConfig;
   vcs?: VcsConfig;
+  setupCommand?: string;
 }
 
 export interface ProjectRegistry {
@@ -43,6 +47,7 @@ export interface ProjectRegistry {
     autoPilot?: AutoPilotConfig;
     review?: ReviewConfig;
     vcs?: VcsConfig;
+    setupCommand?: string;
   }): Promise<ProjectRecord>;
   updateProject(id: string, input: ProjectUpdateInput): Promise<ProjectRecord>;
   removeProject(id: string): Promise<void>;
@@ -93,6 +98,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         autoPilot: input.autoPilot ?? createDefaultAutoPilotConfig(),
         review: input.review ?? createDefaultReviewConfig(),
         vcs: input.vcs ?? createDefaultVcsConfig(),
+        setupCommand: input.setupCommand ?? "",
         createdAtEpochMs: now,
         updatedAtEpochMs: now,
       };
@@ -118,6 +124,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
         autoPilot: input.autoPilot ?? current.autoPilot,
         review: input.review ?? current.review,
         vcs: input.vcs ?? current.vcs,
+        setupCommand: input.setupCommand ?? current.setupCommand,
         updatedAtEpochMs: Date.now(),
       };
 

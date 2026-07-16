@@ -8,7 +8,7 @@ import { defineProjectRegistryContractTests } from "./project-registry.contract"
 import { createSqliteProjectRegistry } from "./sqlite-project-registry";
 import type { ProjectRecord } from "./project-registry";
 
-type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot" | "review" | "vcs">;
+type LegacyProjectRecord = Omit<ProjectRecord, "iconDataUrl" | "runtimeConfig" | "autoPilot" | "review" | "vcs" | "setupCommand">;
 
 let dir: string;
 let sqliteFilePath: string;
@@ -74,6 +74,21 @@ describe("createSqliteProjectRegistry vcs config", () => {
     const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
     const [listed] = await reloaded.listProjects();
     expect(listed?.vcs).toEqual(vcs);
+  });
+});
+
+describe("createSqliteProjectRegistry setup command", () => {
+  it("defaults to empty and round-trips an updated value across instances", async () => {
+    const registry = createSqliteProjectRegistry({ sqliteFilePath });
+    const created = await registry.addProject({ rootPath: "/repo/setup" });
+    expect(created.setupCommand).toBe("");
+
+    const updated = await registry.updateProject(created.id, { setupCommand: "pnpm install" });
+    expect(updated.setupCommand).toBe("pnpm install");
+
+    const reloaded = createSqliteProjectRegistry({ sqliteFilePath });
+    const [listed] = await reloaded.listProjects();
+    expect(listed?.setupCommand).toBe("pnpm install");
   });
 });
 

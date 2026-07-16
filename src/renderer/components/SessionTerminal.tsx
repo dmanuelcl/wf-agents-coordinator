@@ -233,17 +233,19 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     }
 
     async function start(): Promise<void> {
-      let launchCommand: string | null = null;
+      let agentCommand: string | null = null;
       let setupMessages: string[] = [];
       let wfPreType: string | null = null;
+      let setupCommand: string | null = null;
 
       if (role !== "shell") {
         const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
         if (disposed) return;
-        launchCommand = launch.agentCommand;
+        agentCommand = launch.agentCommand;
         shellCwd = launch.cwd;
         setupMessages = launch.setupMessages;
         wfPreType = launch.wfCommand;
+        setupCommand = launch.setupCommand;
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
       }
 
@@ -270,6 +272,13 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           })
         : null;
 
+      // A project setup command runs FIRST in the worktree (phase "setup"); only
+      // after it exits 0 does the agent start (phase "agent"). The follow-up gate
+      // is armed only in the agent phase, so a long install can't trip its
+      // deadline. `exec <cmd>` in the shell means the PTY exits with the command's
+      // code, so onExit tells us when setup finished.
+      let phase: "setup" | "agent" = setupCommand ? "setup" : "agent";
+
       // Subscribe BEFORE creating the PTY. A fast agent can render its startup
       // screen before the create IPC promise resolves; subscribing afterwards
       // loses the output that schedules the kickoff.
@@ -283,8 +292,31 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
         if (event.sessionId !== ptyId) return;
         term.write(event.data);
-        followUpGate?.onOutput();
+        if (phase === "agent") followUpGate?.onOutput();
       };
+
+      // Replace the finished setup PTY with the agent PTY, reusing the ptyId-
+      // reassign trick so the existing handlers rewire to it.
+      async function spawnAgent(): Promise<void> {
+        phase = "agent";
+        ptyId = null; // buffer any agent output that arrives before the id is set
+        const id = await window.agentCoordinator.terminal.create({
+          cwd: shellCwd,
+          cols: term.cols,
+          rows: term.rows,
+          launchCommand: agentCommand,
+          persistKey: persistKey ?? null,
+        });
+        if (disposed) {
+          window.agentCoordinator.terminal.kill(id);
+          return;
+        }
+        ptyId = id;
+        ptyIdRef.current = id;
+        followUpGate?.start();
+        for (const event of pendingData.splice(0)) handleData(event);
+        for (const event of pendingExits.splice(0)) handleExit(event);
+      }
 
       const handleExit = (event: TerminalExitEvent): void => {
         if (!ptyId) {
@@ -292,6 +324,22 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           return;
         }
         if (event.sessionId !== ptyId) return;
+        if (phase === "setup") {
+          if (event.code === 0) {
+            term.write("\r\n\x1b[2m—— setup done · starting agent ——\x1b[0m\r\n\r\n");
+            void window.agentCoordinator.sessions.markSetupDone(session.id);
+            void spawnAgent();
+          } else {
+            // Setup failed → don't run the agent; drop to a shell so the user can fix it.
+            phase = "agent";
+            fellBackToShell = true;
+            followUpSent = true;
+            followUpGate?.cancel();
+            term.write(`\r\n\x1b[2m—— setup failed (exit ${event.code}) · dropped to shell ——\x1b[0m\r\n\r\n`);
+            void fallBackToShell();
+          }
+          return;
+        }
         if (isAgentTab && !fellBackToShell) {
           // Agent quit → become a usable shell instead of a dead pane.
           fellBackToShell = true;
@@ -308,11 +356,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       const unsubscribeExit = window.agentCoordinator.terminal.onExit(handleExit);
       disposables.push(unsubscribeData, unsubscribeExit, () => followUpGate?.cancel());
 
+      if (setupCommand) {
+        term.write(`\x1b[2m—— setup: ${setupCommand} ——\x1b[0m\r\n`);
+      }
       const id = await window.agentCoordinator.terminal.create({
         cwd: shellCwd,
         cols: term.cols,
         rows: term.rows,
-        launchCommand,
+        launchCommand: setupCommand ?? agentCommand,
         persistKey: persistKey ?? null,
       });
       if (disposed) {
@@ -322,9 +373,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       ptyId = id;
       ptyIdRef.current = id;
 
-      followUpGate?.start();
-      for (const event of pendingData) handleData(event);
-      for (const event of pendingExits) handleExit(event);
+      // Arm the follow-up gate only when we start directly in the agent phase.
+      if (phase === "agent") followUpGate?.start();
+      for (const event of pendingData.splice(0)) handleData(event);
+      for (const event of pendingExits.splice(0)) handleExit(event);
 
       const onDataDisposable = term.onData((data) => {
         if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);

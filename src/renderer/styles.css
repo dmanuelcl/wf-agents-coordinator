@@ -2582,6 +2582,10 @@ input[type="text"]:focus,
   color: var(--muted-fg);
   font-weight: 400;
 }
+.setup-command-input {
+  width: 100%;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+}
 .vcs-test-row {
   display: flex;
   align-items: center;

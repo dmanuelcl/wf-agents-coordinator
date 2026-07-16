@@ -53,6 +53,7 @@ describe("WorkSession shape", () => {
       pr: null,
       worktreePath: "/repo/.worktrees/fix-login",
       checkpointPath: null,
+      setupDone: false,
       createdAtEpochMs: 1_700_000_000_000,
     };
 

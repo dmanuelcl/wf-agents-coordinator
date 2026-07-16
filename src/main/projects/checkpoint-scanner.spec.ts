@@ -45,6 +45,7 @@ function makeProject(rootPath: string): ProjectRecord {
     autoPilot: createDefaultAutoPilotConfig(),
     review: createDefaultReviewConfig(),
     vcs: createDefaultVcsConfig(),
+    setupCommand: "",
     createdAtEpochMs: 0,
     updatedAtEpochMs: 0,
   };

@@ -100,6 +100,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   const [autoPilot, setAutoPilot] = useState<AutoPilotConfig>(project?.autoPilot ?? createDefaultAutoPilotConfig());
   const [review, setReview] = useState<ReviewConfig>(project?.review ?? createDefaultReviewConfig());
   const [vcs, setVcs] = useState<VcsConfig>(project?.vcs ?? createDefaultVcsConfig());
+  const [setupCommand, setSetupCommand] = useState(project?.setupCommand ?? "");
   const [vcsToken, setVcsToken] = useState("");
   const [vcsTokenTouched, setVcsTokenTouched] = useState(false);
   const [hasVcsCreds, setHasVcsCreds] = useState(false);
@@ -199,6 +200,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           autoPilot,
           review,
           vcs,
+          setupCommand,
         });
         if (vcsToken.trim()) await window.agentCoordinator.projects.setVcsToken(created.id, vcsToken.trim());
         onSaved(created);
@@ -210,6 +212,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
           autoPilot,
           review,
           vcs,
+          setupCommand,
         });
         if (vcsTokenTouched) await window.agentCoordinator.projects.setVcsToken(project!.id, vcsToken.trim());
         onSaved(updated);
@@ -450,6 +453,22 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                 })}
               </tbody>
             </table>
+          </section>
+
+          <section>
+            <h3>Worktree setup</h3>
+            <p className="section-hint">
+              A shell command run once in a fresh worktree <strong>before</strong> the agent starts (e.g.{" "}
+              <code>pnpm install</code>). The agent waits for it to finish; if it fails, the tab drops to a shell so you
+              can fix it. Empty = skip.
+            </p>
+            <input
+              type="text"
+              className="setup-command-input"
+              placeholder="pnpm install"
+              value={setupCommand}
+              onChange={(event) => setSetupCommand(event.target.value)}
+            />
           </section>
 
           <section>

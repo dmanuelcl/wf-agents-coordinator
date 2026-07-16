@@ -60,6 +60,7 @@ const api: AgentCoordinatorApi = {
     pushFixBranch: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsPushFixBranch, sessionId),
     postReview: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsPostReview, sessionId),
     reviewArtifactExists: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsReviewArtifactExists, sessionId),
+    markSetupDone: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsMarkSetupDone, sessionId),
     remove: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsRemove, sessionId),
     readCheckpoint: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsReadCheckpoint, sessionId),
     watchCheckpoint: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionsWatchCheckpoint, sessionId),

@@ -24,6 +24,7 @@ function repoSessionFor(project: ProjectRecord): WorkSession {
     pr: null,
     worktreePath: project.rootPath,
     checkpointPath: null,
+    setupDone: true,
     createdAtEpochMs: 0,
   };
 }

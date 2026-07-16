@@ -41,6 +41,9 @@ export interface WorkSession {
   pr: PrLink | null;
   worktreePath: string;
   checkpointPath: string | null;
+  // Whether the project's setup command has already run in this worktree (so it
+  // runs once, before the agent, not on every tab open).
+  setupDone: boolean;
   createdAtEpochMs: number;
 }
 

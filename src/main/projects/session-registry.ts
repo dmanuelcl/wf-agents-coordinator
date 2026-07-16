@@ -45,6 +45,7 @@ export interface SessionRegistry {
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
+  markSetupDone(params: { sessionId: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
 }
 
@@ -160,6 +161,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         pr: null,
         worktreePath,
         checkpointPath: null,
+        setupDone: false,
         createdAtEpochMs: Date.now(),
       };
 
@@ -201,6 +203,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         pr: pr ?? null,
         worktreePath,
         checkpointPath: null,
+        setupDone: false,
         createdAtEpochMs: Date.now(),
       };
 
@@ -235,6 +238,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         pr,
         worktreePath,
         checkpointPath: null,
+        setupDone: false,
         createdAtEpochMs: Date.now(),
       };
 
@@ -262,6 +266,15 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       const current = records[index] as WorkSession;
       if (!current.pr) throw new Error("Session has no PR to update.");
       records[index] = { ...current, pr: { ...current.pr, lastReviewedSha: sha } };
+      await writeAll(records);
+    },
+
+    async markSetupDone({ sessionId }) {
+      const records = await readAll();
+      const index = records.findIndex((record) => record.id === sessionId);
+      if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+      const current = records[index] as WorkSession;
+      records[index] = { ...current, setupDone: true };
       await writeAll(records);
     },
 

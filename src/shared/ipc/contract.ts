@@ -37,6 +37,9 @@ export interface SessionRoleLaunch {
   sessionUuid: string;
   setupMessages: string[];
   warnings: string[];
+  // A shell command to run in the worktree BEFORE the agent (once per worktree);
+  // the agent waits for it to exit 0. Null when there's nothing to run.
+  setupCommand: string | null;
 }
 
 export interface ProjectCreateInput {
@@ -47,6 +50,7 @@ export interface ProjectCreateInput {
   autoPilot?: AutoPilotConfig;
   review?: ReviewConfig;
   vcs?: VcsConfig;
+  setupCommand?: string;
 }
 
 export interface SessionCreateInput {
@@ -95,6 +99,7 @@ export const IPC_CHANNELS = {
   sessionsCreateFixFromPr: "sessions:create-fix-from-pr",
   sessionsPushFixBranch: "sessions:push-fix-branch",
   sessionsPostReview: "sessions:post-review",
+  sessionsMarkSetupDone: "sessions:mark-setup-done",
   sessionsReviewArtifactExists: "sessions:review-artifact-exists",
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
@@ -233,6 +238,7 @@ export interface AgentCoordinatorApi {
     pushFixBranch(sessionId: string): Promise<{ output: string }>;
     postReview(sessionId: string): Promise<{ commentUrl: string }>;
     reviewArtifactExists(sessionId: string): Promise<boolean>;
+    markSetupDone(sessionId: string): Promise<void>;
     remove(sessionId: string): Promise<void>;
     readCheckpoint(sessionId: string): Promise<ParsedCheckpoint | null>;
     watchCheckpoint(sessionId: string): Promise<void>;

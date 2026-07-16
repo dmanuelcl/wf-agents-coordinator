@@ -458,6 +458,10 @@ export function registerIpcHandlers(params: {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.sessionsMarkSetupDone, async (_event, sessionId: string) => {
+    await sessionRegistry.markSetupDone({ sessionId });
+  });
+
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
     await sessionCheckpointWatchManager.unwatchSession(sessionId);
     // User-confirmed delete (the renderer gates this): remove the git worktree,
@@ -538,6 +542,8 @@ export function registerIpcHandlers(params: {
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
         ? await buildReviewOrWfCommand(session, project, role)
         : null;
+      // Run the project's setup command once, in this worktree, before the agent.
+      const setupCommand = !session.setupDone && project.setupCommand.trim() ? project.setupCommand.trim() : null;
       return {
         agentCommand: launch.command,
         wfCommand,
@@ -545,6 +551,7 @@ export function registerIpcHandlers(params: {
         sessionUuid: uuid,
         setupMessages: buildAgentSetupMessages(agentConfig),
         warnings: launch.warnings,
+        setupCommand,
       };
     },
   );
