@@ -19,6 +19,7 @@ export interface ResolvedPr extends PrRef {
   source: string; // source branch name
   target: string; // destination / base branch name
   title: string;
+  headSha: string; // latest commit on the source branch ("" if the host didn't report it)
 }
 
 export interface ReviewComment {

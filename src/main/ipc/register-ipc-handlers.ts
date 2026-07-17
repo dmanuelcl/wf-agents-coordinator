@@ -383,6 +383,7 @@ export function registerIpcHandlers(params: {
         lastReviewedSha: null,
       },
       fetchFirst: true,
+      expectedHeadSha: resolved.headSha,
     });
   });
 
@@ -407,6 +408,7 @@ export function registerIpcHandlers(params: {
         url: resolved.url,
         lastReviewedSha: null,
       },
+      expectedHeadSha: resolved.headSha,
     });
   });
 

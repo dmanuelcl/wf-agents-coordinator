@@ -107,6 +107,45 @@ describe("SessionRegistry", () => {
     expect(branchExists(repoDir, "feature/to-review")).toBe(true);
   });
 
+  it("createReviewSession accepts a worktree that matches the PR head SHA", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/to-review"], { cwd: repoDir });
+    const headSha = execFileSync("git", ["rev-parse", "feature/to-review"], { cwd: repoDir }).toString().trim();
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createReviewSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Review fresh",
+      reviewBranch: "feature/to-review",
+      baseBranch: "main",
+      expectedHeadSha: headSha,
+    });
+
+    expect(existsSync(session.worktreePath)).toBe(true);
+  });
+
+  it("createReviewSession refuses & rolls back a stale worktree when HEAD != PR head SHA", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/to-review"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await expect(
+      registry.createReviewSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "Review stale",
+        reviewBranch: "feature/to-review",
+        baseBranch: "main",
+        expectedHeadSha: "0".repeat(40), // not the branch's real tip
+      }),
+    ).rejects.toThrow(/latest commit|stale/i);
+
+    // Rolled back: no worktree left behind and nothing persisted.
+    expect(existsSync(join(repoDir, ".worktrees", "review-stale"))).toBe(false);
+    await expect(registry.listSessions({ projectId: "p1" })).resolves.toEqual([]);
+  });
+
   it("setReviewedSha updates a PR review session's lastReviewedSha", async () => {
     initGitRepo(repoDir);
     execFileSync("git", ["branch", "feature/pr"], { cwd: repoDir });

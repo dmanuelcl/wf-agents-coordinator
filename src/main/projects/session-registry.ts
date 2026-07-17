@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 import { slugifySessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import { buildWorktreeCreatePlan, createWorktree } from "./worktree-manager";
+import { buildWorktreeCreatePlan, createWorktree, removeWorktree } from "./worktree-manager";
 import { addWorktreeExclude } from "./worktree-exclude";
 
 // The gitignored review artifact a PR-review reviewer writes; posted to the PR.
@@ -34,6 +34,9 @@ export interface SessionRegistry {
     pr?: PrLink | null;
     // Fetch remotes before creating the worktree (PR-link reviews check out a remote ref).
     fetchFirst?: boolean;
+    // The PR's head commit SHA (from the host API). When set, creation verifies the
+    // worktree actually landed on it and fails loudly instead of yielding a stale checkout.
+    expectedHeadSha?: string;
   }): Promise<WorkSession>;
   createFixSession(params: {
     projectId: string;
@@ -42,6 +45,8 @@ export interface SessionRegistry {
     branch: string; // the PR source branch (writable checkout)
     baseBranch: string; // diff context (e.g. origin/<target>)
     pr: PrLink;
+    // The PR's head commit SHA (from the host API); verified after checkout — see above.
+    expectedHeadSha?: string;
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
   setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
@@ -96,6 +101,54 @@ async function copyEnvFiles(projectRoot: string, worktreePath: string, dir = pro
       // a locked/missing file must not fail session creation
     }
   }
+}
+
+// Fetch all remotes so a PR's source ref is current before we check it out.
+// Returns the error message on failure instead of throwing, so the caller can
+// decide what to do — a failed fetch usually means the checkout would be stale,
+// which we surface via the head-SHA guard below rather than swallowing silently.
+async function fetchRemotes(projectRoot: string): Promise<string | null> {
+  try {
+    await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** Same commit? Tolerates short-vs-full hashes so a host's abbreviated SHA still matches. */
+function sameCommit(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+async function worktreeHeadSha(worktreePath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+async function localBranchExists(projectRoot: string, branch: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: projectRoot });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Error for "the worktree isn't on the PR's latest commit" — names the likely cause. */
+function staleWorktreeError(label: string, headSha: string, expectedHeadSha: string, fetchError: string | null): Error {
+  const short = (sha: string) => (sha ? sha.slice(0, 9) : "an unknown commit");
+  const cause = fetchError
+    ? `Fetching the latest changes from the remote failed:\n${fetchError}`
+    : "The local copy of the branch is behind the PR — check your git access to the remote, or retry in a moment if it was just pushed.";
+  return new Error(
+    `Won't create a stale worktree for "${label}": it landed on ${short(headSha)} but the PR's latest commit is ${short(expectedHeadSha)}. ${cause}`,
+  );
 }
 
 /**
@@ -170,22 +223,34 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return record;
     },
 
-    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst }) {
+    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst, expectedHeadSha }) {
       const slug = slugifySessionName(name);
       if (!slug) {
         throw new Error("Session name cannot be empty");
       }
 
-      if (fetchFirst) {
-        // A PR-link review checks out a remote ref (origin/…) — make it current.
-        await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot }).catch(() => {});
-      }
+      // A PR-link review checks out a remote ref (origin/…) — make it current.
+      // We capture (never swallow) the fetch error so a failed fetch surfaces via
+      // the head-SHA guard below instead of silently reviewing out-of-date code.
+      const fetchError = fetchFirst ? await fetchRemotes(projectRoot) : null;
 
       const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch: reviewBranch }).path;
       // Detached at the ref under review (works for local and `origin/…` remote
       // branches); non-destructive and never conflicts with a branch checked out
-      // elsewhere. The branch was already fetched by the dialog's listBranches.
+      // elsewhere.
       await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
+
+      // Freshness guard: if the host reported the PR's head commit, the detached
+      // worktree must be sitting on it. If not (e.g. the fetch failed), roll back
+      // and fail loudly rather than hand back the "worktree is missing the last
+      // commit" symptom. A detached checkout leaves no branch, so removal is clean.
+      if (expectedHeadSha) {
+        const head = await worktreeHeadSha(worktreePath);
+        if (!sameCommit(head, expectedHeadSha)) {
+          await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+        }
+      }
       // Keep local agent artifacts out of git status/diffs without touching the
       // tracked .gitignore on the branch (best-effort).
       await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
@@ -212,7 +277,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return record;
     },
 
-    async createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr }) {
+    async createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, expectedHeadSha }) {
       const slug = slugifySessionName(name);
       if (!slug) {
         throw new Error("Session name cannot be empty");
@@ -221,9 +286,26 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       // Make origin/<branch> current, then a WRITABLE checkout of the branch. Git
       // DWIMs a tracking branch from origin when the local branch doesn't exist,
       // so a later `git push` updates the PR. (Detach is only for read-only review.)
-      await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: projectRoot }).catch(() => {});
+      // Capture the fetch error rather than swallow it — surfaced via the guard below.
+      const fetchError = await fetchRemotes(projectRoot);
+      const branchPreexisted = await localBranchExists(projectRoot, branch);
       const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
       await createWorktree({ projectRoot, slug, branch });
+
+      // Freshness guard (see createReviewSession). On a stale result, remove the
+      // worktree and drop the branch we just DWIM-created so a retry starts clean
+      // (a pre-existing branch is left alone).
+      if (expectedHeadSha) {
+        const head = await worktreeHeadSha(worktreePath);
+        if (!sameCommit(head, expectedHeadSha)) {
+          await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          if (!branchPreexisted) {
+            await execFileAsync("git", ["branch", "-D", branch], { cwd: projectRoot }).catch(() => {});
+          }
+          throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+        }
+      }
+
       await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
 
       const records = await readAll();

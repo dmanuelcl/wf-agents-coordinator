@@ -14,7 +14,7 @@ function headers(creds: VcsCredentials): Record<string, string> {
 
 interface GithubPr {
   title?: string;
-  head?: { ref?: string };
+  head?: { ref?: string; sha?: string };
   base?: { ref?: string };
 }
 
@@ -24,7 +24,7 @@ export function mapPullRequest(json: unknown, ref: PrRef): ResolvedPr {
   const source = pr.head?.ref;
   const target = pr.base?.ref;
   if (!source || !target) throw new Error("GitHub PR response is missing a head/base ref");
-  return { ...ref, source, target, title: pr.title ?? ref.url };
+  return { ...ref, source, target, title: pr.title ?? ref.url, headSha: pr.head?.sha ?? "" };
 }
 
 interface GithubComment {

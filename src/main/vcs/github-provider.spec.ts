@@ -12,9 +12,19 @@ const REF: PrRef = {
 };
 
 describe("mapPullRequest (github)", () => {
-  it("maps head/base ref + title", () => {
-    const json = { title: "Add contacts", head: { ref: "feature/contacts" }, base: { ref: "main" } };
-    expect(mapPullRequest(json, REF)).toEqual({ ...REF, source: "feature/contacts", target: "main", title: "Add contacts" });
+  it("maps head/base ref + title + head sha", () => {
+    const json = { title: "Add contacts", head: { ref: "feature/contacts", sha: "deadbeef123" }, base: { ref: "main" } };
+    expect(mapPullRequest(json, REF)).toEqual({
+      ...REF,
+      source: "feature/contacts",
+      target: "main",
+      title: "Add contacts",
+      headSha: "deadbeef123",
+    });
+  });
+  it("defaults headSha to empty string when the sha is absent", () => {
+    const json = { title: "x", head: { ref: "feature/contacts" }, base: { ref: "main" } };
+    expect(mapPullRequest(json, REF).headSha).toBe("");
   });
   it("throws when refs are missing", () => {
     expect(() => mapPullRequest({ title: "x" }, REF)).toThrow(/ref/i);

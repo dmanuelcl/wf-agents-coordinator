@@ -19,7 +19,7 @@ function authSchemes(creds: VcsCredentials): string[] {
 
 interface BitbucketPr {
   title?: string;
-  source?: { branch?: { name?: string } };
+  source?: { branch?: { name?: string }; commit?: { hash?: string } };
   destination?: { branch?: { name?: string } };
 }
 
@@ -31,7 +31,7 @@ export function mapPullRequest(json: unknown, ref: PrRef): ResolvedPr {
   if (!source || !target) {
     throw new Error("Bitbucket PR response is missing a source/destination branch");
   }
-  return { ...ref, source, target, title: pr.title ?? ref.url };
+  return { ...ref, source, target, title: pr.title ?? ref.url, headSha: pr.source?.commit?.hash ?? "" };
 }
 
 interface BitbucketComment {

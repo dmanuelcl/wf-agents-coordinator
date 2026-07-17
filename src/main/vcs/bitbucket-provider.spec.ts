@@ -12,13 +12,28 @@ const REF: PrRef = {
 };
 
 describe("mapPullRequest", () => {
-  it("maps source/destination branch names + title", () => {
+  it("maps source/destination branch names + title + head sha", () => {
+    const json = {
+      title: "Fix contacts",
+      source: { branch: { name: "feature/contacts" }, commit: { hash: "abc1234def" } },
+      destination: { branch: { name: "develop" } },
+    };
+    expect(mapPullRequest(json, REF)).toEqual({
+      ...REF,
+      source: "feature/contacts",
+      target: "develop",
+      title: "Fix contacts",
+      headSha: "abc1234def",
+    });
+  });
+
+  it("defaults headSha to empty string when the commit hash is absent", () => {
     const json = {
       title: "Fix contacts",
       source: { branch: { name: "feature/contacts" } },
       destination: { branch: { name: "develop" } },
     };
-    expect(mapPullRequest(json, REF)).toEqual({ ...REF, source: "feature/contacts", target: "develop", title: "Fix contacts" });
+    expect(mapPullRequest(json, REF).headSha).toBe("");
   });
 
   it("throws when branches are missing", () => {
