@@ -61,6 +61,21 @@ export function createCheckpointWatchManager(params: {
 }): CheckpointWatchManager {
   const { createWatcher, debounceMs, onCheckpointChanged, onCheckpointRemoved } = params;
   const watchers = new Map<string, CheckpointWatcher>();
+  const operationTails = new Map<string, Promise<void>>();
+
+  function runExclusive<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = operationTails.get(projectId) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    operationTails.set(projectId, tail);
+    void tail.finally(() => {
+      if (operationTails.get(projectId) === tail) operationTails.delete(projectId);
+    });
+    return result;
+  }
 
   async function handleChanged(project: ProjectRecord, absoluteFilePath: string): Promise<void> {
     try {
@@ -83,34 +98,39 @@ export function createCheckpointWatchManager(params: {
   }
 
   return {
-    async watchProject(project) {
-      if (watchers.has(project.id)) return;
+    watchProject(project) {
+      return runExclusive(project.id, async () => {
+        if (watchers.has(project.id)) return;
 
-      const roots = await resolveScanRoots(project.rootPath);
-      const targets = roots
-        .flatMap((root) => project.checkpointGlobs.map((glob) => globToWatchTarget(root, glob)))
-        .filter((target): target is WatchTarget => target !== null);
-      const dirPaths = Array.from(new Set(targets.map((target) => target.dirPath)));
+        const roots = await resolveScanRoots(project.rootPath);
+        const targets = roots
+          .flatMap((root) => project.checkpointGlobs.map((glob) => globToWatchTarget(root, glob)))
+          .filter((target): target is WatchTarget => target !== null);
+        const dirPaths = Array.from(new Set(targets.map((target) => target.dirPath)));
 
-      const watcher = createCheckpointWatcher({
-        paths: dirPaths,
-        createWatcher: createFilteredWatcher(createWatcher, targets),
-        debounceMs,
-        onChanged: (filePath) => void handleChanged(project, filePath),
-        onRemoved: (filePath) => handleRemoved(project, filePath),
+        const watcher = createCheckpointWatcher({
+          paths: dirPaths,
+          createWatcher: createFilteredWatcher(createWatcher, targets),
+          debounceMs,
+          onChanged: (filePath) => void handleChanged(project, filePath),
+          onRemoved: (filePath) => handleRemoved(project, filePath),
+        });
+
+        watchers.set(project.id, watcher);
       });
-
-      watchers.set(project.id, watcher);
     },
 
-    async unwatchProject(projectId) {
-      const watcher = watchers.get(projectId);
-      if (!watcher) return;
-      watchers.delete(projectId);
-      await watcher.close();
+    unwatchProject(projectId) {
+      return runExclusive(projectId, async () => {
+        const watcher = watchers.get(projectId);
+        if (!watcher) return;
+        watchers.delete(projectId);
+        await watcher.close();
+      });
     },
 
     async closeAll() {
+      await Promise.all(Array.from(operationTails.values()));
       const all = Array.from(watchers.values());
       watchers.clear();
       await Promise.all(all.map((watcher) => watcher.close()));

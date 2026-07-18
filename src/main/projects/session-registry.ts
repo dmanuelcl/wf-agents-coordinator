@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 import { slugifySessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import { buildWorktreeCreatePlan, createWorktree, removeWorktree } from "./worktree-manager";
+import { buildWorktreeCreatePlan, createWorktree, pruneWorktrees, removeWorktree } from "./worktree-manager";
 import { addWorktreeExclude } from "./worktree-exclude";
 
 // The gitignored review artifact a PR-review reviewer writes; posted to the PR.
@@ -140,6 +141,21 @@ async function localBranchExists(projectRoot: string, branch: string): Promise<b
   }
 }
 
+async function checkedOutBranches(projectRoot: string): Promise<Set<string>> {
+  try {
+    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: projectRoot });
+    const branches = new Set<string>();
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("branch refs/heads/")) {
+        branches.add(line.slice("branch refs/heads/".length).trim());
+      }
+    }
+    return branches;
+  } catch {
+    return new Set();
+  }
+}
+
 /** Error for "the worktree isn't on the PR's latest commit" — names the likely cause. */
 function staleWorktreeError(label: string, headSha: string, expectedHeadSha: string, fetchError: string | null): Error {
   const short = (sha: string) => (sha ? sha.slice(0, 9) : "an unknown commit");
@@ -158,6 +174,19 @@ function staleWorktreeError(label: string, headSha: string, expectedHeadSha: str
  */
 export function createSessionRegistry(params: { storeFilePath: string }): SessionRegistry {
   const { storeFilePath } = params;
+  // Every mutating operation is ordered through one queue. Without this, a
+  // checkpoint callback and a deletion can both read the same JSON snapshot;
+  // whichever writes last can resurrect the deleted session.
+  let mutationTail: Promise<void> = Promise.resolve();
+
+  function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   async function readAll(): Promise<WorkSession[]> {
     try {
@@ -173,7 +202,47 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
   async function writeAll(records: WorkSession[]): Promise<void> {
     await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(records, null, 2), "utf8");
+    // Rename a complete sibling file into place so a crash cannot leave a
+    // truncated sessions.json that makes every session disappear on restart.
+    const tempFilePath = `${storeFilePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tempFilePath, JSON.stringify(records, null, 2), "utf8");
+      await rename(tempFilePath, storeFilePath);
+    } catch (error) {
+      await rm(tempFilePath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  async function appendRecord(record: WorkSession): Promise<void> {
+    const records = await readAll();
+    records.push(record);
+    await writeAll(records);
+  }
+
+  async function allocateSlug(params: {
+    projectRoot: string;
+    baseSlug: string;
+    branchForSlug?: (slug: string) => string;
+  }): Promise<string> {
+    // Clear invisible registrations before deciding which names are occupied.
+    await pruneWorktrees({ projectRoot: params.projectRoot });
+    const records = await readAll();
+    const checkedOut = params.branchForSlug ? await checkedOutBranches(params.projectRoot) : new Set<string>();
+
+    for (let suffix = 1; suffix < 10_000; suffix += 1) {
+      const candidate = suffix === 1 ? params.baseSlug : `${params.baseSlug}-${suffix}`;
+      const path = buildWorktreeCreatePlan({
+        projectRoot: params.projectRoot,
+        slug: candidate,
+        branch: params.branchForSlug?.(candidate) ?? candidate,
+      }).path;
+      const pathOccupied = existsSync(path) || records.some((record) => record.worktreePath === path);
+      const branchOccupied = params.branchForSlug ? checkedOut.has(params.branchForSlug(candidate)) : false;
+      if (!pathOccupied && !branchOccupied) return candidate;
+    }
+
+    throw new Error(`Could not allocate a worktree name for "${params.baseSlug}".`);
   }
 
   return {
@@ -187,183 +256,247 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return records.find((record) => record.id === sessionId) ?? null;
     },
 
-    async createSession({ projectId, projectRoot, name, kind, copyEnv }) {
-      const slug = slugifySessionName(name);
-      if (!slug) {
-        throw new Error("Session name cannot be empty");
-      }
-
-      const branch = `${kind === "fix" ? "fix" : "feature"}/${slug}`;
-      const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
-
-      await createWorktree({ projectRoot, slug, branch, createBranch: true });
-
-      if (copyEnv) {
-        await copyEnvFiles(projectRoot, worktreePath);
-      }
-
-      const records = await readAll();
-      const record: WorkSession = {
-        id: randomUUID(),
-        projectId,
-        name,
-        kind,
-        slug,
-        branch,
-        baseBranch: null,
-        pr: null,
-        worktreePath,
-        checkpointPath: null,
-        setupDone: false,
-        createdAtEpochMs: Date.now(),
-      };
-
-      records.push(record);
-      await writeAll(records);
-      return record;
-    },
-
-    async createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst, expectedHeadSha }) {
-      const slug = slugifySessionName(name);
-      if (!slug) {
-        throw new Error("Session name cannot be empty");
-      }
-
-      // A PR-link review checks out a remote ref (origin/…) — make it current.
-      // We capture (never swallow) the fetch error so a failed fetch surfaces via
-      // the head-SHA guard below instead of silently reviewing out-of-date code.
-      const fetchError = fetchFirst ? await fetchRemotes(projectRoot) : null;
-
-      const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch: reviewBranch }).path;
-      // Detached at the ref under review (works for local and `origin/…` remote
-      // branches); non-destructive and never conflicts with a branch checked out
-      // elsewhere.
-      await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
-
-      // Freshness guard: if the host reported the PR's head commit, the detached
-      // worktree must be sitting on it. If not (e.g. the fetch failed), roll back
-      // and fail loudly rather than hand back the "worktree is missing the last
-      // commit" symptom. A detached checkout leaves no branch, so removal is clean.
-      if (expectedHeadSha) {
-        const head = await worktreeHeadSha(worktreePath);
-        if (!sameCommit(head, expectedHeadSha)) {
-          await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
-          throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+    createSession({ projectId, projectRoot, name, kind, copyEnv }) {
+      return runExclusive(async () => {
+        const baseSlug = slugifySessionName(name);
+        if (!baseSlug) {
+          throw new Error("Session name cannot be empty");
         }
-      }
-      // Keep local agent artifacts out of git status/diffs without touching the
-      // tracked .gitignore on the branch (best-effort).
-      await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
-      await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
 
-      const records = await readAll();
-      const record: WorkSession = {
-        id: randomUUID(),
-        projectId,
-        name,
-        kind: "review",
-        slug,
-        branch: reviewBranch,
-        baseBranch,
-        pr: pr ?? null,
-        worktreePath,
-        checkpointPath: null,
-        setupDone: false,
-        createdAtEpochMs: Date.now(),
-      };
+        const branchForSlug = (slug: string): string => `${kind === "fix" ? "fix" : "feature"}/${slug}`;
+        const slug = await allocateSlug({ projectRoot, baseSlug, branchForSlug });
+        const branch = branchForSlug(slug);
+        const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
+        // A deleted session intentionally leaves its branch behind. Recreating
+        // the same name should reopen that branch, not fail because `-b` sees it.
+        const branchPreexisted = await localBranchExists(projectRoot, branch);
+        let worktreeCreated = false;
 
-      records.push(record);
-      await writeAll(records);
-      return record;
-    },
+        try {
+          await createWorktree({ projectRoot, slug, branch, createBranch: !branchPreexisted });
+          worktreeCreated = true;
 
-    async createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, expectedHeadSha }) {
-      const slug = slugifySessionName(name);
-      if (!slug) {
-        throw new Error("Session name cannot be empty");
-      }
+          const record: WorkSession = {
+            id: randomUUID(),
+            projectId,
+            name,
+            kind,
+            slug,
+            branch,
+            baseBranch: null,
+            pr: null,
+            worktreePath,
+            checkpointPath: null,
+            setupDone: false,
+            // Git has finished checking out inherited files before this value is
+            // captured. The checkpoint watcher uses the boundary to ignore them.
+            createdAtEpochMs: Date.now(),
+          };
 
-      // Make origin/<branch> current, then a WRITABLE checkout of the branch. Git
-      // DWIMs a tracking branch from origin when the local branch doesn't exist,
-      // so a later `git push` updates the PR. (Detach is only for read-only review.)
-      // Capture the fetch error rather than swallow it — surfaced via the guard below.
-      const fetchError = await fetchRemotes(projectRoot);
-      const branchPreexisted = await localBranchExists(projectRoot, branch);
-      const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
-      await createWorktree({ projectRoot, slug, branch });
-
-      // Freshness guard (see createReviewSession). On a stale result, remove the
-      // worktree and drop the branch we just DWIM-created so a retry starts clean
-      // (a pre-existing branch is left alone).
-      if (expectedHeadSha) {
-        const head = await worktreeHeadSha(worktreePath);
-        if (!sameCommit(head, expectedHeadSha)) {
-          await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          if (copyEnv) {
+            await copyEnvFiles(projectRoot, worktreePath);
+          }
+          await appendRecord(record);
+          return record;
+        } catch (error) {
+          // Never strand an invisible worktree/branch when persistence fails.
+          if (worktreeCreated) {
+            await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          }
           if (!branchPreexisted) {
             await execFileAsync("git", ["branch", "-D", branch], { cwd: projectRoot }).catch(() => {});
           }
-          throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+          throw error;
         }
-      }
-
-      await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
-
-      const records = await readAll();
-      const record: WorkSession = {
-        id: randomUUID(),
-        projectId,
-        name,
-        kind: "pr-fix",
-        slug,
-        branch,
-        baseBranch,
-        pr,
-        worktreePath,
-        checkpointPath: null,
-        setupDone: false,
-        createdAtEpochMs: Date.now(),
-      };
-
-      records.push(record);
-      await writeAll(records);
-      return record;
+      });
     },
 
-    async updateSessionCheckpoint({ sessionId, checkpointPath }) {
-      const records = await readAll();
-      const index = records.findIndex((record) => record.id === sessionId);
-      if (index === -1) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+    createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst, expectedHeadSha }) {
+      return runExclusive(async () => {
+        const baseSlug = slugifySessionName(name);
+        if (!baseSlug) {
+          throw new Error("Session name cannot be empty");
+        }
+        const slug = await allocateSlug({ projectRoot, baseSlug });
 
-      const current = records[index] as WorkSession;
-      records[index] = { ...current, checkpointPath };
-      await writeAll(records);
+        // A PR-link review checks out a remote ref (origin/…) — make it current.
+        // We capture (never swallow) the fetch error so a failed fetch surfaces via
+        // the head-SHA guard below instead of silently reviewing out-of-date code.
+        const fetchError = fetchFirst ? await fetchRemotes(projectRoot) : null;
+        const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch: reviewBranch }).path;
+        let worktreeCreated = false;
+
+        try {
+          // Detached at the ref under review (works for local and `origin/…` remote
+          // branches); non-destructive and never conflicts with a branch checked out
+          // elsewhere.
+          await createWorktree({ projectRoot, slug, branch: reviewBranch, detach: true });
+          worktreeCreated = true;
+
+          // Freshness guard: if the host reported the PR's head commit, the detached
+          // worktree must be sitting on it. If not (e.g. the fetch failed), fail
+          // rather than reviewing stale code; the catch below owns the rollback.
+          if (expectedHeadSha) {
+            const head = await worktreeHeadSha(worktreePath);
+            if (!sameCommit(head, expectedHeadSha)) {
+              throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+            }
+          }
+          await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
+          await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
+
+          const record: WorkSession = {
+            id: randomUUID(),
+            projectId,
+            name,
+            kind: "review",
+            slug,
+            branch: reviewBranch,
+            baseBranch,
+            pr: pr ?? null,
+            worktreePath,
+            checkpointPath: null,
+            setupDone: false,
+            createdAtEpochMs: Date.now(),
+          };
+
+          await appendRecord(record);
+          return record;
+        } catch (error) {
+          if (worktreeCreated) {
+            await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          }
+          throw error;
+        }
+      });
     },
 
-    async setReviewedSha({ sessionId, sha }) {
-      const records = await readAll();
-      const index = records.findIndex((record) => record.id === sessionId);
-      if (index === -1) throw new Error(`Session not found: ${sessionId}`);
-      const current = records[index] as WorkSession;
-      if (!current.pr) throw new Error("Session has no PR to update.");
-      records[index] = { ...current, pr: { ...current.pr, lastReviewedSha: sha } };
-      await writeAll(records);
+    createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, expectedHeadSha }) {
+      return runExclusive(async () => {
+        const baseSlug = slugifySessionName(name);
+        if (!baseSlug) {
+          throw new Error("Session name cannot be empty");
+        }
+
+        const records = await readAll();
+        const existing = records.find(
+          (record) =>
+            record.projectId === projectId &&
+            record.kind === "pr-fix" &&
+            record.branch === branch &&
+            existsSync(record.worktreePath),
+        );
+        // A writable branch cannot safely be checked out twice. Treat a repeated
+        // create request for the same PR as idempotent and reopen its session.
+        if (existing) {
+          if (expectedHeadSha) {
+            const head = await worktreeHeadSha(existing.worktreePath);
+            if (!sameCommit(head, expectedHeadSha)) {
+              throw new Error(
+                `A fix session for this PR already exists at ${existing.worktreePath}, but it is not on the PR's latest commit. Open or remove that session before creating another one.`,
+              );
+            }
+          }
+          return existing;
+        }
+
+        const slug = await allocateSlug({ projectRoot, baseSlug });
+
+        // Make origin/<branch> current, then a WRITABLE checkout of the branch. Git
+        // DWIMs a tracking branch from origin when the local branch doesn't exist,
+        // so a later `git push` updates the PR. (Detach is only for read-only review.)
+        const fetchError = await fetchRemotes(projectRoot);
+        const branchPreexisted = await localBranchExists(projectRoot, branch);
+        const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
+        let worktreeCreated = false;
+
+        try {
+          await createWorktree({ projectRoot, slug, branch });
+          worktreeCreated = true;
+
+          if (expectedHeadSha) {
+            const head = await worktreeHeadSha(worktreePath);
+            if (!sameCommit(head, expectedHeadSha)) {
+              throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+            }
+          }
+
+          await addWorktreeExclude(worktreePath, PR_CONTEXT_ARTIFACT).catch(() => {});
+
+          const record: WorkSession = {
+            id: randomUUID(),
+            projectId,
+            name,
+            kind: "pr-fix",
+            slug,
+            branch,
+            baseBranch,
+            pr,
+            worktreePath,
+            checkpointPath: null,
+            setupDone: false,
+            createdAtEpochMs: Date.now(),
+          };
+
+          await appendRecord(record);
+          return record;
+        } catch (error) {
+          if (worktreeCreated) {
+            await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
+          }
+          if (!branchPreexisted) {
+            await execFileAsync("git", ["branch", "-D", branch], { cwd: projectRoot }).catch(() => {});
+          }
+          throw error;
+        }
+      });
     },
 
-    async markSetupDone({ sessionId }) {
-      const records = await readAll();
-      const index = records.findIndex((record) => record.id === sessionId);
-      if (index === -1) throw new Error(`Session not found: ${sessionId}`);
-      const current = records[index] as WorkSession;
-      records[index] = { ...current, setupDone: true };
-      await writeAll(records);
+    updateSessionCheckpoint({ sessionId, checkpointPath }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const index = records.findIndex((record) => record.id === sessionId);
+        if (index === -1) {
+          throw new Error(`Session not found: ${sessionId}`);
+        }
+
+        const current = records[index] as WorkSession;
+        records[index] = { ...current, checkpointPath };
+        await writeAll(records);
+      });
     },
 
-    async removeSession({ sessionId }) {
-      const records = await readAll();
-      const filtered = records.filter((record) => record.id !== sessionId);
-      await writeAll(filtered);
+    setReviewedSha({ sessionId, sha }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const index = records.findIndex((record) => record.id === sessionId);
+        if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+        const current = records[index] as WorkSession;
+        if (!current.pr) throw new Error("Session has no PR to update.");
+        records[index] = { ...current, pr: { ...current.pr, lastReviewedSha: sha } };
+        await writeAll(records);
+      });
+    },
+
+    markSetupDone({ sessionId }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const index = records.findIndex((record) => record.id === sessionId);
+        if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+        const current = records[index] as WorkSession;
+        records[index] = { ...current, setupDone: true };
+        await writeAll(records);
+      });
+    },
+
+    removeSession({ sessionId }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const filtered = records.filter((record) => record.id !== sessionId);
+        if (filtered.length !== records.length) {
+          await writeAll(filtered);
+        }
+      });
     },
   };
 }

@@ -231,7 +231,7 @@ describe("createCheckpointWatchManager", () => {
     expect(onCheckpointChanged).not.toHaveBeenCalled();
   });
 
-  it("does not create a second watcher for a project that is already watched", async () => {
+  it("does not create duplicate watchers for concurrent project starts", async () => {
     writeCheckpoint(dir, "root-example");
     const { createWatcher, watchers } = makeFakeCreateWatcher();
 
@@ -242,8 +242,7 @@ describe("createCheckpointWatchManager", () => {
     });
 
     const project = makeProject(dir);
-    await manager.watchProject(project);
-    await manager.watchProject(project);
+    await Promise.all([manager.watchProject(project), manager.watchProject(project)]);
 
     expect(watchers).toHaveLength(1);
   });

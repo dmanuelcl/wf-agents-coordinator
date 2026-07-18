@@ -98,6 +98,26 @@ export function registerIpcHandlers(params: {
     vcsSecretStore,
   } = params;
 
+  function hasWorkflowCheckpoint(session: WorkSession): boolean {
+    return session.kind === "feature" || session.kind === "fix";
+  }
+
+  async function watchSessionCheckpoint(session: WorkSession): Promise<void> {
+    if (!hasWorkflowCheckpoint(session) || session.checkpointPath) return;
+    await sessionCheckpointWatchManager.watchSession({
+      sessionId: session.id,
+      worktreePath: session.worktreePath,
+      createdAtEpochMs: session.createdAtEpochMs,
+    });
+  }
+
+  async function refreshCheckpointWatch(project: ProjectRecord): Promise<void> {
+    // The project watcher resolves worktree roots when it starts. Rebuild it
+    // after worktree topology changes so conductor events include new sessions.
+    await checkpointWatchManager.unwatchProject(project.id);
+    await checkpointWatchManager.watchProject(project);
+  }
+
   // Combine the project's non-secret VCS config with its stored token.
   async function vcsCredentialsFor(project: ProjectRecord): Promise<{ token: string; email?: string }> {
     const token = await vcsSecretStore.getToken(project.id);
@@ -293,18 +313,26 @@ export function registerIpcHandlers(params: {
   );
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, projectId: string) => {
-    return sessionRegistry.listSessions({ projectId });
+    const sessions = await sessionRegistry.listSessions({ projectId });
+    // Keep every unfinished workflow watched, not only the currently visible
+    // session. Hidden agent terminals continue running and may create the file.
+    await Promise.all(sessions.map((session) => watchSessionCheckpoint(session)));
+    return sessions;
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsCreate, async (_event, projectId: string, input: SessionCreateInput) => {
     const project = await findProject(projectRegistry, projectId);
-    return sessionRegistry.createSession({
+    const session = await sessionRegistry.createSession({
       projectId,
       projectRoot: project.rootPath,
       name: input.name,
       kind: input.kind,
       copyEnv: input.copyEnv,
     });
+    // Establish both watchers before the renderer can launch an architect.
+    await watchSessionCheckpoint(session);
+    await refreshCheckpointWatch(project);
+    return session;
   });
 
   ipcMain.handle(
@@ -465,15 +493,39 @@ export function registerIpcHandlers(params: {
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
-    await sessionCheckpointWatchManager.unwatchSession(sessionId);
-    // User-confirmed delete (the renderer gates this): remove the git worktree,
-    // then drop the record. The branch is kept so no committed work is lost.
-    const session = await sessionRegistry.getSession({ sessionId });
-    if (session) {
-      const project = await findProject(projectRegistry, session.projectId);
-      await removeWorktree({ projectRoot: project.rootPath, worktreePath: session.worktreePath });
+    let cleanupError: unknown = null;
+    try {
+      await sessionCheckpointWatchManager.unwatchSession(sessionId);
+    } catch (error) {
+      cleanupError = error;
     }
+
+    // Persist the deletion before the potentially slower Git cleanup. A session
+    // list requested while cleanup runs must not be able to reintroduce it.
+    const session = await sessionRegistry.getSession({ sessionId });
     await sessionRegistry.removeSession({ sessionId });
+
+    // User-confirmed delete (the renderer gates this). The session record stays
+    // removed even if Git cleanup fails; otherwise the optimistic sidebar
+    // deletion visibly "comes back" on the next reload.
+    let project: ProjectRecord | null = null;
+    if (session) {
+      try {
+        project = await findProject(projectRegistry, session.projectId);
+        await removeWorktree({ projectRoot: project.rootPath, worktreePath: session.worktreePath });
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    if (project) {
+      await refreshCheckpointWatch(project).catch((error: unknown) => {
+        cleanupError ??= error;
+      });
+    }
+    if (cleanupError) {
+      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      throw new Error(`The session was removed, but its worktree cleanup was incomplete: ${detail}`);
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsReadCheckpoint, async (_event, sessionId: string) => {
@@ -500,7 +552,11 @@ export function registerIpcHandlers(params: {
     if (!session || session.checkpointPath) {
       return;
     }
-    await sessionCheckpointWatchManager.watchSession({ sessionId, worktreePath: session.worktreePath });
+    await sessionCheckpointWatchManager.watchSession({
+      sessionId,
+      worktreePath: session.worktreePath,
+      createdAtEpochMs: session.createdAtEpochMs,
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsUnwatchCheckpoint, async (_event, sessionId: string) => {

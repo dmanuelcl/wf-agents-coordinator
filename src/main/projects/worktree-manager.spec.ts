@@ -85,4 +85,17 @@ describe("createWorktree", () => {
     const branches = execFileSync("git", ["branch", "--list", "feature/brand-new"], { cwd: dir }).toString();
     expect(branches).toContain("feature/brand-new");
   });
+
+  it("prunes an invisible stale registration before recreating a worktree", async () => {
+    initGitRepo(dir);
+    const worktreePath = join(dir, ".worktrees", "example");
+    await createWorktree({ projectRoot: dir, slug: "example", branch: "feature/example" });
+
+    // Simulate an external/manual directory deletion that leaves .git/worktrees
+    // metadata behind. Git would normally report the path/branch as occupied.
+    rmSync(worktreePath, { recursive: true, force: true });
+
+    await createWorktree({ projectRoot: dir, slug: "example", branch: "feature/example" });
+    expect(existsSync(worktreePath)).toBe(true);
+  });
 });

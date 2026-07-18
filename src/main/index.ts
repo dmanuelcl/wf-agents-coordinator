@@ -112,6 +112,12 @@ void app.whenReady().then(() => {
         .updateSessionCheckpoint({ sessionId, checkpointPath })
         .then(() => {
           broadcast(SESSION_IPC_CHANNELS.checkpointDetected, { sessionId, checkpointPath });
+        })
+        .catch((error: unknown) => {
+          // Deletion can win the race after the filesystem event was queued.
+          // The serialized registry correctly rejects the now-missing session;
+          // never turn that expected late event into an unhandled rejection.
+          console.error(`Could not persist checkpoint for session ${sessionId}:`, error);
         });
     },
   });
@@ -126,11 +132,34 @@ void app.whenReady().then(() => {
     vcsSecretStore,
   });
 
-  void projectRegistry.listProjects().then((projects) => {
-    for (const project of projects) {
-      void checkpointWatchManager.watchProject(project);
-    }
-  });
+  void projectRegistry
+    .listProjects()
+    .then(async (projects) => {
+      // Materialize/watch each session checkpoint directory before starting the
+      // broader project watcher. Chokidar 5 can miss children of a directory
+      // that did not exist when its watch began.
+      for (const project of projects) {
+        const sessions = await sessionRegistry.listSessions({ projectId: project.id });
+        await Promise.all(
+          sessions
+            .filter(
+              (session) =>
+                (session.kind === "feature" || session.kind === "fix") && session.checkpointPath === null,
+            )
+            .map((session) =>
+              sessionCheckpointWatchManager.watchSession({
+                sessionId: session.id,
+                worktreePath: session.worktreePath,
+                createdAtEpochMs: session.createdAtEpochMs,
+              }),
+            ),
+        );
+        await checkpointWatchManager.watchProject(project);
+      }
+    })
+    .catch((error: unknown) => {
+      console.error("Could not initialize checkpoint watchers:", error);
+    });
 
   const ptySessionManager = createPtySessionManager({ spawnPty: spawnRealPty });
   const sessionStateStore = createSessionStateStore({

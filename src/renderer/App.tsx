@@ -204,17 +204,13 @@ export function App(): JSX.Element {
     });
   }, []);
 
-  // While the selected session has no checkpoint, watch its worktree for one to
-  // appear; stop the moment it does (or the session is deselected). Review
-  // sessions never have a checkpoint of their own — and their reviewed branch may
-  // itself CONTAIN checkpoint files — so they are never watched.
+  // Ensure the selected workflow is watched. The main process keeps that watch
+  // alive across selection changes because hidden agent terminals keep running
+  // and may create their checkpoint while another session is visible.
   useEffect(() => {
     if (!selectedSessionId || isRepoSessionId(selectedSessionId) || selectedSessionCheckpoint !== null) return;
     if (selectedSessionKind === "review" || selectedSessionKind === "pr-fix") return;
     void window.agentCoordinator.sessions.watchCheckpoint(selectedSessionId);
-    return () => {
-      void window.agentCoordinator.sessions.unwatchCheckpoint(selectedSessionId);
-    };
   }, [selectedSessionId, selectedSessionCheckpoint, selectedSessionKind]);
 
   async function refreshProjects(): Promise<void> {

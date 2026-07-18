@@ -49,6 +49,19 @@ export function buildWorktreeCreatePlan(params: {
   };
 }
 
+/**
+ * Drop Git's administration entries for worktrees whose directories no longer
+ * exist. A killed app or a manually removed directory can otherwise make the
+ * next `git worktree add` fail even though nothing is visible on disk.
+ */
+export async function pruneWorktrees(params: {
+  projectRoot: string;
+  execFileImpl?: typeof execFileAsync;
+}): Promise<void> {
+  const exec = params.execFileImpl ?? execFileAsync;
+  await exec("git", ["worktree", "prune", "--expire", "now"], { cwd: params.projectRoot });
+}
+
 export async function createWorktree(params: {
   projectRoot: string;
   slug: string;
@@ -67,6 +80,9 @@ export async function createWorktree(params: {
   }
 
   const exec = params.execFileImpl ?? execFileAsync;
+  // Reconcile stale Git metadata before adding. This is safe: only entries
+  // whose linked working directory is already gone are pruned.
+  await pruneWorktrees({ projectRoot: params.projectRoot, execFileImpl: exec });
   const args = params.detach
     ? ["worktree", "add", "--detach", plan.path, params.branch]
     : params.createBranch
@@ -86,7 +102,12 @@ export async function removeWorktree(params: {
     // (the user has already confirmed). The git branch is intentionally kept.
     await exec("git", ["worktree", "remove", "--force", params.worktreePath], { cwd: params.projectRoot });
   } catch (error) {
-    // Already gone (manually removed / pruned) is fine; surface anything else.
-    if (existsSync(params.worktreePath)) throw error;
+    // Already gone (manually removed) is fine, but prune the stale admin entry
+    // immediately so recreating the same session cannot inherit the conflict.
+    if (!existsSync(params.worktreePath)) {
+      await pruneWorktrees({ projectRoot: params.projectRoot, execFileImpl: exec });
+      return;
+    }
+    throw error;
   }
 }

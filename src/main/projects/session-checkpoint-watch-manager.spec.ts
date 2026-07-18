@@ -63,7 +63,7 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected: vi.fn(),
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
 
     expect(watchers[0]?.watchedPaths).toEqual([join(worktree, "docs", "workflow", "checkpoints")]);
   });
@@ -77,7 +77,7 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected,
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
     const filePath = join(worktree, "docs", "workflow", "checkpoints", "add-widget-checkpoint.md");
     watchers[0]?.emitChange(filePath);
 
@@ -94,7 +94,7 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected,
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
     watchers[0]?.emitChange(join(worktree, "docs", "workflow", "checkpoints", "notes.md"));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -110,7 +110,7 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected,
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
     const filePath = join(worktree, "docs", "workflow", "checkpoints", "add-widget-checkpoint.md");
     watchers[0]?.emitChange(filePath);
     await vi.waitFor(() => expect(onCheckpointDetected).toHaveBeenCalledTimes(1));
@@ -130,7 +130,7 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected,
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
     await manager.unwatchSession("s1");
     expect(watchers[0]?.closeCalled).toBe(true);
 
@@ -152,21 +152,52 @@ describe("createSessionCheckpointWatchManager", () => {
       onCheckpointDetected,
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 });
 
     expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/add-widget-checkpoint.md");
     expect(watchers).toHaveLength(0);
   });
 
-  it("does not create a second watcher for a session already being watched", async () => {
+  it("ignores checkpoints inherited from the checked-out branch", async () => {
+    const checkpointDir = join(worktree, "docs", "workflow", "checkpoints");
+    mkdirSync(checkpointDir, { recursive: true });
+    const inherited = join(checkpointDir, "another-session-checkpoint.md");
+    writeFileSync(inherited, "# inherited", "utf8");
+
+    const { createWatcher, watchers } = makeFakeCreateWatcher();
+    const onCheckpointDetected = vi.fn();
+    const manager = createSessionCheckpointWatchManager({
+      createWatcher,
+      debounceMs: 0,
+      onCheckpointDetected,
+    });
+
+    await manager.watchSession({
+      sessionId: "s1",
+      worktreePath: worktree,
+      createdAtEpochMs: Date.now() + 1_000,
+    });
+
+    expect(onCheckpointDetected).not.toHaveBeenCalled();
+    expect(watchers).toHaveLength(1);
+
+    // If the architect intentionally edits it after the session starts, the
+    // live event makes it this session's checkpoint.
+    watchers[0]?.emitChange(inherited);
+    await vi.waitFor(() => expect(onCheckpointDetected).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not create duplicate watchers for concurrent start requests", async () => {
     const { createWatcher, watchers } = makeFakeCreateWatcher();
     const manager = createSessionCheckpointWatchManager({
       createWatcher,
       onCheckpointDetected: vi.fn(),
     });
 
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
-    await manager.watchSession({ sessionId: "s1", worktreePath: worktree });
+    await Promise.all([
+      manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 }),
+      manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0 }),
+    ]);
 
     expect(watchers).toHaveLength(1);
   });

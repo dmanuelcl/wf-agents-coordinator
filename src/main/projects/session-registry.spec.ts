@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSessionRegistry, PR_CONTEXT_ARTIFACT } from "./session-registry";
+import { removeWorktree } from "./worktree-manager";
 
 let repoDir: string;
 let storeDir: string;
@@ -82,6 +83,48 @@ describe("SessionRegistry", () => {
 
     expect(session.branch).toBe("fix/broken-login");
     expect(branchExists(repoDir, "fix/broken-login")).toBe(true);
+  });
+
+  it("recreates a deleted session on its preserved branch", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+    const first = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "My Feature",
+      kind: "feature",
+    });
+
+    await removeWorktree({ projectRoot: repoDir, worktreePath: first.worktreePath });
+    await registry.removeSession({ sessionId: first.id });
+
+    const recreated = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "My Feature",
+      kind: "feature",
+    });
+
+    expect(recreated.slug).toBe("my-feature");
+    expect(recreated.branch).toBe("feature/my-feature");
+    expect(existsSync(recreated.worktreePath)).toBe(true);
+  });
+
+  it("allocates a clean suffix instead of colliding with an unrelated directory", async () => {
+    initGitRepo(repoDir);
+    mkdirSync(join(repoDir, ".worktrees", "my-feature"), { recursive: true });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "My Feature",
+      kind: "feature",
+    });
+
+    expect(session.slug).toBe("my-feature-2");
+    expect(session.branch).toBe("feature/my-feature-2");
+    expect(existsSync(session.worktreePath)).toBe(true);
   });
 
   it("createReviewSession detaches a worktree at the branch and stores baseBranch", async () => {
@@ -228,6 +271,19 @@ describe("SessionRegistry", () => {
     expect(p2[0]?.name).toBe("Two");
   });
 
+  it("persists concurrent session creations without losing either record", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await Promise.all([
+      registry.createSession({ projectId: "p1", projectRoot: repoDir, name: "One", kind: "feature" }),
+      registry.createSession({ projectId: "p1", projectRoot: repoDir, name: "Two", kind: "feature" }),
+    ]);
+
+    const sessions = await registry.listSessions({ projectId: "p1" });
+    expect(sessions.map((session) => session.name).sort()).toEqual(["One", "Two"]);
+  });
+
   it("updateSessionCheckpoint sets checkpointPath and persists it", async () => {
     initGitRepo(repoDir);
     const registry = createSessionRegistry({ storeFilePath });
@@ -248,6 +304,29 @@ describe("SessionRegistry", () => {
     await expect(
       registry.updateSessionCheckpoint({ sessionId: "missing", checkpointPath: "x.md" }),
     ).rejects.toThrow(/not found/i);
+  });
+
+  it("does not let a late checkpoint update resurrect a concurrently deleted session", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Race",
+      kind: "feature",
+    });
+
+    const results = await Promise.allSettled([
+      registry.removeSession({ sessionId: session.id }),
+      registry.updateSessionCheckpoint({
+        sessionId: session.id,
+        checkpointPath: "docs/workflow/checkpoints/race-checkpoint.md",
+      }),
+    ]);
+
+    expect(results[0]?.status).toBe("fulfilled");
+    expect(results[1]?.status).toBe("rejected");
+    await expect(registry.listSessions({ projectId: "p1" })).resolves.toEqual([]);
   });
 
   it("removeSession drops the record but leaves the worktree on disk", async () => {
