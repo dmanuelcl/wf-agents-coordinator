@@ -37,9 +37,14 @@ export interface SessionRoleLaunch {
   sessionUuid: string;
   setupMessages: string[];
   warnings: string[];
-  // A shell command to run in the worktree BEFORE the agent (once per worktree);
-  // the agent waits for it to exit 0. Null when there's nothing to run.
-  setupCommand: string | null;
+}
+
+export interface SessionSetupPlan {
+  // ready: no command is needed/already done; run: this caller owns the setup;
+  // wait: another caller owns it and this caller must retry without launching.
+  state: "ready" | "run" | "wait";
+  command: string | null;
+  cwd: string;
 }
 
 export interface ProjectCreateInput {
@@ -99,6 +104,8 @@ export const IPC_CHANNELS = {
   sessionsCreateFixFromPr: "sessions:create-fix-from-pr",
   sessionsPushFixBranch: "sessions:push-fix-branch",
   sessionsPostReview: "sessions:post-review",
+  sessionsClaimSetup: "sessions:claim-setup",
+  sessionsReleaseSetup: "sessions:release-setup",
   sessionsMarkSetupDone: "sessions:mark-setup-done",
   sessionsReviewArtifactExists: "sessions:review-artifact-exists",
   sessionsRemove: "sessions:remove",
@@ -238,6 +245,8 @@ export interface AgentCoordinatorApi {
     pushFixBranch(sessionId: string): Promise<{ output: string }>;
     postReview(sessionId: string): Promise<{ commentUrl: string }>;
     reviewArtifactExists(sessionId: string): Promise<boolean>;
+    claimSetup(sessionId: string): Promise<SessionSetupPlan>;
+    releaseSetup(sessionId: string): Promise<void>;
     markSetupDone(sessionId: string): Promise<void>;
     remove(sessionId: string): Promise<void>;
     readCheckpoint(sessionId: string): Promise<ParsedCheckpoint | null>;

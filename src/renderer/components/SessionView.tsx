@@ -301,6 +301,9 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const [conductorLog, setConductorLog] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
+  // No role or shell PTY is mounted until the one dedicated setup PTY confirms
+  // there is no command, or completes it and persists setupDone.
+  const [setupReady, setSetupReady] = useState(() => repoMode || session.setupDone);
   // Live terminal handles keyed by tab id (role name or shell tab id), so a
   // file's composer can deliver text into the chosen one.
   const terminalHandles = useRef<Map<string, SessionTerminalHandle>>(new Map());
@@ -862,12 +865,22 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       </div>
 
       <div className="session-view-body">
-        {!repoMode && activeTab === "log" && (
+        {!repoMode && !setupReady && (
+          <div className="session-terminal-host">
+            <SessionTerminal
+              session={session}
+              role="setup"
+              mode="fresh"
+              onSetupReady={() => setSetupReady(true)}
+            />
+          </div>
+        )}
+        {setupReady && !repoMode && activeTab === "log" && (
           <div className="session-log-scroll">
             <LogPanel checkpoint={checkpoint} hasCheckpoint={hasCheckpoint} />
           </div>
         )}
-        {repoMode && !repoActiveTabExists && (
+        {setupReady && repoMode && !repoActiveTabExists && (
           <div className="pane-empty">
             <p className="pane-empty-title">No tab open</p>
             <p className="pane-empty-hint">
@@ -875,12 +888,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             </p>
           </div>
         )}
-        {diffOpen && (
+        {setupReady && diffOpen && (
           <div className="session-terminal-host" hidden={activeTab !== "diff"}>
             <GitDiffView worktreePath={session.worktreePath} sendTargets={sendTargets} onSend={handleComposerSend} />
           </div>
         )}
-        {!repoMode &&
+        {setupReady &&
+          !repoMode &&
           Array.from(openedRoleTabs.entries()).map(([role, mode]) => (
             <div key={role} className="session-terminal-host" hidden={activeTab !== role}>
               <SessionTerminal
@@ -894,7 +908,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               />
             </div>
           ))}
-        {shellTabs.map((tab) => (
+        {setupReady && shellTabs.map((tab) => (
           <div key={tab.id} className="session-terminal-host" hidden={activeTab !== tab.id}>
             <SessionTerminal
               ref={(handle) => registerTerminalHandle(tab.id, handle)}
@@ -908,7 +922,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             />
           </div>
         ))}
-        {fileTabs.map((tab) => (
+        {setupReady && fileTabs.map((tab) => (
           <div key={tab.id} className="session-terminal-host" hidden={activeTab !== tab.id}>
             <MarkdownFileView
               path={tab.path}

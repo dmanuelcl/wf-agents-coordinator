@@ -26,7 +26,7 @@ const MAX_FOLLOW_UP_WAIT_MS = 10_000;
 
 export interface SessionTerminalProps {
   session: WorkSession;
-  role: SessionAgentRole | "shell";
+  role: SessionAgentRole | "shell" | "setup";
   mode: AgentLaunchMode;
   // When set, the terminal restores + persists bounded scrollback (shell tabs).
   persistKey?: string;
@@ -41,6 +41,9 @@ export interface SessionTerminalProps {
   // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
   // instead of only pre-typing it for the user to press Enter.
   autoSubmitWf?: boolean;
+  // Setup terminal only: called after there is no setup to run, or after the
+  // single setup owner exits 0 and setupDone has been persisted.
+  onSetupReady?: () => void;
 }
 
 // Bounded so the renderer's memory stays in check even for a busy session.
@@ -75,7 +78,7 @@ export interface SessionTerminalHandle {
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf } = props;
+  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, onSetupReady } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
@@ -127,8 +130,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   // capture a stale onOpenPath (and stale open-tabs). Route through a ref that
   // always points at the latest handler.
   const onOpenPathRef = useRef(onOpenPath);
+  const onSetupReadyRef = useRef(onSetupReady);
   useEffect(() => {
     onOpenPathRef.current = onOpenPath;
+    onSetupReadyRef.current = onSetupReady;
   });
 
   useEffect(() => {
@@ -157,8 +162,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     let disposed = false;
     let followUpSent = false;
     let fellBackToShell = false;
+    let ownsSetupClaim = false;
     let shellCwd = cwdOverride ?? session.worktreePath;
-    const isAgentTab = role !== "shell";
+    const isSetupTab = role === "setup";
+    const isAgentTab = role !== "shell" && !isSetupTab;
     const disposables: Array<() => void> = [];
 
     // Clickable file paths: clicking a path the agent printed opens it in the OS
@@ -238,14 +245,38 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
-      if (role !== "shell") {
+      if (isSetupTab) {
+        let waitingMessageShown = false;
+        while (!disposed) {
+          const plan = await window.agentCoordinator.sessions.claimSetup(session.id);
+          if (disposed) {
+            if (plan.state === "run") void window.agentCoordinator.sessions.releaseSetup(session.id);
+            return;
+          }
+          shellCwd = plan.cwd;
+          if (plan.state === "ready") {
+            onSetupReadyRef.current?.();
+            return;
+          }
+          if (plan.state === "run" && plan.command) {
+            ownsSetupClaim = true;
+            setupCommand = plan.command;
+            break;
+          }
+          if (!waitingMessageShown) {
+            waitingMessageShown = true;
+            term.write("\x1b[2m—— waiting for this session's setup ——\x1b[0m\r\n");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        if (disposed) return;
+      } else if (role !== "shell") {
         const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
         if (disposed) return;
         agentCommand = launch.agentCommand;
         shellCwd = launch.cwd;
         setupMessages = launch.setupMessages;
         wfPreType = launch.wfCommand;
-        setupCommand = launch.setupCommand;
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
       }
 
@@ -272,12 +303,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           })
         : null;
 
-      // A project setup command runs FIRST in the worktree (phase "setup"); only
-      // after it exits 0 does the agent start (phase "agent"). The follow-up gate
-      // is armed only in the agent phase, so a long install can't trip its
-      // deadline. `exec <cmd>` in the shell means the PTY exits with the command's
-      // code, so onExit tells us when setup finished.
-      let phase: "setup" | "agent" = setupCommand ? "setup" : "agent";
+      // The dedicated setup terminal is the only component allowed into the
+      // setup phase. Role/shell terminals are not mounted until it persists
+      // setupDone, so they always start directly in their normal phase.
+      let phase: "setup" | "finishing-setup" | "agent" = setupCommand ? "setup" : "agent";
 
       // Subscribe BEFORE creating the PTY. A fast agent can render its startup
       // screen before the create IPC promise resolves; subscribing afterwards
@@ -295,27 +324,39 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (phase === "agent") followUpGate?.onOutput();
       };
 
-      // Replace the finished setup PTY with the agent PTY, reusing the ptyId-
-      // reassign trick so the existing handlers rewire to it.
-      async function spawnAgent(): Promise<void> {
+      async function releaseSetupClaim(): Promise<void> {
+        if (!ownsSetupClaim) return;
+        ownsSetupClaim = false;
+        await window.agentCoordinator.sessions.releaseSetup(session.id).catch(() => {});
+      }
+
+      async function failSetup(message: string): Promise<void> {
+        await releaseSetupClaim();
+        if (disposed) return;
         phase = "agent";
-        ptyId = null; // buffer any agent output that arrives before the id is set
-        const id = await window.agentCoordinator.terminal.create({
-          cwd: shellCwd,
-          cols: term.cols,
-          rows: term.rows,
-          launchCommand: agentCommand,
-          persistKey: persistKey ?? null,
-        });
-        if (disposed) {
-          window.agentCoordinator.terminal.kill(id);
+        fellBackToShell = true;
+        followUpSent = true;
+        followUpGate?.cancel();
+        term.write(`\r\n\x1b[2m—— ${message} · dropped to shell ——\x1b[0m\r\n\r\n`);
+        await fallBackToShell();
+      }
+
+      async function completeSetup(): Promise<void> {
+        term.write("\r\n\x1b[2m—— setup done · finalizing session ——\x1b[0m\r\n");
+        try {
+          // This must finish before SessionView mounts any other terminal;
+          // otherwise their launch plans can still observe setupDone=false.
+          await window.agentCoordinator.sessions.markSetupDone(session.id);
+          ownsSetupClaim = false; // the main handler releases it atomically
+        } catch (error) {
+          await failSetup(`setup succeeded but could not be persisted: ${String(error)}`);
           return;
         }
-        ptyId = id;
-        ptyIdRef.current = id;
-        followUpGate?.start();
-        for (const event of pendingData.splice(0)) handleData(event);
-        for (const event of pendingExits.splice(0)) handleExit(event);
+        if (disposed) return;
+        ptyId = null;
+        ptyIdRef.current = null;
+        term.write("\x1b[2m—— session ready ——\x1b[0m\r\n");
+        onSetupReadyRef.current?.();
       }
 
       const handleExit = (event: TerminalExitEvent): void => {
@@ -325,21 +366,17 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
         if (event.sessionId !== ptyId) return;
         if (phase === "setup") {
+          phase = "finishing-setup";
           if (event.code === 0) {
-            term.write("\r\n\x1b[2m—— setup done · starting agent ——\x1b[0m\r\n\r\n");
-            void window.agentCoordinator.sessions.markSetupDone(session.id);
-            void spawnAgent();
+            void completeSetup();
           } else {
-            // Setup failed → don't run the agent; drop to a shell so the user can fix it.
-            phase = "agent";
-            fellBackToShell = true;
-            followUpSent = true;
-            followUpGate?.cancel();
-            term.write(`\r\n\x1b[2m—— setup failed (exit ${event.code}) · dropped to shell ——\x1b[0m\r\n\r\n`);
-            void fallBackToShell();
+            // Setup failed: keep every role/shell terminal gated. This lone pane
+            // becomes a shell for inspection; reopening the session can retry.
+            void failSetup(`setup failed (exit ${event.code})`);
           }
           return;
         }
+        if (phase === "finishing-setup") return;
         if (isAgentTab && !fellBackToShell) {
           // Agent quit → become a usable shell instead of a dead pane.
           fellBackToShell = true;
@@ -384,7 +421,13 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       disposables.push(() => onDataDisposable.dispose());
     }
 
-    void start();
+    void start().catch((error: unknown) => {
+      if (ownsSetupClaim) {
+        ownsSetupClaim = false;
+        void window.agentCoordinator.sessions.releaseSetup(session.id);
+      }
+      if (!disposed) setWarnings((current) => [...current, String(error)]);
+    });
 
     const resizeObserver = new ResizeObserver(() => {
       // A hidden (inactive) tab reports a zero-size rect; fitting against that
@@ -402,6 +445,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (ptyId) window.agentCoordinator.terminal.kill(ptyId);
       ptyIdRef.current = null;
       term.dispose();
+      // Send kill before releasing ownership so another window cannot claim
+      // setup while this terminal's command is still alive.
+      if (ownsSetupClaim) {
+        ownsSetupClaim = false;
+        void window.agentCoordinator.sessions.releaseSetup(session.id);
+      }
     };
   }, [session.id, session.worktreePath, role, mode, cwdOverride]);
 

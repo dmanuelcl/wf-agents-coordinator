@@ -13,6 +13,7 @@ import type {
   ReviewSessionCreateInput,
   SessionCreateInput,
   SessionRoleLaunch,
+  SessionSetupPlan,
 } from "../../shared/ipc/contract";
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
@@ -54,6 +55,7 @@ import type { ProjectRecord, ProjectRegistry, ProjectUpdateInput } from "../proj
 import { cloneRepo, createEmptyRepo } from "../projects/project-source";
 import type { SessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import type { SessionRegistry } from "../projects/session-registry";
+import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { claudeConversationExists } from "../terminals/claude-session-store";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
@@ -97,6 +99,7 @@ export function registerIpcHandlers(params: {
     workspaceLayoutStore,
     vcsSecretStore,
   } = params;
+  const sessionSetupCoordinator = createSessionSetupCoordinator();
 
   function hasWorkflowCheckpoint(session: WorkSession): boolean {
     return session.kind === "feature" || session.kind === "fix";
@@ -488,11 +491,39 @@ export function registerIpcHandlers(params: {
     }
   });
 
+  ipcMain.handle(
+    IPC_CHANNELS.sessionsClaimSetup,
+    async (_event, sessionId: string): Promise<SessionSetupPlan> => {
+      const session = await sessionRegistry.getSession({ sessionId });
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+      const project = await findProject(projectRegistry, session.projectId);
+      const command = project.setupCommand.trim();
+
+      if (session.setupDone || !command) {
+        sessionSetupCoordinator.release(sessionId);
+        return { state: "ready", command: null, cwd: session.worktreePath };
+      }
+      if (!sessionSetupCoordinator.tryClaim(sessionId)) {
+        return { state: "wait", command: null, cwd: session.worktreePath };
+      }
+      return { state: "run", command, cwd: session.worktreePath };
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.sessionsReleaseSetup, async (_event, sessionId: string) => {
+    sessionSetupCoordinator.release(sessionId);
+  });
+
   ipcMain.handle(IPC_CHANNELS.sessionsMarkSetupDone, async (_event, sessionId: string) => {
-    await sessionRegistry.markSetupDone({ sessionId });
+    try {
+      await sessionRegistry.markSetupDone({ sessionId });
+    } finally {
+      sessionSetupCoordinator.release(sessionId);
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
+    sessionSetupCoordinator.release(sessionId);
     let cleanupError: unknown = null;
     try {
       await sessionCheckpointWatchManager.unwatchSession(sessionId);
@@ -600,8 +631,6 @@ export function registerIpcHandlers(params: {
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
         ? await buildReviewOrWfCommand(session, project, role)
         : null;
-      // Run the project's setup command once, in this worktree, before the agent.
-      const setupCommand = !session.setupDone && project.setupCommand.trim() ? project.setupCommand.trim() : null;
       return {
         agentCommand: launch.command,
         wfCommand,
@@ -609,7 +638,6 @@ export function registerIpcHandlers(params: {
         sessionUuid: uuid,
         setupMessages: buildAgentSetupMessages(agentConfig),
         warnings: launch.warnings,
-        setupCommand,
       };
     },
   );
