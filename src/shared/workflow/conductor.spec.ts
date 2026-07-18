@@ -37,6 +37,9 @@ function checkpoint(params: {
     activeRole: "none",
     next,
     ledgerRows: [],
+    correctionPlan: null,
+    findings: [],
+    findingCounts: { open: 0, closed: 0, total: 0 },
     latestLogMarkdown: null,
     warnings: [],
   };

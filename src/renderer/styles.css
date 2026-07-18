@@ -846,6 +846,54 @@ button:disabled {
 .session-terminal-host[hidden] {
   display: none;
 }
+.session-setup-host {
+  flex-direction: column;
+}
+.setup-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px 10px 15px;
+  border-bottom: 1px solid rgba(212, 168, 75, 0.38);
+  border-left: 3px solid var(--gold);
+  background: rgba(212, 168, 75, 0.1);
+  flex-shrink: 0;
+}
+.setup-recovery-copy {
+  min-width: 0;
+}
+.setup-recovery-title {
+  margin: 0;
+  color: var(--gold);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.setup-recovery-message,
+.setup-recovery-error {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.setup-recovery-message {
+  color: var(--muted-fg);
+}
+.setup-recovery-error {
+  color: var(--danger-fg);
+}
+.setup-recovery-button {
+  flex-shrink: 0;
+  padding: 6px 11px;
+  border: 1px solid rgba(212, 168, 75, 0.5);
+  border-radius: var(--radius-sm);
+  background: rgba(212, 168, 75, 0.14);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.setup-recovery-button:not(:disabled):hover {
+  background: rgba(212, 168, 75, 0.22);
+}
 .session-terminal-host .terminal-pane {
   flex: 1;
   min-height: 0;
@@ -980,6 +1028,75 @@ button:disabled {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+.session-correction-plan {
+  border: 1px solid rgba(212, 168, 75, 0.34);
+  border-left: 3px solid var(--gold);
+  border-radius: var(--radius-md);
+  background: rgba(212, 168, 75, 0.045);
+  padding: 15px 17px;
+}
+.session-correction-plan-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.session-correction-plan-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 650;
+}
+.session-correction-plan-note {
+  margin: 3px 0 0;
+  color: var(--faint-fg);
+  font-size: 11.5px;
+}
+.session-finding-counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.session-finding-count {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.session-finding-count-open {
+  border-color: rgba(212, 168, 75, 0.42);
+  color: var(--gold);
+  background: rgba(212, 168, 75, 0.08);
+}
+.session-finding-count-closed {
+  border-color: rgba(80, 168, 120, 0.4);
+  color: var(--green);
+  background: rgba(80, 168, 120, 0.08);
+}
+.session-correction-plan-body,
+.session-correction-plan-empty {
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(212, 168, 75, 0.2);
+}
+.session-correction-plan-body {
+  font-size: 12.5px;
+}
+.session-correction-plan-body > :first-child {
+  margin-top: 0;
+}
+.session-correction-plan-body > :last-child {
+  margin-bottom: 0;
+}
+.session-correction-plan-empty {
+  margin-bottom: 0;
+  color: var(--muted-fg);
+  font-size: 12px;
 }
 .copy-button {
   flex-shrink: 0;

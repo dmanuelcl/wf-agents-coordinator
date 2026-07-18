@@ -1,8 +1,7 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import type { SendTarget } from "./Composer";
+import { MarkdownContent } from "./MarkdownContent";
 
 interface MarkdownFileViewProps {
   path: string;
@@ -85,11 +84,6 @@ export function MarkdownFileView(props: MarkdownFileViewProps): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty]);
 
-  const html = useMemo(() => {
-    const parsed = marked.parse(content, { async: false });
-    return DOMPurify.sanitize(typeof parsed === "string" ? parsed : "");
-  }, [content]);
-
   function save(): void {
     void window.agentCoordinator.system.writeFile(path, content).then(
       () => setDirty(false),
@@ -155,7 +149,7 @@ export function MarkdownFileView(props: MarkdownFileViewProps): JSX.Element {
       ) : !loaded ? (
         <div className="file-view-loading">Loading…</div>
       ) : markdown && mode === "preview" ? (
-        <div className="file-view-preview markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+        <MarkdownContent markdown={content} className="file-view-preview" />
       ) : (
         <textarea
           ref={textareaRef}

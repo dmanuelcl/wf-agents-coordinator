@@ -20,6 +20,9 @@ function cp(role: WorkflowRole, task: string): ParsedCheckpoint {
     activeRole: "none",
     next: { role, command: `wf ${verb} docs/x-checkpoint.md`, cwd: ".worktrees/x", tier: null, task, rawMarkdown: "" },
     ledgerRows: [],
+    correctionPlan: null,
+    findings: [],
+    findingCounts: { open: 0, closed: 0, total: 0 },
     latestLogMarkdown: null,
     warnings: [],
   };

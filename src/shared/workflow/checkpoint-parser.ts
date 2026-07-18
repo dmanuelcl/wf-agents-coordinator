@@ -1,6 +1,10 @@
 import type {
+  CorrectionPlan,
+  FindingStatus,
+  FindingCounts,
   LedgerRow,
   ParsedCheckpoint,
+  WorkflowFinding,
   WorkflowKind,
   WorkflowNext,
   WorkflowRole,
@@ -211,6 +215,118 @@ function extractLatestLog(sectionText: string): string | null {
   return latest.length > 0 ? latest : null;
 }
 
+interface MarkdownHeading {
+  index: number;
+  level: number;
+  title: string;
+}
+
+function markdownHeading(line: string, index: number): MarkdownHeading | null {
+  const match = line.trimStart().match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+  if (!match) return null;
+  return {
+    index,
+    level: (match[1] ?? "").length,
+    title: (match[2] ?? "").trim(),
+  };
+}
+
+function isFence(line: string): boolean {
+  return /^\s*(`{3,}|~{3,})/.test(line);
+}
+
+function extractLatestCorrectionPlan(sectionText: string): CorrectionPlan | null {
+  const lines = sectionText.split(/\r?\n/);
+  let inFence = false;
+  const correctionPlanHeadings: MarkdownHeading[] = [];
+
+  lines.forEach((line, index) => {
+    if (isFence(line)) {
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) return;
+    const heading = markdownHeading(line, index);
+    if (heading && normalizeLabel(heading.title).startsWith("plan de correccion")) {
+      correctionPlanHeadings.push(heading);
+    }
+  });
+
+  const latest = correctionPlanHeadings.at(-1);
+  if (!latest) return null;
+
+  let endIndex = lines.length;
+  inFence = false;
+  for (let index = latest.index + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (isFence(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const heading = markdownHeading(line, index);
+    if (heading && heading.level <= latest.level) {
+      endIndex = index;
+      break;
+    }
+  }
+
+  return {
+    title: latest.title,
+    markdown: lines.slice(latest.index + 1, endIndex).join("\n").trim(),
+  };
+}
+
+function findingStatus(checked: boolean, text: string): FindingStatus {
+  const explicit = text.match(/^(PENDING|RESOLVED|OBSOLETE)\b/i)?.[1]?.toUpperCase();
+  if (explicit === "PENDING" || explicit === "RESOLVED" || explicit === "OBSOLETE") {
+    return explicit;
+  }
+  return checked ? "RESOLVED" : "PENDING";
+}
+
+function planFromLogHeading(heading: MarkdownHeading): string | null {
+  const numberedPlan = heading.title.match(/\bPlan-(\d+)\b/i)?.[1];
+  if (numberedPlan) return `Plan-${numberedPlan}`;
+  return /\bfix-brief\b/i.test(heading.title) ? "fix-brief" : null;
+}
+
+function parseFindings(sectionText: string): { findings: WorkflowFinding[]; counts: FindingCounts } {
+  const byScopedId = new Map<string, WorkflowFinding>();
+  let inFence = false;
+  let currentPlan: string | null = null;
+
+  for (const line of sectionText.split(/\r?\n/)) {
+    if (isFence(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    const heading = markdownHeading(line, 0);
+    if (heading?.level === 2) {
+      currentPlan = planFromLogHeading(heading);
+    }
+
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s*([IV]\d+)\b(.*)$/i);
+    if (!match) continue;
+    const id = (match[2] ?? "").toUpperCase();
+    const remainder = (match[3] ?? "").trim();
+    const scopedId = `${currentPlan ?? "checkpoint"}:${id}`;
+    byScopedId.set(scopedId, {
+      plan: currentPlan,
+      id,
+      status: findingStatus((match[1] ?? "").toLowerCase() === "x", remainder),
+      summary: remainder.replace(/^[-—:]\s*/, ""),
+    });
+  }
+
+  const findings = Array.from(byScopedId.values());
+  const open = findings.filter((finding) => finding.status === "PENDING").length;
+  const closed = findings.length - open;
+  return { findings, counts: { open, closed, total: findings.length } };
+}
+
 export function parseCheckpointMarkdown(params: { checkpointPath: string; markdown: string }): ParsedCheckpoint {
   const { checkpointPath, markdown } = params;
   const warnings: string[] = [];
@@ -250,8 +366,15 @@ export function parseCheckpointMarkdown(params: { checkpointPath: string; markdo
   }
 
   let latestLogMarkdown: string | null = null;
+  let correctionPlan: CorrectionPlan | null = null;
+  let findings: WorkflowFinding[] = [];
+  let findingCounts: FindingCounts = { open: 0, closed: 0, total: 0 };
   if (sections.log !== null) {
     latestLogMarkdown = extractLatestLog(sections.log);
+    correctionPlan = extractLatestCorrectionPlan(sections.log);
+    const parsedFindings = parseFindings(sections.log);
+    findings = parsedFindings.findings;
+    findingCounts = parsedFindings.counts;
     if (latestLogMarkdown === null) {
       warnings.push("Log section has no ## entries.");
     }
@@ -271,6 +394,9 @@ export function parseCheckpointMarkdown(params: { checkpointPath: string; markdo
     activeRole,
     next,
     ledgerRows,
+    correctionPlan,
+    findings,
+    findingCounts,
     latestLogMarkdown,
     warnings,
   };

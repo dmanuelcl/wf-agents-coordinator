@@ -206,6 +206,145 @@ active: none
     expect(english.next?.cwd).toBe(spanish.next?.cwd);
   });
 
+  it("extracts the latest correction plan and counts its open findings", () => {
+    const markdown = `${FEATURE_CHECKPOINT.trim()}
+
+## 2026-07-18 · architect · ARCH_REVIEW · Plan-1 → ⚠ ISSUES
+
+- [ ] I1 (blocking): The acceptance case is ambiguous.
+
+### Plan de corrección
+
+#### Paso 1 — Decide the acceptance case [origen: I1]
+
+- **Archivos:** docs/workflow/plans/plan-1.md
+
+## 2026-07-18 · implementer · FIX · Plan-1 → ✅
+
+- [x] I1 RESOLVED — Evidencia: docs/workflow/plans/plan-1.md:18
+
+## 2026-07-18 · reviewer · PR_REVIEW · Plan-1 → ⚠ ISSUES
+
+### PR Review Report — Plan-1
+
+#### 🔴 Errors (Must Fix)
+
+- [ ] V1 [logic][src/auth.ts:18]: The timeout is ignored.
+
+#### 🟡 Warnings (Should Fix)
+
+- [ ] V2 [rule][src/auth.spec.ts:9]: The edge case has no test.
+
+#### Plan de corrección (ejecutable por biznex-implementer)
+
+**Orden y dependencias:** Paso 1 antes que Paso 2.
+
+##### Paso 1 — Aplicar el timeout [origen: V1 🔴]
+
+- **Archivos:** src/auth.ts
+- **Qué hacer:** Pass the configured timeout to the client.
+
+##### Paso 2 — Cubrir el borde [origen: V2 🟡]
+
+- **Archivos:** src/auth.spec.ts
+- **Aceptación:** Add the timeout regression and run the scoped suite.
+
+**Plan sufficiency:** PASS — executable by a lower-capability implementer without inventing.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.correctionPlan?.title).toBe("Plan de corrección (ejecutable por biznex-implementer)");
+    expect(result.correctionPlan?.markdown).toContain("##### Paso 1 — Aplicar el timeout");
+    expect(result.correctionPlan?.markdown).toContain("Plan sufficiency:** PASS");
+    expect(result.findingCounts).toEqual({ open: 2, closed: 1, total: 3 });
+    expect(result.findings.map(({ plan, id, status }) => ({ plan, id, status }))).toEqual([
+      { plan: "Plan-1", id: "I1", status: "RESOLVED" },
+      { plan: "Plan-1", id: "V1", status: "PENDING" },
+      { plan: "Plan-1", id: "V2", status: "PENDING" },
+    ]);
+  });
+
+  it("reconciles durable finding ids across fixes and re-reviews", () => {
+    const markdown = `${FEATURE_CHECKPOINT.trim()}
+
+## 2026-07-18 · reviewer · PR_REVIEW · Plan-1 → ⚠ ISSUES
+
+- [ ] V1 [logic][src/auth.ts:18]: Timeout ignored.
+- [ ] V2 [rule][src/auth.spec.ts:9]: Missing test.
+- [ ] V3 [dup][src/auth.ts:4]: Duplicate helper.
+
+### Plan de corrección
+
+#### Paso 1 — First review plan [origen: V1 V2 V3]
+
+- **Archivos:** src/auth.ts, src/auth.spec.ts
+
+## 2026-07-18 · implementer · FIX · Plan-1 → ✅
+
+- [x] V1 RESOLVED — Evidencia: src/auth.ts:18 · tests 4/4
+
+## 2026-07-18 · reviewer · PR_REVIEW · Plan-1 → ⚠ ISSUES
+
+### Estado de hallazgos previos
+
+- [x] V1 RESOLVED — Evidencia: src/auth.ts:18
+- [ ] V2 PENDING — Evidencia: src/auth.spec.ts:9
+- [x] V3 OBSOLETE — The helper was removed with its caller.
+
+### 🟡 Warnings (Should Fix)
+
+- [ ] V4 [design][src/auth.ts:22]: Cancellation may emit RESOLVED before it is actually done.
+
+### Plan de corrección
+
+**Orden y dependencias:** pasos independientes.
+
+#### Paso 1 — Add both regressions [origen: V2 V4]
+
+- **Archivos:** src/auth.ts, src/auth.spec.ts
+
+**Plan sufficiency:** PASS — executable by a lower-capability implementer without inventing.
+
+## 2026-07-18 · implementer · FIX · Plan-1 → ⏳
+
+Started the latest correction plan.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.correctionPlan?.markdown).toContain("Add both regressions");
+    expect(result.correctionPlan?.markdown).not.toContain("First review plan");
+    expect(result.findingCounts).toEqual({ open: 2, closed: 2, total: 4 });
+    expect(result.findings.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "V1", status: "RESOLVED" },
+      { id: "V2", status: "PENDING" },
+      { id: "V3", status: "OBSOLETE" },
+      { id: "V4", status: "PENDING" },
+    ]);
+  });
+
+  it("counts the same finding id independently in different plans", () => {
+    const markdown = `${FEATURE_CHECKPOINT.trim()}
+
+## 2026-07-18 · reviewer · PR_REVIEW · Plan-1 → ✅ PASS
+
+- [x] V1 RESOLVED — Evidencia: src/first.ts:4
+
+## 2026-07-18 · reviewer · PR_REVIEW · Plan-2 → ⚠ ISSUES
+
+- [ ] V1 [logic][src/second.ts:8]: A new finding in a different plan.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.findingCounts).toEqual({ open: 1, closed: 1, total: 2 });
+    expect(result.findings.map(({ plan, id, status }) => ({ plan, id, status }))).toEqual([
+      { plan: "Plan-1", id: "V1", status: "RESOLVED" },
+      { plan: "Plan-2", id: "V1", status: "PENDING" },
+    ]);
+  });
+
   it("strips a trailing template comment from a frontmatter value", () => {
     const markdown = `---
 feature: Comment test

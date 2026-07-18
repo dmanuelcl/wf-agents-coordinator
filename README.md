@@ -97,6 +97,11 @@ only when the root output is current. Removing a session removes the worktree
 (after confirmation). Everything the session's agents do happens inside that
 worktree.
 
+If the configured setup command fails, its terminal stays open as a repair shell
+while agent tabs remain gated. After fixing the worktree there, use **Continue
+with agents** to persist the setup as ready and resume the session's normal
+agent/kickoff flow.
+
 ### The workflow (`wf`)
 The app is built for the Biznex multi-session workflow. A session's tabs are the
 three roles plus a Log:
@@ -108,7 +113,9 @@ three roles plus a Log:
   watches the worktree for a checkpoint matching the project's glob (default
   `docs/workflow/checkpoints/*-checkpoint.md`); the moment one appears, these tabs
   light up.
-- **Log** — renders the checkpoint's `▶ NEXT` block (with a copy button).
+- **Log** — renders the checkpoint's `▶ NEXT` block (with a copy button), the
+  latest **Plan de corrección** as a dedicated card, and reconciled open/closed
+  finding counts across review and fix rounds.
 
 Opening a role tab spawns the agent (`claude --resume …`, `codex …`, etc.) and
 **pre-types** the matching `wf` command (e.g. `wf implement <checkpoint>`) without

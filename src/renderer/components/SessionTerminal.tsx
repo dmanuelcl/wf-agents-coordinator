@@ -58,6 +58,9 @@ export interface SessionTerminalProps {
   // Setup terminal only: called after there is no setup to run, or after the
   // single setup owner exits 0 and setupDone has been persisted.
   onSetupReady?: () => void;
+  // Setup terminal only: called after a non-zero exit (or persistence failure)
+  // has released the setup claim and this pane is becoming a repair shell.
+  onSetupFailed?: (reason: string) => void;
 }
 
 // Bounded so the renderer's memory stays in check even for a busy session.
@@ -92,7 +95,7 @@ export interface SessionTerminalHandle {
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, onSetupReady } = props;
+  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, onSetupReady, onSetupFailed } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
@@ -145,9 +148,11 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   // always points at the latest handler.
   const onOpenPathRef = useRef(onOpenPath);
   const onSetupReadyRef = useRef(onSetupReady);
+  const onSetupFailedRef = useRef(onSetupFailed);
   useEffect(() => {
     onOpenPathRef.current = onOpenPath;
     onSetupReadyRef.current = onSetupReady;
+    onSetupFailedRef.current = onSetupFailed;
   });
 
   useEffect(() => {
@@ -344,6 +349,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         followUpSent = true;
         followUpGate?.cancel();
         term.write(`\r\n\x1b[2m—— ${message} · dropped to shell ——\x1b[0m\r\n\r\n`);
+        onSetupFailedRef.current?.(message);
         await fallBackToShell();
       }
 

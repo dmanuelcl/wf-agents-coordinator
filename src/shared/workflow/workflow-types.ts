@@ -21,6 +21,26 @@ export interface LedgerRow {
   rawCells: string[];
 }
 
+export type FindingStatus = "PENDING" | "RESOLVED" | "OBSOLETE";
+
+export interface WorkflowFinding {
+  plan: string | null;
+  id: string;
+  status: FindingStatus;
+  summary: string;
+}
+
+export interface FindingCounts {
+  open: number;
+  closed: number;
+  total: number;
+}
+
+export interface CorrectionPlan {
+  title: string;
+  markdown: string;
+}
+
 export interface ParsedCheckpoint {
   checkpointPath: string;
   frontmatter: Record<string, string>;
@@ -33,6 +53,9 @@ export interface ParsedCheckpoint {
   activeRole: WorkflowRole | "none" | "unknown";
   next: WorkflowNext | null;
   ledgerRows: LedgerRow[];
+  correctionPlan: CorrectionPlan | null;
+  findings: WorkflowFinding[];
+  findingCounts: FindingCounts;
   latestLogMarkdown: string | null;
   warnings: string[];
 }

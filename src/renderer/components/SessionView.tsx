@@ -4,8 +4,10 @@ import { FileTree } from "./FileTree";
 import { GitDiffView } from "./GitDiffView";
 import type { SendTarget } from "./Composer";
 import { MarkdownFileView } from "./MarkdownFileView";
+import { MarkdownContent } from "./MarkdownContent";
 import { SessionTerminal } from "./SessionTerminal";
 import type { SessionTerminalHandle } from "./SessionTerminal";
+import { continueAfterSetupRepair, SetupRecoveryBanner } from "./setup-recovery";
 import type { AgentLaunchMode } from "../../shared/ipc/contract";
 import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
@@ -190,6 +192,46 @@ function LedgerTable(props: { rows: LedgerRow[] }): JSX.Element {
   );
 }
 
+function findingCountLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function CorrectionPlanPanel(props: { checkpoint: ParsedCheckpoint }): JSX.Element | null {
+  const { correctionPlan, findingCounts } = props.checkpoint;
+  if (!correctionPlan && findingCounts.total === 0) return null;
+
+  return (
+    <section className="session-correction-plan" aria-label="Plan de corrección">
+      <div className="session-correction-plan-header">
+        <div>
+          <h2 className="session-correction-plan-title">
+            {correctionPlan?.title ?? "Plan de corrección"}
+          </h2>
+          <p className="session-correction-plan-note">Último plan accionable registrado por el reviewer.</p>
+        </div>
+        <div className="session-finding-counts" aria-label="Estado de hallazgos">
+          <span className="session-finding-count session-finding-count-open">
+            {findingCountLabel(findingCounts.open, "abierto", "abiertos")}
+          </span>
+          <span className="session-finding-count session-finding-count-closed">
+            {findingCountLabel(findingCounts.closed, "cerrado", "cerrados")}
+          </span>
+        </div>
+      </div>
+
+      {correctionPlan?.markdown ? (
+        <MarkdownContent markdown={correctionPlan.markdown} className="session-correction-plan-body" />
+      ) : (
+        <p className="session-correction-plan-empty">
+          {findingCounts.open > 0
+            ? "El checkpoint registra hallazgos abiertos, pero no incluye un plan ejecutable."
+            : "No hay pasos de corrección que ejecutar."}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function LogPanel(props: { checkpoint: ParsedCheckpoint | null; hasCheckpoint: boolean }): JSX.Element {
   const { checkpoint, hasCheckpoint } = props;
 
@@ -216,6 +258,8 @@ function LogPanel(props: { checkpoint: ParsedCheckpoint | null; hasCheckpoint: b
       ) : (
         <p className="session-view-muted">No ▶ NEXT block in the checkpoint.</p>
       )}
+
+      <CorrectionPlanPanel checkpoint={checkpoint} />
 
       <div className="session-log-section">
         <p className="session-log-section-title">Plans ledger</p>
@@ -324,9 +368,39 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // No role or shell PTY is mounted until the one dedicated setup PTY confirms
   // there is no command, or completes it and persists setupDone.
   const [setupReady, setSetupReady] = useState(() => repoMode || session.setupDone);
+  const [setupFailure, setSetupFailure] = useState<string | null>(null);
+  const [setupCompleting, setSetupCompleting] = useState(false);
+  const [setupCompletionError, setSetupCompletionError] = useState<string | null>(null);
   // Live terminal handles keyed by tab id (role name or shell tab id), so a
   // file's composer can deliver text into the chosen one.
   const terminalHandles = useRef<Map<string, SessionTerminalHandle>>(new Map());
+
+  function handleSetupReady(): void {
+    setSetupFailure(null);
+    setSetupCompletionError(null);
+    setSetupCompleting(false);
+    setSetupReady(true);
+  }
+
+  function handleSetupFailed(reason: string): void {
+    setSetupFailure(reason);
+    setSetupCompletionError(null);
+    setSetupCompleting(false);
+  }
+
+  function handleContinueAfterSetupRepair(): void {
+    if (!setupFailure || setupCompleting) return;
+    setSetupCompleting(true);
+    setSetupCompletionError(null);
+    void continueAfterSetupRepair({
+      sessionId: session.id,
+      markSetupDone: window.agentCoordinator.sessions.markSetupDone,
+      onReady: handleSetupReady,
+    }).catch((error: unknown) => {
+      setSetupCompleting(false);
+      setSetupCompletionError(String(error));
+    });
+  }
 
   // Report layout changes up so the workspace can be persisted for restore.
   useEffect(() => {
@@ -888,12 +962,21 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
       <div className="session-view-body">
         {!repoMode && !setupReady && (
-          <div className="session-terminal-host">
+          <div className="session-terminal-host session-setup-host">
+            {setupFailure && (
+              <SetupRecoveryBanner
+                reason={setupFailure}
+                completing={setupCompleting}
+                error={setupCompletionError}
+                onContinue={handleContinueAfterSetupRepair}
+              />
+            )}
             <SessionTerminal
               session={session}
               role="setup"
               mode="fresh"
-              onSetupReady={() => setSetupReady(true)}
+              onSetupReady={handleSetupReady}
+              onSetupFailed={handleSetupFailed}
             />
           </div>
         )}
