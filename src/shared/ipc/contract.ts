@@ -62,6 +62,9 @@ export interface SessionCreateInput {
   kind: WorkSessionKind;
   // Copy the project's gitignored .env files into the new worktree so it can run.
   copyEnv?: boolean;
+  // Clone ignored dist/generated output from the clean repo root and consider
+  // the setup satisfied. Obvious revision mismatches fail instead of being copied.
+  reuseBuildArtifacts?: boolean;
 }
 
 export interface ReviewSessionCreateInput {

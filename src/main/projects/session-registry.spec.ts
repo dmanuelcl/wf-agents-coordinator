@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -271,6 +271,56 @@ describe("SessionRegistry", () => {
 
     const reloaded = await registry.getSession({ sessionId: session.id });
     expect(reloaded?.setupDone).toBe(true);
+  });
+
+  it("reuses ignored build output and skips setup for a compatible worktree", async () => {
+    initGitRepo(repoDir);
+    writeFileSync(join(repoDir, ".gitignore"), "dist/\npackages/*/generated/\n", "utf8");
+    execFileSync("git", ["add", ".gitignore"], { cwd: repoDir });
+    execFileSync("git", ["commit", "-q", "-m", "ignore build output"], { cwd: repoDir });
+    mkdirSync(join(repoDir, "dist"), { recursive: true });
+    mkdirSync(join(repoDir, "packages", "api", "generated"), { recursive: true });
+    writeFileSync(join(repoDir, "dist", "index.js"), "compiled\n", "utf8");
+    writeFileSync(join(repoDir, "packages", "api", "generated", "schema.ts"), "generated\n", "utf8");
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Warm worktree",
+      kind: "feature",
+      reuseBuildArtifacts: true,
+    });
+
+    expect(session.setupDone).toBe(true);
+    expect(readFileSync(join(session.worktreePath, "dist", "index.js"), "utf8")).toBe("compiled\n");
+    expect(readFileSync(join(session.worktreePath, "packages", "api", "generated", "schema.ts"), "utf8")).toBe(
+      "generated\n",
+    );
+  });
+
+  it("rolls back the session when artifact reuse cannot be proven safe", async () => {
+    initGitRepo(repoDir);
+    writeFileSync(join(repoDir, ".gitignore"), "dist/\n", "utf8");
+    execFileSync("git", ["add", ".gitignore"], { cwd: repoDir });
+    execFileSync("git", ["commit", "-q", "-m", "ignore build output"], { cwd: repoDir });
+    mkdirSync(join(repoDir, "dist"), { recursive: true });
+    writeFileSync(join(repoDir, "dist", "index.js"), "compiled\n", "utf8");
+    writeFileSync(join(repoDir, "README.md"), "dirty\n", "utf8");
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await expect(
+      registry.createSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "Unsafe warm worktree",
+        kind: "feature",
+        reuseBuildArtifacts: true,
+      }),
+    ).rejects.toThrow(/uncommitted tracked changes/i);
+
+    expect(existsSync(join(repoDir, ".worktrees", "unsafe-warm-worktree"))).toBe(false);
+    await expect(registry.listSessions({ projectId: "p1" })).resolves.toEqual([]);
   });
 
   it("rejects a blank / punctuation-only name before creating anything", async () => {

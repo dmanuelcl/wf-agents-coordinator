@@ -351,6 +351,7 @@ export function registerIpcHandlers(params: {
       name: input.name,
       kind: input.kind,
       copyEnv: input.copyEnv,
+      reuseBuildArtifacts: input.reuseBuildArtifacts,
     });
     // Establish both watchers before the renderer can launch an architect.
     await watchSessionCheckpoint(session);

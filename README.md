@@ -89,8 +89,13 @@ The left rail lists your projects (git repos). Expand one to see:
 ### Sessions = worktrees
 Creating a session mints a git **worktree** at `<repo>/.worktrees/<slug>` on a new
 branch (`feature/…` or `fix/…`), optionally copying `.env*` files into it
-(recursively, for monorepos). Removing a session removes the worktree (after
-confirmation). Everything the session's agents do happens inside that worktree.
+(recursively, for monorepos). A session can also reuse ignored `dist`/`generated`
+output from the repo root and skip the configured setup command. That fast path
+only runs when the root is clean and both checkouts are at the same commit; it
+uses filesystem copy-on-write clones when supported. The user should select it
+only when the root output is current. Removing a session removes the worktree
+(after confirmation). Everything the session's agents do happens inside that
+worktree.
 
 ### The workflow (`wf`)
 The app is built for the Biznex multi-session workflow. A session's tabs are the

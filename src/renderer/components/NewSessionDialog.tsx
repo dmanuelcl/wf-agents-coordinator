@@ -27,6 +27,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [copyEnv, setCopyEnv] = useState(false);
+  const [reuseBuildArtifacts, setReuseBuildArtifacts] = useState(false);
   const [reviewBranch, setReviewBranch] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
   const [branches, setBranches] = useState<BranchList | null>(null);
@@ -106,7 +107,12 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
           baseBranch: baseBranch.trim(),
         });
       } else {
-        session = await window.agentCoordinator.sessions.create(projectId, { name: name.trim(), kind, copyEnv });
+        session = await window.agentCoordinator.sessions.create(projectId, {
+          name: name.trim(),
+          kind,
+          copyEnv,
+          reuseBuildArtifacts,
+        });
       }
       onCreated(session);
     } catch (caught) {
@@ -278,6 +284,23 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                 </label>
                 <p className="field-hint">
                   So it can run tasks that need env vars. Your <code>.env</code> is gitignored, so it stays out of git.
+                </p>
+              </div>
+
+              <div className="new-session-field">
+                <label className="new-session-check">
+                  <input
+                    type="checkbox"
+                    checked={reuseBuildArtifacts}
+                    onChange={(event) => setReuseBuildArtifacts(event.target.checked)}
+                  />
+                  <span>
+                    Reuse <code>dist</code>/<code>generated</code> and skip worktree setup
+                  </span>
+                </label>
+                <p className="field-hint">
+                  Fast path for parallel sessions. Only ignored output from a clean repo root at the same commit is
+                  copied; use it when that output is current. Copy-on-write is used when available.
                 </p>
               </div>
             </>

@@ -13,6 +13,7 @@ import {
 } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import { buildWorktreeCreatePlan, createWorktree, pruneWorktrees, removeWorktree } from "./worktree-manager";
+import { reuseWorktreeArtifacts } from "./worktree-artifacts";
 import { addWorktreeExclude } from "./worktree-exclude";
 
 // The gitignored review artifact a PR-review reviewer writes; posted to the PR.
@@ -29,6 +30,7 @@ export interface SessionRegistry {
     name: string;
     kind: WorkSessionKind;
     copyEnv?: boolean;
+    reuseBuildArtifacts?: boolean;
   }): Promise<WorkSession>;
   createReviewSession(params: {
     projectId: string;
@@ -267,7 +269,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return records.find((record) => record.id === sessionId) ?? null;
     },
 
-    createSession({ projectId, projectRoot, name, kind, copyEnv }) {
+    createSession({ projectId, projectRoot, name, kind, copyEnv, reuseBuildArtifacts }) {
       return runExclusive(async () => {
         const { sessionName, baseSlug } = sessionIdentity(name);
 
@@ -303,6 +305,10 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
           if (copyEnv) {
             await copyEnvFiles(projectRoot, worktreePath);
+          }
+          if (reuseBuildArtifacts) {
+            await reuseWorktreeArtifacts({ projectRoot, worktreePath });
+            record.setupDone = true;
           }
           await appendRecord(record);
           return record;
