@@ -69,8 +69,9 @@ function withUnwiredSessionWarning(
   };
 }
 
-// claude [--session-id <id> | --resume <id>] --model opus [--dangerously-skip-permissions]
-//        (session flag first so restore is deterministic; effort → /effort after launch)
+// claude [--session-id <id> | --resume <id>] --model opus [--effort high]
+//        [--dangerously-skip-permissions]
+//        (session flag first so restore is deterministic)
 function buildClaudeLaunchCommand(
   config: AgentRuntimeConfig,
   session: AgentSessionLaunch | undefined,
@@ -78,6 +79,7 @@ function buildClaudeLaunchCommand(
   const parts = ["claude"];
   if (session) parts.push(session.mode === "resume" ? "--resume" : "--session-id", session.id);
   if (model(config)) parts.push("--model", model(config));
+  if (config.effort) parts.push("--effort", config.effort);
   if (config.dangerous) parts.push("--dangerously-skip-permissions");
   return { command: parts.join(" "), warnings: [] };
 }
@@ -153,15 +155,4 @@ export function buildAgentLaunchCommand(
     case "antigravity":
       return withUnwiredSessionWarning(buildAntigravityLaunchCommand(config), config.kind, session);
   }
-}
-
-/**
- * Messages to send to the agent AFTER its CLI is running (the CLI has no flag
- * for them). Claude takes reasoning effort as a `/effort` slash command.
- */
-export function buildAgentSetupMessages(config: AgentRuntimeConfig): string[] {
-  if (config.kind === "claude" && config.effort) {
-    return [`/effort ${config.effort}`];
-  }
-  return [];
 }

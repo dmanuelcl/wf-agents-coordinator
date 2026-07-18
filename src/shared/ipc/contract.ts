@@ -29,13 +29,12 @@ export type AgentLaunchMode = "fresh" | "resume";
 // Everything the renderer needs to launch one role's agent terminal: the CLI
 // command to run as the PTY process, the `wf` message to pre-type (no newline —
 // the user submits it), the worktree to run in, the minted/looked-up
-// conversation id, and any post-launch setup messages (e.g. `/effort`).
+// conversation id, and any launch warnings.
 export interface SessionRoleLaunch {
   agentCommand: string;
   wfCommand: string | null;
   cwd: string;
   sessionUuid: string;
-  setupMessages: string[];
   warnings: string[];
 }
 

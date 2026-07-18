@@ -38,6 +38,27 @@ describe("createTerminalFollowUpGate", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("never bypasses a startup confirmation, including at the hard deadline", () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn();
+    let ready = false;
+    const gate = createTerminalFollowUpGate({
+      settleMs: 1_200,
+      maxWaitMs: 10_000,
+      canDeliver: () => ready,
+      deliver,
+    });
+
+    gate.start();
+    vi.advanceTimersByTime(10_000);
+    expect(deliver).not.toHaveBeenCalled();
+
+    ready = true;
+    gate.onUserInput();
+    vi.advanceTimersByTime(1_200);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("does not deliver after cancellation", () => {
     vi.useFakeTimers();
     const deliver = vi.fn();

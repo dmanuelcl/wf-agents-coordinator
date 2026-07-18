@@ -39,7 +39,7 @@ function credsFrom(email: string, token: string): { token: string; email?: strin
   return email.trim() ? { token, email: email.trim() } : { token };
 }
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
-import { buildAgentLaunchCommand, buildAgentSetupMessages } from "../../shared/workflow/agent-runtime-config";
+import { buildAgentLaunchCommand } from "../../shared/workflow/agent-runtime-config";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
 import type { LaunchRole } from "../../shared/workflow/role-launch-plan";
@@ -636,7 +636,6 @@ export function registerIpcHandlers(params: {
         wfCommand,
         cwd: session.worktreePath,
         sessionUuid: uuid,
-        setupMessages: buildAgentSetupMessages(agentConfig),
         warnings: launch.warnings,
       };
     },

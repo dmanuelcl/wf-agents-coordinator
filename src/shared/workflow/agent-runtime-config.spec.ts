@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentLaunchCommand, buildAgentSetupMessages, createDefaultProjectRuntimeConfig } from "./agent-runtime-config";
+import { buildAgentLaunchCommand, createDefaultProjectRuntimeConfig } from "./agent-runtime-config";
 import type { AgentRuntimeConfig } from "./agent-runtime-config";
 
 function makeConfig(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig {
@@ -27,19 +27,9 @@ describe("buildAgentLaunchCommand — claude", () => {
     expect(safe.command).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("does not put effort in the launch command — it has no launch flag", () => {
+  it("passes effort as a launch flag so no slash command races the startup UI", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "claude", effort: "high" }));
-    expect(result.command).toBe("claude --model opus");
-  });
-});
-
-describe("buildAgentSetupMessages — claude", () => {
-  it("sends /effort as a follow-up message when effort is set", () => {
-    expect(buildAgentSetupMessages(makeConfig({ kind: "claude", effort: "high" }))).toEqual(["/effort high"]);
-  });
-
-  it("sends no setup messages when effort is not set", () => {
-    expect(buildAgentSetupMessages(makeConfig({ kind: "claude", effort: null }))).toEqual([]);
+    expect(result.command).toBe("claude --model opus --effort high");
   });
 });
 
@@ -68,12 +58,6 @@ describe("buildAgentLaunchCommand — codex", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "codex", model: "opus", effort: null }));
     expect(result.command).not.toContain("model_reasoning_effort");
     expect(result.command).toContain('-c model_reasoning_summary="detailed"');
-  });
-});
-
-describe("buildAgentSetupMessages — codex", () => {
-  it("never sends setup messages — effort is already a -c flag", () => {
-    expect(buildAgentSetupMessages(makeConfig({ kind: "codex", effort: "high" }))).toEqual([]);
   });
 });
 
@@ -118,12 +102,6 @@ describe("buildAgentLaunchCommand — opencode", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "opencode", effort: "high" }));
     expect(result.command).toBe("opencode --model opus");
     expect(result.warnings.some((w) => /effort/i.test(w))).toBe(true);
-  });
-});
-
-describe("buildAgentSetupMessages — opencode", () => {
-  it("never sends setup messages", () => {
-    expect(buildAgentSetupMessages(makeConfig({ kind: "opencode", effort: "high" }))).toEqual([]);
   });
 });
 

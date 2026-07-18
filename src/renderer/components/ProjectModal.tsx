@@ -31,7 +31,7 @@ const MODEL_PLACEHOLDERS: Record<AgentKind, string> = {
 };
 
 const EFFORT_PLACEHOLDERS: Record<AgentKind, string> = {
-  claude: "high (sent as /effort after launch)",
+  claude: "high",
   codex: "high",
   opencode: "not supported",
   copilot: "not supported",

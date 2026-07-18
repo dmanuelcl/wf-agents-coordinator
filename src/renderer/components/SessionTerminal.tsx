@@ -12,6 +12,7 @@ import type {
   WorkSession,
 } from "../../shared/ipc/contract";
 import { createTerminalFollowUpGate } from "./terminal-follow-up-gate";
+import { hasBlockingStartupConfirmation } from "./terminal-startup-readiness";
 
 // File-path-ish tokens in terminal output: optional dir prefix, a filename with
 // an extension, and an optional :line[:col] suffix. A token that isn't a real
@@ -20,9 +21,22 @@ const FILE_PATH_RE = /(?:[~.]{0,2}\/)?(?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z][\w]{0,7}
 
 // How long the agent's output must stay QUIET before we send the follow-up —
 // long enough that a fresh TUI (claude etc.) has rendered its input box and will
-// accept a paste. A hard deadline handles CLIs that repaint continuously.
+// accept a paste. A hard deadline handles CLIs that repaint continuously, but
+// never bypasses a confirmation that the user must answer.
 const SETTLE_MS = 1_200;
 const MAX_FOLLOW_UP_WAIT_MS = 10_000;
+
+function visibleTerminalText(term: Terminal): string {
+  const buffer = term.buffer.active;
+  const start = Math.max(0, buffer.viewportY);
+  const end = Math.min(buffer.length, start + term.rows);
+  const lines: string[] = [];
+  for (let index = start; index < end; index += 1) {
+    const line = buffer.getLine(index);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join("\n");
+}
 
 export interface SessionTerminalProps {
   session: WorkSession;
@@ -204,21 +218,15 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     });
     disposables.push(() => linkProvider.dispose());
 
-    function sendFollowUp(setupMessages: string[], wfPreType: string | null): void {
+    function sendFollowUp(wfPreType: string): void {
       if (disposed || !ptyId || followUpSent) return;
       followUpSent = true;
-      // Setup messages (e.g. `/effort high`) are always submitted.
-      for (const message of setupMessages) {
-        window.agentCoordinator.terminal.write(ptyId, `${message}\r`);
-      }
-      if (wfPreType !== null) {
-        // Bracketed paste (like sendText) so the command lands in the agent's
-        // input box as one unit — robust for multi-word/long text (e.g. a review
-        // kickoff). Conductor/review launches submit it (append CR); a manual
-        // open only pre-types it (the user presses Enter).
-        const paste = `\x1b[200~${wfPreType}\x1b[201~`;
-        window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${paste}\r` : paste);
-      }
+      // Bracketed paste (like sendText) so the command lands in the agent's
+      // input box as one unit — robust for multi-word/long text (e.g. a review
+      // kickoff). Conductor/review launches submit it (append CR); a manual
+      // open only pre-types it (the user presses Enter).
+      const paste = `\x1b[200~${wfPreType}\x1b[201~`;
+      window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${paste}\r` : paste);
     }
 
     // An agent runs AS the PTY process, so quitting it closes the PTY. Instead of
@@ -241,7 +249,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     async function start(): Promise<void> {
       let agentCommand: string | null = null;
-      let setupMessages: string[] = [];
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
@@ -275,7 +282,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (disposed) return;
         agentCommand = launch.agentCommand;
         shellCwd = launch.cwd;
-        setupMessages = launch.setupMessages;
         wfPreType = launch.wfCommand;
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
       }
@@ -294,12 +300,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
       }
 
-      const hasFollowUp = setupMessages.length > 0 || wfPreType !== null;
-      const followUpGate = hasFollowUp
+      const followUpGate = wfPreType !== null
         ? createTerminalFollowUpGate({
             settleMs: SETTLE_MS,
             maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
-            deliver: () => sendFollowUp(setupMessages, wfPreType),
+            canDeliver: () => !hasBlockingStartupConfirmation(visibleTerminalText(term)),
+            deliver: () => sendFollowUp(wfPreType),
           })
         : null;
 
@@ -416,6 +422,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       for (const event of pendingExits.splice(0)) handleExit(event);
 
       const onDataDisposable = term.onData((data) => {
+        if (phase === "agent") followUpGate?.onUserInput();
         if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);
       });
       disposables.push(() => onDataDisposable.dispose());
