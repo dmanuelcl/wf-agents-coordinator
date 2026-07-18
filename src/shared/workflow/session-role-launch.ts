@@ -7,6 +7,29 @@ export type SessionAgentRole = "architect" | "implementer" | "reviewer";
 
 export const SESSION_AGENT_ROLES: readonly SessionAgentRole[] = ["architect", "implementer", "reviewer"];
 
+const SESSION_ROLES_BY_KIND: Record<WorkSessionKind, readonly SessionAgentRole[]> = {
+  feature: SESSION_AGENT_ROLES,
+  fix: SESSION_AGENT_ROLES,
+  review: ["reviewer"],
+  "pr-fix": ["implementer", "reviewer"],
+};
+
+/** Agent tabs exposed by each workflow. PR fixes implement first, then review. */
+export function agentRolesForSessionKind(kind: WorkSessionKind): readonly SessionAgentRole[] {
+  return SESSION_ROLES_BY_KIND[kind];
+}
+
+/** Whether a role may launch at the session's current checkpoint gate. */
+export function isSessionRoleUnlocked(
+  kind: WorkSessionKind,
+  role: SessionAgentRole,
+  hasCheckpoint: boolean,
+): boolean {
+  if (kind === "review") return role === "reviewer";
+  if (kind === "pr-fix") return role === "implementer" || (role === "reviewer" && hasCheckpoint);
+  return role === "architect" || hasCheckpoint;
+}
+
 export function isSessionAgentRole(value: string): value is SessionAgentRole {
   return (SESSION_AGENT_ROLES as readonly string[]).includes(value);
 }

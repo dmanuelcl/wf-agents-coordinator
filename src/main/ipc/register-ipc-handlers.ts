@@ -18,7 +18,12 @@ import type {
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
-import { buildPrFixKickoff } from "../../shared/workflow/pr-fix-kickoff";
+import {
+  buildPrFixKickoff,
+  buildPrFixReviewKickoff,
+  prFixCompletionCheckpointPath,
+} from "../../shared/workflow/pr-fix-kickoff";
+import { truncateSessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
@@ -102,7 +107,7 @@ export function registerIpcHandlers(params: {
   const sessionSetupCoordinator = createSessionSetupCoordinator();
 
   function hasWorkflowCheckpoint(session: WorkSession): boolean {
-    return session.kind === "feature" || session.kind === "fix";
+    return session.kind === "feature" || session.kind === "fix" || session.kind === "pr-fix";
   }
 
   async function watchSessionCheckpoint(session: WorkSession): Promise<void> {
@@ -111,6 +116,8 @@ export function registerIpcHandlers(params: {
       sessionId: session.id,
       worktreePath: session.worktreePath,
       createdAtEpochMs: session.createdAtEpochMs,
+      expectedCheckpointPath:
+        session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
     });
   }
 
@@ -158,6 +165,9 @@ export function registerIpcHandlers(params: {
     // Also apply this at launch so sessions created by older app versions gain
     // the local exclude before the new context file is written.
     await addWorktreeExclude(session.worktreePath, PR_CONTEXT_ARTIFACT);
+    if (mode === "fix") {
+      await addWorktreeExclude(session.worktreePath, prFixCompletionCheckpointPath(session.slug));
+    }
     if (mode === "review") await addWorktreeExclude(session.worktreePath, REVIEW_ARTIFACT);
     await writeFile(join(session.worktreePath, PR_CONTEXT_ARTIFACT), content, "utf8");
   }
@@ -169,15 +179,25 @@ export function registerIpcHandlers(params: {
     project: ProjectRecord,
     role: SessionAgentRole,
   ): Promise<string | null> {
-    // PR fix: write ALL comments locally, then keep the terminal prompt small.
-    if (session.kind === "pr-fix" && role === "implementer" && session.pr) {
+    // PR fix: both stages read the complete conversation from a local artifact.
+    // The reviewer is launched on demand after implementation, so refresh the
+    // artifact again in case new PR comments arrived meanwhile.
+    if (session.kind === "pr-fix" && session.pr && (role === "implementer" || role === "reviewer")) {
       await refreshPrContextArtifact(session, project, "fix");
-      return buildPrFixKickoff({
+      const params = {
         title: session.name,
         source: session.branch,
         target: session.baseBranch ?? "",
         contextFile: PR_CONTEXT_ARTIFACT,
-      });
+        fixBaseSha: session.pr.fixBaseSha,
+      };
+      return role === "implementer"
+        ? buildPrFixKickoff({
+            ...params,
+            slug: session.slug,
+            completionCheckpoint: prFixCompletionCheckpointPath(session.slug),
+          })
+        : buildPrFixReviewKickoff(params);
     }
 
     if (session.kind !== "review" || role !== "reviewer") {
@@ -402,7 +422,7 @@ export function registerIpcHandlers(params: {
     return sessionRegistry.createReviewSession({
       projectId,
       projectRoot: project.rootPath,
-      name: `PR #${resolved.prId}: ${resolved.title}`,
+      name: truncateSessionName(`PR #${resolved.prId}: ${resolved.title}`),
       reviewBranch: `origin/${resolved.source}`,
       baseBranch: `origin/${resolved.target}`,
       pr: {
@@ -425,10 +445,10 @@ export function registerIpcHandlers(params: {
     if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
     const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
     // Writable checkout of the PR source branch; base kept for diff context.
-    return sessionRegistry.createFixSession({
+    const session = await sessionRegistry.createFixSession({
       projectId,
       projectRoot: project.rootPath,
-      name: `Fix PR #${resolved.prId}: ${resolved.title}`,
+      name: truncateSessionName(`Fix PR #${resolved.prId}: ${resolved.title}`),
       branch: resolved.source,
       baseBranch: `origin/${resolved.target}`,
       pr: {
@@ -438,9 +458,15 @@ export function registerIpcHandlers(params: {
         prId: resolved.prId,
         url: resolved.url,
         lastReviewedSha: null,
+        fixBaseSha: resolved.headSha,
       },
       expectedHeadSha: resolved.headSha,
     });
+    // The reviewer remains gated until the implementer writes this session's
+    // exact handoff checkpoint.
+    await watchSessionCheckpoint(session);
+    await refreshCheckpointWatch(project);
+    return session;
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsPushFixBranch, async (_event, sessionId: string) => {
@@ -583,11 +609,7 @@ export function registerIpcHandlers(params: {
     if (!session || session.checkpointPath) {
       return;
     }
-    await sessionCheckpointWatchManager.watchSession({
-      sessionId,
-      worktreePath: session.worktreePath,
-      createdAtEpochMs: session.createdAtEpochMs,
-    });
+    await watchSessionCheckpoint(session);
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsUnwatchCheckpoint, async (_event, sessionId: string) => {

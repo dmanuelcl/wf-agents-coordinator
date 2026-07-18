@@ -101,6 +101,34 @@ describe("createSessionCheckpointWatchManager", () => {
     expect(onCheckpointDetected).not.toHaveBeenCalled();
   });
 
+  it("accepts only the expected checkpoint when a session specifies one", async () => {
+    const { createWatcher, watchers } = makeFakeCreateWatcher();
+    const onCheckpointDetected = vi.fn();
+    const manager = createSessionCheckpointWatchManager({
+      createWatcher,
+      debounceMs: 0,
+      onCheckpointDetected,
+    });
+
+    await manager.watchSession({
+      sessionId: "pr-fix-1",
+      worktreePath: worktree,
+      createdAtEpochMs: 0,
+      expectedCheckpointPath: "docs/workflow/checkpoints/fix-pr-1-pr-fix-checkpoint.md",
+    });
+    watchers[0]?.emitChange(join(worktree, "docs", "workflow", "checkpoints", "unrelated-checkpoint.md"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onCheckpointDetected).not.toHaveBeenCalled();
+
+    const expected = join(worktree, "docs", "workflow", "checkpoints", "fix-pr-1-pr-fix-checkpoint.md");
+    watchers[0]?.emitChange(expected);
+    await vi.waitFor(() => expect(onCheckpointDetected).toHaveBeenCalledWith("pr-fix-1", expect.any(String)));
+    expect(onCheckpointDetected).toHaveBeenCalledWith(
+      "pr-fix-1",
+      "docs/workflow/checkpoints/fix-pr-1-pr-fix-checkpoint.md",
+    );
+  });
+
   it("stops watching after the first checkpoint is detected (one-shot gate)", async () => {
     const { createWatcher, watchers } = makeFakeCreateWatcher();
     const onCheckpointDetected = vi.fn();

@@ -1,5 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { shouldInjectRoleCommand, stageForSessionRole, wfCommandForSessionRole } from "./session-role-launch";
+import {
+  agentRolesForSessionKind,
+  isSessionRoleUnlocked,
+  shouldInjectRoleCommand,
+  stageForSessionRole,
+  wfCommandForSessionRole,
+} from "./session-role-launch";
+
+describe("agentRolesForSessionKind", () => {
+  it("gives PR fixes an implementer followed by a reviewer", () => {
+    expect(agentRolesForSessionKind("pr-fix")).toEqual(["implementer", "reviewer"]);
+  });
+
+  it("keeps PR review reviewer-only and regular workflows at three roles", () => {
+    expect(agentRolesForSessionKind("review")).toEqual(["reviewer"]);
+    expect(agentRolesForSessionKind("feature")).toEqual(["architect", "implementer", "reviewer"]);
+    expect(agentRolesForSessionKind("fix")).toEqual(["architect", "implementer", "reviewer"]);
+  });
+});
+
+describe("isSessionRoleUnlocked", () => {
+  it("keeps the PR-fix reviewer locked until the implementer checkpoint exists", () => {
+    expect(isSessionRoleUnlocked("pr-fix", "implementer", false)).toBe(true);
+    expect(isSessionRoleUnlocked("pr-fix", "reviewer", false)).toBe(false);
+    expect(isSessionRoleUnlocked("pr-fix", "reviewer", true)).toBe(true);
+  });
+
+  it("preserves the existing gates for regular workflows and PR review", () => {
+    expect(isSessionRoleUnlocked("feature", "architect", false)).toBe(true);
+    expect(isSessionRoleUnlocked("feature", "implementer", false)).toBe(false);
+    expect(isSessionRoleUnlocked("fix", "reviewer", true)).toBe(true);
+    expect(isSessionRoleUnlocked("review", "reviewer", false)).toBe(true);
+  });
+});
 
 describe("stageForSessionRole", () => {
   it("maps each session role onto the matching runtime-config stage", () => {

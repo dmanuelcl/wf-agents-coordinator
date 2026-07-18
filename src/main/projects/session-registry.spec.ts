@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SESSION_NAME_MAX_LENGTH, SESSION_SLUG_MAX_LENGTH } from "../../shared/workflow/work-session";
 import { createSessionRegistry, PR_CONTEXT_ARTIFACT } from "./session-registry";
 import { removeWorktree } from "./worktree-manager";
 
@@ -83,6 +84,34 @@ describe("SessionRegistry", () => {
 
     expect(session.branch).toBe("fix/broken-login");
     expect(branchExists(repoDir, "fix/broken-login")).toBe(true);
+  });
+
+  it("caps the worktree slug even when the valid display name is longer", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+    const name = "a".repeat(SESSION_NAME_MAX_LENGTH);
+
+    const session = await registry.createSession({ projectId: "p1", projectRoot: repoDir, name, kind: "feature" });
+
+    expect(session.name).toBe(name);
+    expect(session.slug).toHaveLength(SESSION_SLUG_MAX_LENGTH);
+    expect(session.worktreePath).toBe(join(repoDir, ".worktrees", "a".repeat(SESSION_SLUG_MAX_LENGTH)));
+  });
+
+  it("rejects an overlong session name before touching the worktree", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await expect(
+      registry.createSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "a".repeat(SESSION_NAME_MAX_LENGTH + 1),
+        kind: "feature",
+      }),
+    ).rejects.toThrow(/cannot exceed 100/i);
+
+    expect(existsSync(join(repoDir, ".worktrees"))).toBe(false);
   });
 
   it("recreates a deleted session on its preserved branch", async () => {

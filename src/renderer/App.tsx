@@ -209,7 +209,7 @@ export function App(): JSX.Element {
   // and may create their checkpoint while another session is visible.
   useEffect(() => {
     if (!selectedSessionId || isRepoSessionId(selectedSessionId) || selectedSessionCheckpoint !== null) return;
-    if (selectedSessionKind === "review" || selectedSessionKind === "pr-fix") return;
+    if (selectedSessionKind === "review") return;
     void window.agentCoordinator.sessions.watchCheckpoint(selectedSessionId);
   }, [selectedSessionId, selectedSessionCheckpoint, selectedSessionKind]);
 

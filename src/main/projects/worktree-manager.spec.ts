@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildWorktreeCreatePlan, createWorktree, detectWorktree } from "./worktree-manager";
+import { buildWorktreeCreatePlan, createWorktree, detectWorktree, removeWorktree } from "./worktree-manager";
 
 let dir: string;
 
@@ -97,5 +97,47 @@ describe("createWorktree", () => {
 
     await createWorktree({ projectRoot: dir, slug: "example", branch: "feature/example" });
     expect(existsSync(worktreePath)).toBe(true);
+  });
+});
+
+describe("removeWorktree", () => {
+  it("removes a registered worktree while preserving its branch", async () => {
+    initGitRepo(dir);
+    const worktreePath = join(dir, ".worktrees", "example");
+    await createWorktree({ projectRoot: dir, slug: "example", branch: "feature/example" });
+
+    await removeWorktree({ projectRoot: dir, worktreePath });
+
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(execFileSync("git", ["branch", "--list", "feature/example"], { cwd: dir }).toString()).toContain(
+      "feature/example",
+    );
+  });
+
+  it("removes an existing orphan directory that Git no longer registers", async () => {
+    initGitRepo(dir);
+    const orphanPath = join(dir, ".worktrees", "orphan");
+    mkdirSync(orphanPath, { recursive: true });
+    writeFileSync(join(orphanPath, "leftover.txt"), "stale", "utf8");
+
+    await removeWorktree({ projectRoot: dir, worktreePath: orphanPath });
+
+    expect(existsSync(orphanPath)).toBe(false);
+  });
+
+  it("is idempotent when the worktree directory and registration are both gone", async () => {
+    initGitRepo(dir);
+    const missingPath = join(dir, ".worktrees", "missing");
+
+    await expect(removeWorktree({ projectRoot: dir, worktreePath: missingPath })).resolves.toBeUndefined();
+  });
+
+  it("refuses direct cleanup outside the project's .worktrees directory", async () => {
+    initGitRepo(dir);
+
+    await expect(removeWorktree({ projectRoot: dir, worktreePath: join(dir, "README.md") })).rejects.toThrow(
+      /outside/i,
+    );
+    expect(existsSync(join(dir, "README.md"))).toBe(true);
   });
 });

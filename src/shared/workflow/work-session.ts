@@ -2,6 +2,11 @@ import type { VcsHost } from "./vcs-config";
 
 export type WorkSessionKind = "feature" | "fix" | "review" | "pr-fix";
 
+// Keep UI labels readable and leave ample room beneath common filesystem
+// component limits for worktree/checkpoint suffixes.
+export const SESSION_NAME_MAX_LENGTH = 100;
+export const SESSION_SLUG_MAX_LENGTH = 80;
+
 // A review session created from a PR link carries this so it can post back to
 // the PR and run progressively. Null for manual reviews and non-review sessions.
 export interface PrLink {
@@ -12,6 +17,9 @@ export interface PrLink {
   url: string;
   // The source-branch SHA of the most recent posted review; null until first post.
   lastReviewedSha: string | null;
+  // PR-fix only: HEAD before the implementer changed anything, so its reviewer
+  // can inspect exactly the correction. Optional for sessions from older builds.
+  fixBaseSha?: string;
 }
 
 // A project's "repo root" workspace is modelled as a synthetic session whose id
@@ -51,6 +59,22 @@ const COMBINING_MARKS = /[\u0300-\u036f]/g;
 const NON_ALPHANUMERIC = /[^a-z0-9]+/g;
 const EDGE_HYPHENS = /^-+|-+$/g;
 
+export function normalizeSessionName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Session name cannot be empty");
+  if (trimmed.length > SESSION_NAME_MAX_LENGTH) {
+    throw new Error(`Session name cannot exceed ${SESSION_NAME_MAX_LENGTH} characters`);
+  }
+  return trimmed;
+}
+
+/** Fit generated PR labels without rejecting a valid PR because its title is long. */
+export function truncateSessionName(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length <= SESSION_NAME_MAX_LENGTH) return trimmed;
+  return `${trimmed.slice(0, SESSION_NAME_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
 /**
  * Turn a user-given session name into a lowercase kebab slug that is safe to
  * use as a folder name and a git branch segment. Diacritics are folded to
@@ -64,5 +88,17 @@ export function slugifySessionName(name: string): string {
     .replace(COMBINING_MARKS, "")
     .toLowerCase()
     .replace(NON_ALPHANUMERIC, "-")
+    .replace(EDGE_HYPHENS, "")
+    .slice(0, SESSION_SLUG_MAX_LENGTH)
     .replace(EDGE_HYPHENS, "");
+}
+
+/** Append an allocation suffix without ever exceeding the slug component cap. */
+export function sessionSlugWithSuffix(baseSlug: string, suffix: number): string {
+  if (suffix <= 1) return baseSlug.slice(0, SESSION_SLUG_MAX_LENGTH).replace(EDGE_HYPHENS, "");
+  const suffixText = `-${suffix}`;
+  const stem = baseSlug
+    .slice(0, SESSION_SLUG_MAX_LENGTH - suffixText.length)
+    .replace(EDGE_HYPHENS, "");
+  return `${stem}${suffixText}`;
 }

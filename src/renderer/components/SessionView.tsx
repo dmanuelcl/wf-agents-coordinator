@@ -7,7 +7,7 @@ import { MarkdownFileView } from "./MarkdownFileView";
 import { SessionTerminal } from "./SessionTerminal";
 import type { SessionTerminalHandle } from "./SessionTerminal";
 import type { AgentLaunchMode } from "../../shared/ipc/contract";
-import { SESSION_AGENT_ROLES } from "../../shared/workflow/session-role-launch";
+import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { LedgerRow, ParsedCheckpoint, WorkflowNext } from "../../shared/workflow/workflow-types";
@@ -89,7 +89,10 @@ function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: 
     return "This review auto-runs the kickoff against the branch when the agent loads. When it's done, use `Post to PR` (or `Post to Slack`) to publish it.";
   }
   if (kind === "pr-fix") {
-    return "This reads the PR comments and implements them on the branch (writable). The agent commits but won't push — use `Push to PR` when you're happy with the fixes.";
+    if (role === "implementer") {
+      return "This reads the PR comments and implements them on the writable branch. After commits and tests it writes the checkpoint that unlocks `Reviewer`. It never pushes.";
+    }
+    return "Checkpoint ready — this pre-types an independent review of every PR comment, the resulting diff, and relevant tests. Press Enter to run it before `Push to PR`.";
   }
   if (role === "architect") {
     if (hasCheckpoint) {
@@ -242,13 +245,18 @@ function initialRoleTabs(layout: SessionLayout | undefined): Map<SessionAgentRol
   return new Map<SessionAgentRole, AgentLaunchMode>([["architect", "fresh"]]);
 }
 
-// A PR session opens straight on its single agent tab (resuming it if restored).
+// A PR session starts only its primary agent. Additional roles (the PR-fix
+// reviewer) launch on demand and restored roles resume their conversations.
 function initialPrTabs(
   layout: SessionLayout | undefined,
-  role: SessionAgentRole,
+  roles: readonly SessionAgentRole[],
+  primaryRole: SessionAgentRole,
 ): Map<SessionAgentRole, AgentLaunchMode> {
-  const restored = layout?.openedRoleTabs?.includes(role) ?? false;
-  return new Map<SessionAgentRole, AgentLaunchMode>([[role, restored ? "resume" : "fresh"]]);
+  const restoredRoles = (layout?.openedRoleTabs ?? []).filter((role) => roles.includes(role));
+  if (restoredRoles.length > 0) {
+    return new Map(restoredRoles.map((role) => [role, "resume" as AgentLaunchMode]));
+  }
+  return new Map<SessionAgentRole, AgentLaunchMode>([[primaryRole, "fresh"]]);
 }
 
 export function SessionView(props: SessionViewProps): JSX.Element {
@@ -256,9 +264,11 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const kind = session.kind;
   const reviewMode = kind === "review";
   const fixMode = kind === "pr-fix";
-  // Both review and pr-fix are single-agent "PR sessions" (from a PR link).
+  // PR review has one reviewer; PR fix starts with Implementer and exposes a
+  // second, on-demand Reviewer stage.
   const prSession = reviewMode || fixMode;
-  const prRole: SessionAgentRole = fixMode ? "implementer" : "reviewer";
+  const prPrimaryRole: SessionAgentRole = fixMode ? "implementer" : "reviewer";
+  const sessionAgentRoles = agentRolesForSessionKind(kind);
   const hasCheckpoint = session.checkpointPath !== null;
 
   // A fresh repo workspace opens with exactly one shell, seeded here (not via an
@@ -269,15 +279,25 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     [],
   );
 
-  const [activeTab, setActiveTab] = useState<string>(
-    () => initialLayout?.activeTab ?? seedRepoShell?.id ?? (prSession ? prRole : "architect"),
-  );
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const restoredActive = initialLayout?.activeTab;
+    if (fixMode && !hasCheckpoint && restoredActive === "reviewer") return "implementer";
+    return restoredActive ?? seedRepoShell?.id ?? (prSession ? prPrimaryRole : "architect");
+  });
   // Agent tabs opened at least once, each with its launch mode; their terminals
   // stay mounted (agents keep running) while another tab is shown. This
   // component is keyed by session.id in the parent, so these initialisers run
   // once per session and the restored layout is not clobbered on re-render.
   const [openedRoleTabs, setOpenedRoleTabs] = useState<Map<SessionAgentRole, AgentLaunchMode>>(() =>
-    repoMode ? new Map() : prSession ? initialPrTabs(initialLayout, prRole) : initialRoleTabs(initialLayout),
+    repoMode
+      ? new Map()
+      : prSession
+        ? initialPrTabs(
+            initialLayout,
+            fixMode && !hasCheckpoint ? ["implementer"] : sessionAgentRoles,
+            prPrimaryRole,
+          )
+        : initialRoleTabs(initialLayout),
   );
   const [shellTabs, setShellTabs] = useState<ShellTab[]>(() =>
     initialLayout?.shellTabs?.length ? initialLayout.shellTabs : seedRepoShell ? [seedRepoShell] : [],
@@ -341,12 +361,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   }, []);
 
   function isRoleDisabled(role: SessionAgentRole): boolean {
-    // A PR session's single agent is always live — it has no checkpoint gate.
-    if (prSession) return false;
-    return (role === "implementer" || role === "reviewer") && !hasCheckpoint;
+    return !isSessionRoleUnlocked(kind, role, hasCheckpoint);
   }
 
-  const disabledHint = "Finish in Architect first — the checkpoint isn't created yet.";
+  const disabledHint = fixMode
+    ? "Waiting for Implementer to finish, test, commit, and write the review checkpoint."
+    : "Finish in Architect first — the checkpoint isn't created yet.";
 
   function selectRole(role: SessionAgentRole): void {
     if (isRoleDisabled(role)) return;
@@ -686,10 +706,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               </span>
               {session.checkpointPath ? (
                 <span className="session-topbar-chip session-topbar-chip-ok" title={session.checkpointPath}>
-                  checkpoint ready
+                  {fixMode ? "ready for review" : "checkpoint ready"}
                 </span>
               ) : (
-                <span className="session-topbar-chip session-topbar-chip-pending">brainstorming</span>
+                <span className="session-topbar-chip session-topbar-chip-pending">
+                  {fixMode ? "implementing" : "brainstorming"}
+                </span>
               )}
             </>
           )}
@@ -706,7 +728,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       <div className="session-main">
       <div className="session-view-tabs" role="tablist" aria-label="Session tabs">
         {!repoMode &&
-          (prSession ? [prRole] : SESSION_AGENT_ROLES).map((role) => {
+          sessionAgentRoles.map((role) => {
             const disabled = isRoleDisabled(role);
             const active = activeTab === role;
             return (
@@ -904,7 +926,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                 mode={mode}
                 onOpenPath={handleOpenPath}
                 hint={roleHint(role, kind, hasCheckpoint)}
-                autoSubmitWf={(prSession && role === prRole) || conductorAutoRoles.has(role)}
+                autoSubmitWf={reviewMode || (fixMode && role === "implementer") || conductorAutoRoles.has(role)}
               />
             </div>
           ))}

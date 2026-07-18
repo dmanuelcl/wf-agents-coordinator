@@ -10,7 +10,11 @@ const CHECKPOINT_FILENAME_PATTERN = /-checkpoint\.md$/;
 // The newest checkpoint created/modified after this session started, or null.
 // Files materialized by `git worktree add` predate `createdAtEpochMs` and belong
 // to the checked-out branch's history, not automatically to the new session.
-async function existingSessionCheckpoint(dir: string, createdAtEpochMs: number): Promise<string | null> {
+async function existingSessionCheckpoint(
+  dir: string,
+  createdAtEpochMs: number,
+  expectedFilename?: string,
+): Promise<string | null> {
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -20,7 +24,9 @@ async function existingSessionCheckpoint(dir: string, createdAtEpochMs: number):
   }
   const candidates = await Promise.all(
     entries
-      .filter((name) => CHECKPOINT_FILENAME_PATTERN.test(name))
+      .filter(
+        (name) => CHECKPOINT_FILENAME_PATTERN.test(name) && (!expectedFilename || name === expectedFilename),
+      )
       .map(async (name) => {
         const path = join(dir, name);
         try {
@@ -38,8 +44,16 @@ async function existingSessionCheckpoint(dir: string, createdAtEpochMs: number):
   );
 }
 
+interface WatchSessionParams {
+  sessionId: string;
+  worktreePath: string;
+  createdAtEpochMs: number;
+  /** When set, no other checkpoint in the worktree may flip this gate. */
+  expectedCheckpointPath?: string;
+}
+
 export interface SessionCheckpointWatchManager {
-  watchSession(params: { sessionId: string; worktreePath: string; createdAtEpochMs: number }): Promise<void>;
+  watchSession(params: WatchSessionParams): Promise<void>;
   unwatchSession(sessionId: string): Promise<void>;
   closeAll(): Promise<void>;
 }
@@ -47,9 +61,8 @@ export interface SessionCheckpointWatchManager {
 /**
  * Watches a single session's worktree for the FIRST checkpoint file to appear,
  * then stops. This is the one-way gate the session UI hangs on: while a session
- * has no checkpoint, only its Architect tab is usable; the moment the architect
- * writes `docs/workflow/checkpoints/<slug>-checkpoint.md`, this fires so the
- * caller can persist the path and enable the Implementer/Reviewer tabs.
+ * has no checkpoint, its next role stays disabled. For PR fixes an exact
+ * expected path prevents an unrelated checkpoint from unlocking Reviewer.
  *
  * Deliberately NOT built on `createCheckpointWatchManager`: that manager expands
  * a project root through `git worktree list`, which from inside a worktree would
@@ -75,15 +88,16 @@ export function createSessionCheckpointWatchManager(params: {
     await watcher.close();
   }
 
-  async function start(params: { sessionId: string; worktreePath: string; createdAtEpochMs: number }): Promise<void> {
-    const { sessionId, worktreePath, createdAtEpochMs } = params;
+  async function start(params: WatchSessionParams): Promise<void> {
+    const { sessionId, worktreePath, createdAtEpochMs, expectedCheckpointPath } = params;
     const checkpointDir = join(worktreePath, ...CHECKPOINT_DIR_SEGMENTS);
+    const expectedFilename = expectedCheckpointPath ? basename(expectedCheckpointPath) : undefined;
 
     // A checkpoint may already exist — re-selecting a session, or a checkpoint
     // that landed between session creation and this watch. chokidar's
     // `ignoreInitial` would never surface it, leaving the gate stuck with the
     // tabs disabled despite a real checkpoint on disk. Detect it up front.
-    const existing = await existingSessionCheckpoint(checkpointDir, createdAtEpochMs);
+    const existing = await existingSessionCheckpoint(checkpointDir, createdAtEpochMs, expectedFilename);
     if (existing) {
       onCheckpointDetected(sessionId, relative(worktreePath, existing));
       return;
@@ -102,6 +116,7 @@ export function createSessionCheckpointWatchManager(params: {
       // the delete inside `stop()` is synchronous, so this guard bails.
       if (!watchers.has(sessionId)) return;
       if (!CHECKPOINT_FILENAME_PATTERN.test(basename(absoluteFilePath))) return;
+      if (expectedFilename && basename(absoluteFilePath) !== expectedFilename) return;
       const checkpointPath = relative(worktreePath, absoluteFilePath);
       // One checkpoint per session: once the gate flips, stop watching.
       void stop(sessionId);

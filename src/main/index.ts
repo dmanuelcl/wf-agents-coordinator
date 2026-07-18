@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow } from "electron";
 import { CHECKPOINT_IPC_CHANNELS, SESSION_IPC_CHANNELS } from "../shared/ipc/contract";
+import { prFixCompletionCheckpointPath } from "../shared/workflow/pr-fix-kickoff";
 import { registerIpcHandlers } from "./ipc/register-ipc-handlers";
 import { registerTerminalIpcHandlers } from "./ipc/register-terminal-ipc-handlers";
 import { createChokidarWatcher } from "./projects/chokidar-watcher-adapter";
@@ -144,13 +145,16 @@ void app.whenReady().then(() => {
           sessions
             .filter(
               (session) =>
-                (session.kind === "feature" || session.kind === "fix") && session.checkpointPath === null,
+                (session.kind === "feature" || session.kind === "fix" || session.kind === "pr-fix") &&
+                session.checkpointPath === null,
             )
             .map((session) =>
               sessionCheckpointWatchManager.watchSession({
                 sessionId: session.id,
                 worktreePath: session.worktreePath,
                 createdAtEpochMs: session.createdAtEpochMs,
+                expectedCheckpointPath:
+                  session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
               }),
             ),
         );

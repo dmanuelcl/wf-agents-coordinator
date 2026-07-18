@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { resolveWorkflowCwd } from "../../shared/workflow/worktree-resolver";
 
@@ -97,15 +98,55 @@ export async function removeWorktree(params: {
   execFileImpl?: typeof execFileAsync;
 }): Promise<void> {
   const exec = params.execFileImpl ?? execFileAsync;
+  const worktreesRoot = resolve(params.projectRoot, ".worktrees");
+  const target = resolve(params.projectRoot, params.worktreePath);
+  const targetRelative = relative(worktreesRoot, target);
+  if (
+    !targetRelative ||
+    targetRelative === ".." ||
+    targetRelative.startsWith(`..${sep}`) ||
+    isAbsolute(targetRelative)
+  ) {
+    throw new Error(`Refusing to remove worktree outside "${worktreesRoot}": "${target}".`);
+  }
+
+  async function isRegistered(): Promise<boolean> {
+    const { stdout } = await exec("git", ["worktree", "list", "--porcelain"], { cwd: params.projectRoot });
+    return String(stdout)
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => resolve(params.projectRoot, line.slice("worktree ".length).trim()))
+      .includes(target);
+  }
+
+  async function removeOrphanDirectory(): Promise<void> {
+    await rm(target, { recursive: true, force: true });
+    await pruneWorktrees({ projectRoot: params.projectRoot, execFileImpl: exec });
+  }
+
+  // The session record can outlive Git's administration entry (manual cleanup,
+  // interrupted prior deletion, copied app state). In that case `git worktree
+  // remove` says "is not a working tree" even though the orphan directory is
+  // still visible. The user already confirmed deletion, so remove it directly.
+  if (!(await isRegistered())) {
+    await removeOrphanDirectory();
+    return;
+  }
+
   try {
     // --force so a live agent's cwd or uncommitted changes don't block removal
     // (the user has already confirmed). The git branch is intentionally kept.
-    await exec("git", ["worktree", "remove", "--force", params.worktreePath], { cwd: params.projectRoot });
+    await exec("git", ["worktree", "remove", "--force", target], { cwd: params.projectRoot });
   } catch (error) {
     // Already gone (manually removed) is fine, but prune the stale admin entry
     // immediately so recreating the same session cannot inherit the conflict.
-    if (!existsSync(params.worktreePath)) {
+    if (!existsSync(target)) {
       await pruneWorktrees({ projectRoot: params.projectRoot, execFileImpl: exec });
+      return;
+    }
+    // Registration may have disappeared between the preflight and removal.
+    if (!(await isRegistered())) {
+      await removeOrphanDirectory();
       return;
     }
     throw error;

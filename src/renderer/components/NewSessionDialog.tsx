@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { SESSION_NAME_MAX_LENGTH, truncateSessionName } from "../../shared/workflow/work-session";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { BranchList, ResolvedPr } from "../../shared/ipc/contract";
 import { BranchCombobox } from "./BranchCombobox";
@@ -56,7 +57,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
 
   function chooseBranch(branch: string): void {
     setReviewBranch(branch);
-    if (!nameTouched) setName(branch ? `Review ${branch}` : "");
+    if (!nameTouched) setName(branch ? truncateSessionName(`Review ${branch}`) : "");
   }
 
   function editName(value: string): void {
@@ -238,8 +239,12 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                       type="text"
                       placeholder="Auto-filled from the branch"
                       value={name}
+                      maxLength={SESSION_NAME_MAX_LENGTH}
                       onChange={(event) => editName(event.target.value)}
                     />
+                    <p className="field-hint">
+                      {name.length}/{SESSION_NAME_MAX_LENGTH} characters
+                    </p>
                   </div>
                 </>
               )}
@@ -256,8 +261,12 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                   placeholder="What are you working on?"
                   value={name}
                   autoFocus
+                  maxLength={SESSION_NAME_MAX_LENGTH}
                   onChange={(event) => editName(event.target.value)}
                 />
+                <p className="field-hint">
+                  {name.length}/{SESSION_NAME_MAX_LENGTH} characters
+                </p>
               </div>
 
               <div className="new-session-field">

@@ -6,7 +6,11 @@ import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-import { slugifySessionName } from "../../shared/workflow/work-session";
+import {
+  normalizeSessionName,
+  sessionSlugWithSuffix,
+  slugifySessionName,
+} from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import { buildWorktreeCreatePlan, createWorktree, pruneWorktrees, removeWorktree } from "./worktree-manager";
 import { addWorktreeExclude } from "./worktree-exclude";
@@ -123,6 +127,13 @@ function sameCommit(a: string, b: string): boolean {
   return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
+function sessionIdentity(name: string): { sessionName: string; baseSlug: string } {
+  const sessionName = normalizeSessionName(name);
+  const baseSlug = slugifySessionName(sessionName);
+  if (!baseSlug) throw new Error("Session name cannot be empty or punctuation-only");
+  return { sessionName, baseSlug };
+}
+
 async function worktreeHeadSha(worktreePath: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
@@ -231,7 +242,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
     const checkedOut = params.branchForSlug ? await checkedOutBranches(params.projectRoot) : new Set<string>();
 
     for (let suffix = 1; suffix < 10_000; suffix += 1) {
-      const candidate = suffix === 1 ? params.baseSlug : `${params.baseSlug}-${suffix}`;
+      const candidate = sessionSlugWithSuffix(params.baseSlug, suffix);
       const path = buildWorktreeCreatePlan({
         projectRoot: params.projectRoot,
         slug: candidate,
@@ -258,10 +269,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
     createSession({ projectId, projectRoot, name, kind, copyEnv }) {
       return runExclusive(async () => {
-        const baseSlug = slugifySessionName(name);
-        if (!baseSlug) {
-          throw new Error("Session name cannot be empty");
-        }
+        const { sessionName, baseSlug } = sessionIdentity(name);
 
         const branchForSlug = (slug: string): string => `${kind === "fix" ? "fix" : "feature"}/${slug}`;
         const slug = await allocateSlug({ projectRoot, baseSlug, branchForSlug });
@@ -279,7 +287,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           const record: WorkSession = {
             id: randomUUID(),
             projectId,
-            name,
+            name: sessionName,
             kind,
             slug,
             branch,
@@ -313,10 +321,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
     createReviewSession({ projectId, projectRoot, name, reviewBranch, baseBranch, pr, fetchFirst, expectedHeadSha }) {
       return runExclusive(async () => {
-        const baseSlug = slugifySessionName(name);
-        if (!baseSlug) {
-          throw new Error("Session name cannot be empty");
-        }
+        const { sessionName, baseSlug } = sessionIdentity(name);
         const slug = await allocateSlug({ projectRoot, baseSlug });
 
         // A PR-link review checks out a remote ref (origin/…) — make it current.
@@ -339,7 +344,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           if (expectedHeadSha) {
             const head = await worktreeHeadSha(worktreePath);
             if (!sameCommit(head, expectedHeadSha)) {
-              throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+              throw staleWorktreeError(sessionName, head, expectedHeadSha, fetchError);
             }
           }
           await addWorktreeExclude(worktreePath, REVIEW_ARTIFACT).catch(() => {});
@@ -348,7 +353,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           const record: WorkSession = {
             id: randomUUID(),
             projectId,
-            name,
+            name: sessionName,
             kind: "review",
             slug,
             branch: reviewBranch,
@@ -373,10 +378,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
 
     createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, expectedHeadSha }) {
       return runExclusive(async () => {
-        const baseSlug = slugifySessionName(name);
-        if (!baseSlug) {
-          throw new Error("Session name cannot be empty");
-        }
+        const { sessionName, baseSlug } = sessionIdentity(name);
 
         const records = await readAll();
         const existing = records.find(
@@ -417,7 +419,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           if (expectedHeadSha) {
             const head = await worktreeHeadSha(worktreePath);
             if (!sameCommit(head, expectedHeadSha)) {
-              throw staleWorktreeError(name, head, expectedHeadSha, fetchError);
+              throw staleWorktreeError(sessionName, head, expectedHeadSha, fetchError);
             }
           }
 
@@ -426,7 +428,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           const record: WorkSession = {
             id: randomUUID(),
             projectId,
-            name,
+            name: sessionName,
             kind: "pr-fix",
             slug,
             branch,
