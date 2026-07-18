@@ -13,7 +13,7 @@ describe("buildPrReviewKickoff", () => {
   it("first run: full diff from base, no prior reports, writes the artifact", () => {
     const out = buildPrReviewKickoff({ ...BASE, lastReviewedSha: null });
     expect(out).toContain("Revisa origin/feature/x contra origin/develop.");
-    expect(out).toContain("git diff origin/develop..HEAD");
+    expect(out).toContain("git diff origin/develop...HEAD");
     expect(out).toContain(".agent-pr-context.md");
     expect(out).toMatch(/lee COMPLETO/i);
     expect(out).toMatch(/por partes.*final del archivo/i);
