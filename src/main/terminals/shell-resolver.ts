@@ -15,10 +15,10 @@ export function resolveShell(params: { platform: NodeJS.Platform; env: NodeJS.Pr
 
 /**
  * A shell spec that RUNS `command` as the terminal's process rather than opening
- * an interactive prompt. On POSIX we go through a login shell (`-lc`) so the
- * user's PATH is populated — the agent CLI (`claude`, `codex`, …) lives there —
- * and `exec` so the agent replaces the shell: when the agent exits the PTY
- * closes, leaving no orphan shell behind.
+ * an interactive prompt. On POSIX we use an interactive login shell so both
+ * login files and interactive files such as `.zshrc` populate PATH — agent
+ * installers commonly add their bin directory there. `exec` then replaces the
+ * shell, so the PTY closes when the agent exits instead of leaving an orphan.
  */
 export function resolveShellForCommand(params: {
   platform: NodeJS.Platform;
@@ -31,5 +31,5 @@ export function resolveShellForCommand(params: {
     return { file: env["COMSPEC"] ?? "powershell.exe", args: ["-Command", command] };
   }
 
-  return { file: env["SHELL"] ?? "/bin/bash", args: ["-lc", `exec ${command}`] };
+  return { file: env["SHELL"] ?? "/bin/bash", args: ["-l", "-i", "-c", `exec ${command}`] };
 }
