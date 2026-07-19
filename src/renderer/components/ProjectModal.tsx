@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
-import { createDefaultProjectRuntimeConfig, DANGEROUS_SUPPORTED } from "../../shared/workflow/agent-runtime-config";
+import {
+  createAgentRuntimeConfig,
+  createDefaultProjectRuntimeConfig,
+  DANGEROUS_SUPPORTED,
+} from "../../shared/workflow/agent-runtime-config";
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
+import { AGENT_RUNTIME_OPTION_CATALOG } from "../../shared/workflow/agent-runtime-options";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import { createDefaultReviewConfig, DEFAULT_REVIEW_KICKOFF } from "../../shared/workflow/review-config";
@@ -12,7 +17,7 @@ import type { ProjectRecord } from "../../shared/ipc/contract";
 
 const VCS_HOSTS: (VcsHost | "none")[] = ["none", "bitbucket", "github"];
 
-const AGENT_KINDS: AgentKind[] = ["claude", "codex", "copilot", "opencode", "gemini", "antigravity"];
+const AGENT_KINDS: AgentKind[] = ["claude", "codex", "kimi", "copilot", "opencode", "gemini", "antigravity"];
 const WORKFLOW_STAGES: WorkflowStage[] = ["architect", "implementer", "reviewer"];
 
 const STAGE_LABELS: Record<WorkflowStage, string> = {
@@ -24,19 +29,11 @@ const STAGE_LABELS: Record<WorkflowStage, string> = {
 const MODEL_PLACEHOLDERS: Record<AgentKind, string> = {
   claude: "opus",
   codex: "gpt-5.5",
+  kimi: "kimi-code/kimi-for-coding",
   opencode: "anthropic/claude-opus-4-8",
   copilot: "(not applied)",
   gemini: "gemini-2.5-pro",
   antigravity: "(unverified)",
-};
-
-const EFFORT_PLACEHOLDERS: Record<AgentKind, string> = {
-  claude: "high",
-  codex: "high",
-  opencode: "not supported",
-  copilot: "not supported",
-  gemini: "not supported",
-  antigravity: "not supported",
 };
 
 type RepoSourceMode = "existing" | "new" | "clone";
@@ -122,6 +119,13 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
     setRuntimeConfig((current) => ({
       ...current,
       [stage]: { ...current[stage], ...patch },
+    }));
+  }
+
+  function changeStageKind(stage: WorkflowStage, kind: AgentKind): void {
+    setRuntimeConfig((current) => ({
+      ...current,
+      [stage]: createAgentRuntimeConfig(kind),
     }));
   }
 
@@ -391,68 +395,111 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
 
           <section>
             <h3>Per-stage agent config</h3>
-            <table className="stage-config-table">
-              <thead>
-                <tr>
-                  <th>Stage</th>
-                  <th>Agent</th>
-                  <th>Model</th>
-                  <th>Effort</th>
-                  <th>Dangerous</th>
-                </tr>
-              </thead>
-              <tbody>
-                {WORKFLOW_STAGES.map((stage) => {
-                  const config = runtimeConfig[stage];
-                  const dangerousSupported = DANGEROUS_SUPPORTED[config.kind];
-                  return (
-                    <tr key={stage}>
-                      <td>{STAGE_LABELS[stage]}</td>
-                      <td>
-                        <select
-                          value={config.kind}
-                          onChange={(event) => updateStage(stage, { kind: event.target.value as AgentKind })}
-                        >
-                          {AGENT_KINDS.map((kind) => (
-                            <option key={kind} value={kind}>
-                              {kind}
+            <p className="section-hint">
+              Known model suggestions follow the selected CLI; custom aliases remain editable. Effort is only available
+              when the CLI exposes a supported launch value.
+            </p>
+            <div className="stage-config-table-wrap">
+              <table className="stage-config-table">
+                <colgroup>
+                  <col className="stage-config-col-stage" />
+                  <col className="stage-config-col-agent" />
+                  <col className="stage-config-col-model" />
+                  <col className="stage-config-col-effort" />
+                  <col className="stage-config-col-dangerous" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th>Agent</th>
+                    <th>Model</th>
+                    <th>Effort</th>
+                    <th>Dangerous</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {WORKFLOW_STAGES.map((stage) => {
+                    const config = runtimeConfig[stage];
+                    const optionCatalog = AGENT_RUNTIME_OPTION_CATALOG[config.kind];
+                    const modelListId = `model-options-${stage}`;
+                    const unsupportedCurrentEffort =
+                      config.effort !== null && !optionCatalog.effortOptions.includes(config.effort);
+                    const dangerousSupported = DANGEROUS_SUPPORTED[config.kind];
+                    return (
+                      <tr key={stage}>
+                        <td>{STAGE_LABELS[stage]}</td>
+                        <td>
+                          <select
+                            value={config.kind}
+                            onChange={(event) => changeStageKind(stage, event.target.value as AgentKind)}
+                          >
+                            {AGENT_KINDS.map((kind) => (
+                              <option key={kind} value={kind}>
+                                {kind}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            className="stage-config-model"
+                            type="text"
+                            list={optionCatalog.modelSupported ? modelListId : undefined}
+                            placeholder={MODEL_PLACEHOLDERS[config.kind]}
+                            value={config.model}
+                            disabled={!optionCatalog.modelSupported && !config.model}
+                            aria-label={`${STAGE_LABELS[stage]} model`}
+                            onChange={(event) => updateStage(stage, { model: event.target.value })}
+                          />
+                          {optionCatalog.modelSupported && (
+                            <datalist id={modelListId}>
+                              {optionCatalog.modelSuggestions.map((model) => (
+                                <option key={model} value={model} />
+                              ))}
+                            </datalist>
+                          )}
+                        </td>
+                        <td>
+                          <select
+                            value={config.effort ?? ""}
+                            disabled={optionCatalog.effortOptions.length === 0 && config.effort === null}
+                            aria-label={`${STAGE_LABELS[stage]} effort`}
+                            onChange={(event) => updateStage(stage, { effort: event.target.value || null })}
+                          >
+                            <option value="">
+                              {optionCatalog.effortOptions.length > 0 ? "Provider default" : "Not supported"}
                             </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          placeholder={MODEL_PLACEHOLDERS[config.kind]}
-                          value={config.model}
-                          onChange={(event) => updateStage(stage, { model: event.target.value })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          placeholder={EFFORT_PLACEHOLDERS[config.kind]}
-                          value={config.effort ?? ""}
-                          onChange={(event) => updateStage(stage, { effort: event.target.value || null })}
-                        />
-                      </td>
-                      <td className="stage-config-dangerous">
-                        <input
-                          type="checkbox"
-                          checked={config.dangerous}
-                          disabled={!dangerousSupported}
-                          onChange={(event) => updateStage(stage, { dangerous: event.target.checked })}
-                        />
-                        {!dangerousSupported && <span className="warning">No confirmed bypass flag — ignored.</span>}
-                        {dangerousSupported && config.dangerous && (
-                          <span className="warning">Skips permission prompts for this stage.</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                            {unsupportedCurrentEffort && (
+                              <option value={config.effort ?? ""}>{config.effort} (current, unsupported)</option>
+                            )}
+                            {optionCatalog.effortOptions.map((effort) => (
+                              <option key={effort} value={effort}>
+                                {effort}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="stage-config-dangerous">
+                          <label className="stage-config-dangerous-toggle">
+                            <input
+                              type="checkbox"
+                              checked={config.dangerous}
+                              disabled={!dangerousSupported}
+                              onChange={(event) => updateStage(stage, { dangerous: event.target.checked })}
+                            />
+                            <span>Bypass</span>
+                          </label>
+                          {!dangerousSupported && <span className="warning">No confirmed bypass flag — ignored.</span>}
+                          {dangerousSupported && config.dangerous && (
+                            <span className="warning">Skips permission prompts for this stage.</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section>

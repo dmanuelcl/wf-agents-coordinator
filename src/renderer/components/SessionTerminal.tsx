@@ -7,10 +7,12 @@ import "@xterm/xterm/css/xterm.css";
 import type {
   AgentLaunchMode,
   SessionAgentRole,
+  SessionRoleLaunch,
   TerminalDataEvent,
   TerminalExitEvent,
   WorkSession,
 } from "../../shared/ipc/contract";
+import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { createTerminalFollowUpGate } from "./terminal-follow-up-gate";
 import { hasBlockingStartupConfirmation } from "./terminal-startup-readiness";
 
@@ -80,9 +82,9 @@ const TUI_MODE_RESET =
 
 /**
  * One agent (or plain shell) terminal for a session tab. For an agent role it
- * asks the main process how to launch — `claude --session-id <uuid> …` plus the
- * `wf <verb> <checkpoint>` message — spawns the agent as the PTY process, and
- * then PRE-TYPES the wf command WITHOUT a trailing newline so the user presses
+ * asks the main process how to launch the configured CLI plus the `wf <verb>
+ * <checkpoint>` message, spawns the agent as the PTY process, and then
+ * PRE-TYPES the wf command WITHOUT a trailing newline so the user presses
  * Enter. The `shell` role is just a plain terminal in the worktree, no agent.
  */
 export interface SessionTerminalHandle {
@@ -254,6 +256,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     async function start(): Promise<void> {
       let agentCommand: string | null = null;
+      let agentKind: SessionRoleLaunch["agentKind"] | null = null;
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
@@ -286,6 +289,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
         if (disposed) return;
         agentCommand = launch.agentCommand;
+        agentKind = launch.agentKind;
         shellCwd = launch.cwd;
         wfPreType = launch.wfCommand;
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
@@ -324,6 +328,19 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // loses the output that schedules the kickoff.
       const pendingData: TerminalDataEvent[] = [];
       const pendingExits: TerminalExitEvent[] = [];
+      let recordedKimiSessionId: string | null = null;
+
+      const captureKimiSessionId = (): void => {
+        if (disposed || agentKind !== "kimi" || role === "shell" || role === "setup") return;
+        const kimiSessionId = findKimiSessionId(visibleTerminalText(term));
+        if (!kimiSessionId || kimiSessionId === recordedKimiSessionId) return;
+        recordedKimiSessionId = kimiSessionId;
+        void window.agentCoordinator.sessions
+          .recordRoleAgentSession(session.id, role, kimiSessionId)
+          .catch((error: unknown) => {
+            if (!disposed) setWarnings((current) => [...current, `Could not persist Kimi session: ${String(error)}`]);
+          });
+      };
 
       const handleData = (event: TerminalDataEvent): void => {
         if (!ptyId) {
@@ -331,7 +348,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           return;
         }
         if (event.sessionId !== ptyId) return;
-        term.write(event.data);
+        term.write(event.data, captureKimiSessionId);
         if (phase === "agent") followUpGate?.onOutput();
       };
 

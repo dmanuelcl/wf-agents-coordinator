@@ -2,7 +2,7 @@ import type { ProjectRecord, ProjectUpdateInput } from "../../main/projects/proj
 import type { WorktreeCreatePlan, WorktreeDetection } from "../../main/projects/worktree-manager";
 import type { ProjectSessionState } from "../../main/terminals/session-state-store";
 import type { WorkspaceLayout } from "../../main/projects/workspace-layout-store";
-import type { ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
+import type { AgentKind, ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
 import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
 import type { ReviewConfig } from "../workflow/review-config";
 import type { VcsConfig } from "../workflow/vcs-config";
@@ -32,9 +32,10 @@ export type AgentLaunchMode = "fresh" | "resume";
 // conversation id, and any launch warnings.
 export interface SessionRoleLaunch {
   agentCommand: string;
+  agentKind: AgentKind;
   wfCommand: string | null;
   cwd: string;
-  sessionUuid: string;
+  sessionUuid: string | null;
   warnings: string[];
 }
 
@@ -120,6 +121,7 @@ export const IPC_CHANNELS = {
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
   sessionsBuildRoleLaunch: "sessions:build-role-launch",
+  sessionsRecordRoleAgentSession: "sessions:record-role-agent-session",
   sessionStateGet: "session-state:get",
   sessionStateSet: "session-state:set",
   workspaceGetLayout: "workspace:get-layout",
@@ -256,6 +258,7 @@ export interface AgentCoordinatorApi {
     unwatchCheckpoint(sessionId: string): Promise<void>;
     onCheckpointDetected(cb: (e: SessionCheckpointDetectedEvent) => void): () => void;
     buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
+    recordRoleAgentSession(sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void>;
   };
   terminal: TerminalApi;
   sessionState: {

@@ -45,6 +45,7 @@ function credsFrom(email: string, token: string): { token: string; email?: strin
 }
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import { buildAgentLaunchCommand } from "../../shared/workflow/agent-runtime-config";
+import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
 import type { LaunchRole } from "../../shared/workflow/role-launch-plan";
@@ -618,6 +619,25 @@ export function registerIpcHandlers(params: {
   });
 
   ipcMain.handle(
+    IPC_CHANNELS.sessionsRecordRoleAgentSession,
+    async (_event, sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void> => {
+      const session = await sessionRegistry.getSession({ sessionId });
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+      const project = await findProject(projectRegistry, session.projectId);
+      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      if (agentConfig.kind !== "kimi") {
+        throw new Error(`Cannot record a Kimi session id for ${agentConfig.kind}`);
+      }
+      if (!isKimiSessionId(agentSessionId)) {
+        throw new Error(`Invalid Kimi session id: ${agentSessionId}`);
+      }
+      await sessionAgentUuidStore.set({ sessionId, role, uuid: agentSessionId });
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.sessionsBuildRoleLaunch,
     async (_event, sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch> => {
       const session = await sessionRegistry.getSession({ sessionId });
@@ -627,9 +647,9 @@ export function registerIpcHandlers(params: {
       const project = await findProject(projectRegistry, session.projectId);
       const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
 
-      // `--resume` needs a previously minted id; if we're asked to resume one we
-      // never stored (first launch, or the store was cleared), fall back to a
-      // clean fresh launch so claude doesn't try to resume a non-existent chat.
+      // A restore needs a previously captured/minted id. If the store was
+      // cleared, fall back to a clean fresh launch instead of asking the CLI to
+      // resume a non-existent conversation.
       let effectiveMode: AgentLaunchMode = mode;
       let uuid = mode === "resume" ? await sessionAgentUuidStore.get({ sessionId, role }) : null;
 
@@ -642,13 +662,22 @@ export function registerIpcHandlers(params: {
         effectiveMode = "fresh";
       }
 
-      if (!uuid) {
+      // The current Kimi CLI does not accept a caller-provided id when creating
+      // a TUI session. Launch it without --session; SessionTerminal captures
+      // the session_<uuid> Kimi renders and persists it through the IPC above.
+      // On reopen, the stored id is passed as --session for an exact resume.
+      if (!uuid && agentConfig.kind === "kimi") {
+        effectiveMode = "fresh";
+      } else if (!uuid) {
         effectiveMode = "fresh";
         uuid = randomUUID();
         await sessionAgentUuidStore.set({ sessionId, role, uuid });
       }
 
-      const launch = buildAgentLaunchCommand(agentConfig, { id: uuid, mode: effectiveMode });
+      const launch = buildAgentLaunchCommand(
+        agentConfig,
+        uuid ? { id: uuid, mode: effectiveMode } : undefined,
+      );
       // A fresh PR session auto-runs its kickoff. A restored PR session only
       // resumes the conversation: injecting it again would repeat the work.
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
@@ -656,6 +685,7 @@ export function registerIpcHandlers(params: {
         : null;
       return {
         agentCommand: launch.command,
+        agentKind: agentConfig.kind,
         wfCommand,
         cwd: session.worktreePath,
         sessionUuid: uuid,

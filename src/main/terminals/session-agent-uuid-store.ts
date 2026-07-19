@@ -5,10 +5,11 @@ import type { SessionAgentRole } from "../../shared/workflow/session-role-launch
 type Store = Record<string, Partial<Record<SessionAgentRole, string>>>;
 
 /**
- * Remembers the agent conversation id (`claude --session-id <uuid>`) minted for
- * each (session, role) tab, so a later launch can restore that exact
- * conversation with `--resume <uuid>`. One flat JSON file, mirroring the other
- * registries.
+ * Remembers the agent conversation id for each (session, role) tab. Claude's
+ * id is minted by the app; Kimi's `session_<uuid>` is captured from its TUI.
+ * A later launch can then restore that exact conversation instead of relying
+ * on a cwd-wide "most recent" heuristic. One flat JSON file, mirroring the
+ * other registries.
  */
 export interface SessionAgentUuidStore {
   get(params: { sessionId: string; role: SessionAgentRole }): Promise<string | null>;

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentLaunchCommand, createDefaultProjectRuntimeConfig } from "./agent-runtime-config";
+import {
+  buildAgentLaunchCommand,
+  createAgentRuntimeConfig,
+  createDefaultProjectRuntimeConfig,
+} from "./agent-runtime-config";
 import type { AgentRuntimeConfig } from "./agent-runtime-config";
 
 function makeConfig(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig {
@@ -58,6 +62,35 @@ describe("buildAgentLaunchCommand — codex", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "codex", model: "opus", effort: null }));
     expect(result.command).not.toContain("model_reasoning_effort");
     expect(result.command).toContain('-c model_reasoning_summary="detailed"');
+  });
+});
+
+describe("buildAgentLaunchCommand — kimi", () => {
+  const SID = "session_11111111-1111-4111-8111-111111111111";
+
+  it("launches a fresh interactive Kimi session with the configured model and yolo mode", () => {
+    const result = buildAgentLaunchCommand(
+      makeConfig({ kind: "kimi", model: "kimi-code/kimi-for-coding", dangerous: true }),
+      { id: SID, mode: "fresh" },
+    );
+    expect(result.command).toBe("kimi --model kimi-code/kimi-for-coding --yolo");
+    expect(result.command).not.toContain(SID);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("resumes the exact captured Kimi session id", () => {
+    const result = buildAgentLaunchCommand(
+      makeConfig({ kind: "kimi", model: "kimi-code/kimi-for-coding" }),
+      { id: SID, mode: "resume" },
+    );
+    expect(result.command).toBe(`kimi --session ${SID} --model kimi-code/kimi-for-coding`);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns when effort is configured because the current CLI has no effort flag", () => {
+    const result = buildAgentLaunchCommand(makeConfig({ kind: "kimi", model: "", effort: "high" }));
+    expect(result.command).toBe("kimi");
+    expect(result.warnings.some((warning) => /effort ignored/i.test(warning))).toBe(true);
   });
 });
 
@@ -134,6 +167,17 @@ describe("createDefaultProjectRuntimeConfig", () => {
     const config = createDefaultProjectRuntimeConfig();
     config.architect.model = "changed";
     expect(config.implementer.model).not.toBe("changed");
+  });
+});
+
+describe("createAgentRuntimeConfig", () => {
+  it("uses Kimi's official coding-model alias and resets incompatible options", () => {
+    expect(createAgentRuntimeConfig("kimi")).toEqual({
+      kind: "kimi",
+      model: "kimi-code/kimi-for-coding",
+      effort: null,
+      dangerous: false,
+    });
   });
 });
 

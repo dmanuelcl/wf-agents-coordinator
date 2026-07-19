@@ -74,6 +74,8 @@ const api: AgentCoordinatorApi = {
     },
     buildRoleLaunch: (sessionId, role, mode) =>
       ipcRenderer.invoke(IPC_CHANNELS.sessionsBuildRoleLaunch, sessionId, role, mode),
+    recordRoleAgentSession: (sessionId, role, agentSessionId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionsRecordRoleAgentSession, sessionId, role, agentSessionId),
   },
   terminal: {
     create: (input) => ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.create, input),

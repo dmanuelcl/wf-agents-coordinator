@@ -2614,8 +2614,8 @@ pre {
 
 /* ── Project modal ──────────────────────────────────────────── */
 .project-modal {
-  max-width: 640px;
-  width: 100%;
+  max-width: 920px;
+  width: calc(100% - 32px);
   max-height: 85vh;
   overflow-y: auto;
 }
@@ -2778,7 +2778,29 @@ input[type="text"]:focus,
 }
 
 .stage-config-table {
+  width: 100%;
+  min-width: 780px;
+  table-layout: fixed;
   font-size: 13px;
+}
+.stage-config-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.stage-config-col-stage {
+  width: 12%;
+}
+.stage-config-col-agent {
+  width: 16%;
+}
+.stage-config-col-model {
+  width: 30%;
+}
+.stage-config-col-effort {
+  width: 17%;
+}
+.stage-config-col-dangerous {
+  width: 25%;
 }
 .stage-config-table th {
   color: var(--muted-fg);
@@ -2791,13 +2813,20 @@ input[type="text"]:focus,
   width: 100%;
 }
 .stage-config-dangerous {
+  vertical-align: top;
+}
+.stage-config-dangerous-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
+  color: var(--muted-fg);
+  font-size: 12px;
 }
 .stage-config-dangerous .warning {
+  display: block;
   font-size: 11px;
-  margin: 0;
+  margin: 5px 0 0;
+  line-height: 1.35;
 }
 
 .section-hint {

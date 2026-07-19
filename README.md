@@ -11,7 +11,7 @@ Project  ─►  Session (= a git worktree on its own branch)  ─►  Role tabs
 ```
 
 Each session gets an isolated worktree so several tasks in one repo never collide.
-Agents (Claude, Codex, Gemini, Copilot, OpenCode) run as real terminal processes;
+Agents (Claude, Codex, Kimi, Gemini, Copilot, OpenCode) run as real terminal processes;
 the app just orchestrates them, watches for the workflow checkpoint, and gives you
 files/diff/compose tooling around each one.
 
@@ -28,7 +28,41 @@ pnpm dev              # rebuilds native modules + starts electron-vite with hot 
 session — see [How it works](#how-it-works).
 
 **Requirements:** Node 20+ and `pnpm`. Agents you want to launch (`claude`,
-`codex`, …) must be installed and on your `PATH`.
+`codex`, `kimi`, …) must be installed and on your `PATH`.
+
+### Kimi Code CLI
+
+The Kimi integration targets the current TypeScript
+[`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) CLI (executable
+name: `kimi`), not the legacy Python `kimi-cli` package. Install it with one of
+the official options:
+
+```bash
+brew install kimi-code
+# or: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+# or: npm install -g @moonshot-ai/kimi-code@latest
+```
+
+Then verify it and authenticate once in a regular terminal:
+
+```bash
+kimi --version
+kimi                 # run /login on first launch
+```
+
+In a project's per-stage agent config, selecting **kimi** supplies the official
+`kimi-code/kimi-for-coding` model alias by default; clearing the model field lets
+Kimi use its configured `default_model`. **Dangerous** maps to `--yolo`. The
+current CLI exposes no reasoning-effort launch flag, so a non-empty Effort value
+is ignored with a visible warning.
+
+For a new role tab the app runs `kimi` and captures the `session_<uuid>` shown by
+Kimi. It persists that id per session + role and reopens the exact conversation
+with `kimi --session <id>`. It deliberately does not use `--continue`, because
+all workflow roles share a worktree and "most recent for this directory" could
+resume the wrong agent. See Kimi's official [command
+reference](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html)
+and [session guide](https://moonshotai.github.io/kimi-code/en/guides/sessions.html).
 
 ---
 
@@ -117,7 +151,8 @@ three roles plus a Log:
   latest **Plan de corrección** as a dedicated card, and reconciled open/closed
   finding counts across review and fix rounds.
 
-Opening a role tab spawns the agent (`claude --resume …`, `codex …`, etc.) and
+Opening a role tab spawns the agent (`claude --resume …`, `kimi --session …`,
+`codex …`, etc.) and
 **pre-types** the matching `wf` command (e.g. `wf implement <checkpoint>`) without
 submitting — you press Enter. Each tab shows a green "how to start" hint for its
 state. When an agent quits, the tab drops to a usable shell instead of dying.
@@ -142,7 +177,7 @@ terminal to insert its absolute path (so the agent can read it).
 ### Persistence
 Per-user state lives in Electron's `userData`: the project registry
 (`better-sqlite3`), `sessions.json`, `workspace-layout.json` (which tabs were open),
-per-shell scrollback, and per-agent session ids (for `--resume`). Reopening the app
+per-shell scrollback, and per-agent session ids (for exact resume flags). Reopening the app
 restores your open sessions and tabs.
 
 ---

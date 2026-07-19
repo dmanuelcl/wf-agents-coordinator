@@ -1,4 +1,4 @@
-export type AgentKind = "claude" | "codex" | "opencode" | "copilot" | "gemini" | "antigravity";
+export type AgentKind = "claude" | "codex" | "kimi" | "opencode" | "copilot" | "gemini" | "antigravity";
 
 export interface AgentRuntimeConfig {
   kind: AgentKind;
@@ -11,18 +11,30 @@ export type WorkflowStage = "architect" | "implementer" | "reviewer";
 
 export type ProjectRuntimeConfig = Record<WorkflowStage, AgentRuntimeConfig>;
 
-const DEFAULT_AGENT_RUNTIME_CONFIG: AgentRuntimeConfig = {
-  kind: "claude",
-  model: "opus",
-  effort: null,
-  dangerous: false,
+export const DEFAULT_AGENT_MODELS: Readonly<Record<AgentKind, string>> = {
+  claude: "opus",
+  codex: "gpt-5.5",
+  kimi: "kimi-code/kimi-for-coding",
+  opencode: "anthropic/claude-opus-4-8",
+  copilot: "",
+  gemini: "gemini-2.5-pro",
+  antigravity: "",
 };
+
+export function createAgentRuntimeConfig(kind: AgentKind = "claude"): AgentRuntimeConfig {
+  return {
+    kind,
+    model: DEFAULT_AGENT_MODELS[kind],
+    effort: null,
+    dangerous: false,
+  };
+}
 
 export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
   return {
-    architect: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
-    implementer: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
-    reviewer: { ...DEFAULT_AGENT_RUNTIME_CONFIG },
+    architect: createAgentRuntimeConfig(),
+    implementer: createAgentRuntimeConfig(),
+    reviewer: createAgentRuntimeConfig(),
   };
 }
 
@@ -30,6 +42,7 @@ export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
 export const DANGEROUS_SUPPORTED: Record<AgentKind, boolean> = {
   claude: true,
   codex: true,
+  kimi: true,
   copilot: true,
   gemini: true,
   opencode: false,
@@ -42,10 +55,10 @@ export interface AgentLaunchCommandResult {
 }
 
 /**
- * A deterministic-restore request for an agent launch. `fresh` stamps a new
- * session id onto the first launch; `resume` restores that exact conversation
- * on reopen. Only claude wires this today (see `buildClaudeLaunchCommand`);
- * every other kind relaunches fresh and warns.
+ * A deterministic session directive for an agent launch. Claude accepts an
+ * app-minted id for both modes. Kimi mints its own id on a fresh launch, which
+ * the renderer captures, and accepts it here on resume. Every other kind
+ * relaunches fresh and warns.
  */
 export interface AgentSessionLaunch {
   id: string;
@@ -56,7 +69,7 @@ function model(config: AgentRuntimeConfig): string {
   return config.model.trim();
 }
 
-/** Append the "resume is not wired" warning when a non-claude kind is asked to resume/restore. */
+/** Append the "resume is not wired" warning when an unsupported kind is asked to resume/restore. */
 function withUnwiredSessionWarning(
   result: AgentLaunchCommandResult,
   kind: AgentKind,
@@ -93,6 +106,22 @@ function buildCodexLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommand
   if (config.dangerous) parts.push("--ask-for-approval", "never", "--sandbox", "danger-full-access");
   parts.push("-c", 'model_reasoning_summary="detailed"', "-c", "model_supports_reasoning_summaries=true");
   return { command: parts.join(" "), warnings: [] };
+}
+
+// kimi [--session <existing-id>] [--model <model>] [--yolo]
+// A fresh launch intentionally omits --session: the current Kimi Code CLI
+// generates its own session_<uuid>, which the terminal captures for reopening.
+function buildKimiLaunchCommand(
+  config: AgentRuntimeConfig,
+  session: AgentSessionLaunch | undefined,
+): AgentLaunchCommandResult {
+  const parts = ["kimi"];
+  if (session?.mode === "resume") parts.push("--session", session.id);
+  if (model(config)) parts.push("--model", model(config));
+  if (config.dangerous) parts.push("--yolo");
+  const warnings: string[] = [];
+  if (config.effort) warnings.push("Kimi Code CLI has no reasoning-effort launch flag; effort ignored.");
+  return { command: parts.join(" "), warnings };
 }
 
 // copilot [--allow-all]
@@ -146,6 +175,8 @@ export function buildAgentLaunchCommand(
       return buildClaudeLaunchCommand(config, session);
     case "codex":
       return withUnwiredSessionWarning(buildCodexLaunchCommand(config), config.kind, session);
+    case "kimi":
+      return buildKimiLaunchCommand(config, session);
     case "opencode":
       return withUnwiredSessionWarning(buildOpencodeLaunchCommand(config), config.kind, session);
     case "copilot":
