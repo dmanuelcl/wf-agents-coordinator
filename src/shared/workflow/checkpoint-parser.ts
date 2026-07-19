@@ -308,13 +308,20 @@ function parseFindings(sectionText: string): { findings: WorkflowFinding[]; coun
       currentPlan = planFromLogHeading(heading);
     }
 
-    const match = line.match(/^\s*-\s*\[([ xX])\]\s*([IV]\d+)\b(.*)$/i);
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s*(?:\*\*|`)?([FIV]\d+)(?:\*\*|`)?(?=\s|[·:—-]|$)(.*)$/i);
     if (!match) continue;
     const id = (match[2] ?? "").toUpperCase();
     const remainder = (match[3] ?? "").trim();
-    const scopedId = `${currentPlan ?? "checkpoint"}:${id}`;
+    // FEATURE_REVIEW findings are durable across the entire feature and must
+    // reconcile independently of whichever plan a nearby heading may mention.
+    // Conversely, feature-wide summaries may repeat already-reconciled I/V ids
+    // without enough Plan context to disambiguate them. Their authoritative
+    // state remains in each Plan's own review thread, so do not duplicate them.
+    if (!id.startsWith("F") && currentPlan === null) continue;
+    const findingPlan = id.startsWith("F") ? null : currentPlan;
+    const scopedId = `${findingPlan ?? "checkpoint"}:${id}`;
     byScopedId.set(scopedId, {
-      plan: currentPlan,
+      plan: findingPlan,
       id,
       status: findingStatus((match[1] ?? "").toLowerCase() === "x", remainder),
       summary: remainder.replace(/^[-—:]\s*/, ""),

@@ -118,6 +118,34 @@ describe("decideConductor — forward progress", () => {
     expect(p2.action.kind).toBe("send");
   });
 
+  it("advances to FEATURE_REVIEW while status is IN_PROGRESS even when every ledger row is done", () => {
+    const featureReview = checkpoint({
+      role: "reviewer",
+      command: "wf review docs/x-checkpoint.md",
+      task: "FEATURE_REVIEW — holistic whole-branch review",
+      status: "IN_PROGRESS",
+    });
+    featureReview.ledgerRows = [
+      {
+        index: "1",
+        plan: "Plan-1",
+        implement: "✅",
+        archReview: "✅",
+        prReview: "✅",
+        state: "✅ DONE",
+        rawCells: ["1", "Plan-1", "✅", "✅", "✅", "✅ DONE"],
+      },
+    ];
+
+    const { action } = decideConductor({ prev: INITIAL_CONDUCTOR_STATE, checkpoint: featureReview, config: CONFIG });
+
+    expect(action).toMatchObject({
+      kind: "send",
+      role: "reviewer",
+      command: "wf review docs/x-checkpoint.md",
+    });
+  });
+
   it("re-runs review after a fix: review X → implement X → review X, the final review sends (not swallowed)", () => {
     const rev1 = decideConductor({
       prev: INITIAL_CONDUCTOR_STATE,

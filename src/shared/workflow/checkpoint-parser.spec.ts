@@ -345,6 +345,75 @@ Started the latest correction plan.
     ]);
   });
 
+  it("reconciles FEATURE_REVIEW findings as feature-wide F ids", () => {
+    const markdown = `${FEATURE_CHECKPOINT.trim()}
+
+## 2026-07-19 · reviewer · FEATURE_REVIEW → ⚠ ISSUES
+
+- [ ] **F1** · [integration] · src/contracts.ts:8 — Plans disagree on the shared contract.
+- [ ] F2 [flow][src/feature.ts:20]: The assembled flow skips cancellation.
+
+### Plan de corrección
+
+#### Paso 1 — Unify the contract [origen: F1]
+
+- **Archivos:** src/contracts.ts
+
+## 2026-07-19 · implementer · FIX · FEATURE_REVIEW → ✅
+
+- [x] **F1** RESOLVED — Evidencia: src/contracts.ts:8 · tests 6/6
+
+## 2026-07-19 · reviewer · FEATURE_REVIEW → ⚠ ISSUES
+
+- [x] **F1** RESOLVED — Evidencia: src/contracts.ts:8
+- [ ] F2 PENDING — Evidencia: src/feature.ts:20
+- [ ] F3 [dup][src/shared.ts:4]: Two plans introduced equivalent helpers.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.findingCounts).toEqual({ open: 2, closed: 1, total: 3 });
+    expect(result.findings.map(({ plan, id, status }) => ({ plan, id, status }))).toEqual([
+      { plan: null, id: "F1", status: "RESOLVED" },
+      { plan: null, id: "F2", status: "PENDING" },
+      { plan: null, id: "F3", status: "PENDING" },
+    ]);
+  });
+
+  it("does not duplicate plan-scoped I/V findings repeated by FEATURE_REVIEW", () => {
+    const markdown = `${FEATURE_CHECKPOINT.trim()}
+
+## 2026-07-19 · architect · ARCH_REVIEW · Plan-1 → ⚠ ISSUES
+
+- [ ] I1 (blocking): The plan contract is incomplete.
+
+## 2026-07-19 · implementer · FIX · Plan-1 → ✅
+
+- [x] I1 RESOLVED — Evidencia: docs/workflow/plans/plan-1.md:20
+
+## 2026-07-19 · reviewer · PR_REVIEW · Plan-1 → ⚠ ISSUES
+
+- [ ] V1 [logic][src/feature.ts:8]: The plan implementation skips an edge.
+
+## 2026-07-19 · reviewer · PR_REVIEW · Plan-1 → ✅ PASS
+
+- [x] V1 RESOLVED — Evidencia: src/feature.ts:8 · tests 5/5
+
+## 2026-07-19 · reviewer · FEATURE_REVIEW → ✅ PASS
+
+- [x] I1 RESOLVED — confirmed against the assembled branch.
+- [x] V1 RESOLVED — confirmed against the assembled branch.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.findingCounts).toEqual({ open: 0, closed: 2, total: 2 });
+    expect(result.findings.map(({ plan, id, status }) => ({ plan, id, status }))).toEqual([
+      { plan: "Plan-1", id: "I1", status: "RESOLVED" },
+      { plan: "Plan-1", id: "V1", status: "RESOLVED" },
+    ]);
+  });
+
   it("strips a trailing template comment from a frontmatter value", () => {
     const markdown = `---
 feature: Comment test
