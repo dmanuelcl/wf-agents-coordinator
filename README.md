@@ -53,8 +53,9 @@ kimi                 # run /login on first launch
 In a project's per-stage agent config, selecting **kimi** supplies the official
 `kimi-code/kimi-for-coding` model alias by default; clearing the model field lets
 Kimi use its configured `default_model`. **Dangerous** maps to `--yolo`. The
-current CLI exposes no reasoning-effort launch flag, so a non-empty Effort value
-is ignored with a visible warning.
+Effort selector supports `low`, `medium`, `high`, `xhigh`, and `max`; the app
+applies it only to that agent process through `KIMI_MODEL_THINKING_EFFORT`, so it
+does not rewrite the user's global Kimi configuration.
 
 For a new role tab the app runs `kimi` and captures the `session_<uuid>` shown by
 Kimi. It persists that id per session + role and reopens the exact conversation

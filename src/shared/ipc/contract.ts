@@ -33,6 +33,7 @@ export type AgentLaunchMode = "fresh" | "resume";
 export interface SessionRoleLaunch {
   agentCommand: string;
   agentKind: AgentKind;
+  environment: Record<string, string>;
   wfCommand: string | null;
   cwd: string;
   sessionUuid: string | null;
@@ -187,6 +188,7 @@ export interface TerminalApi {
     cols: number;
     rows: number;
     launchCommand?: string | null;
+    environment?: Record<string, string>;
     persistKey?: string | null;
   }): Promise<string>;
   write(sessionId: string, data: string): void;

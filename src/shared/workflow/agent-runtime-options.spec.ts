@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AGENT_RUNTIME_OPTION_CATALOG } from "./agent-runtime-options";
 
 describe("AGENT_RUNTIME_OPTION_CATALOG", () => {
-  it("offers the effort values supported by the Claude and Codex launchers", () => {
+  it("offers the effort values supported by the Claude, Codex, and Kimi launchers", () => {
     expect(AGENT_RUNTIME_OPTION_CATALOG.claude.effortOptions).toEqual([
       "low",
       "medium",
@@ -17,10 +17,16 @@ describe("AGENT_RUNTIME_OPTION_CATALOG", () => {
       "high",
       "xhigh",
     ]);
+    expect(AGENT_RUNTIME_OPTION_CATALOG.kimi.effortOptions).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
   });
 
   it("does not offer controls that the launch command cannot apply", () => {
-    expect(AGENT_RUNTIME_OPTION_CATALOG.kimi.effortOptions).toEqual([]);
     expect(AGENT_RUNTIME_OPTION_CATALOG.copilot.modelSupported).toBe(false);
     expect(AGENT_RUNTIME_OPTION_CATALOG.copilot.effortOptions).toEqual([]);
   });

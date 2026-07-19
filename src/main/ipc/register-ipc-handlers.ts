@@ -686,6 +686,7 @@ export function registerIpcHandlers(params: {
       return {
         agentCommand: launch.command,
         agentKind: agentConfig.kind,
+        environment: { ...launch.environment },
         wfCommand,
         cwd: session.worktreePath,
         sessionUuid: uuid,

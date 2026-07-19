@@ -8,10 +8,18 @@ export interface PtySpawn {
   kill(): void;
 }
 
-export type SpawnPty = (params: { cwd: string; shell: ShellSpec; cols: number; rows: number }) => PtySpawn;
+export interface PtyCreateParams {
+  cwd: string;
+  shell: ShellSpec;
+  cols: number;
+  rows: number;
+  environment?: Readonly<Record<string, string>>;
+}
+
+export type SpawnPty = (params: PtyCreateParams) => PtySpawn;
 
 export interface PtySessionManager {
-  create(params: { cwd: string; shell: ShellSpec; cols: number; rows: number }): string;
+  create(params: PtyCreateParams): string;
   write(sessionId: string, data: string): void;
   resize(sessionId: string, cols: number, rows: number): void;
   kill(sessionId: string): void;
@@ -36,7 +44,7 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
     return session;
   }
 
-  function create(createParams: { cwd: string; shell: ShellSpec; cols: number; rows: number }): string {
+  function create(createParams: PtyCreateParams): string {
     const sessionId = String(nextId++);
     const session = spawnPty(createParams);
     sessions.set(sessionId, session);

@@ -87,10 +87,16 @@ describe("buildAgentLaunchCommand — kimi", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("warns when effort is configured because the current CLI has no effort flag", () => {
+  it("applies effort through Kimi's per-process environment override", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "kimi", model: "", effort: "high" }));
     expect(result.command).toBe("kimi");
-    expect(result.warnings.some((warning) => /effort ignored/i.test(warning))).toBe(true);
+    expect(result.environment).toEqual({ KIMI_MODEL_THINKING_EFFORT: "high" });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not override Kimi's configured effort when provider default is selected", () => {
+    const result = buildAgentLaunchCommand(makeConfig({ kind: "kimi", effort: null }));
+    expect(result.environment).toBeUndefined();
   });
 });
 

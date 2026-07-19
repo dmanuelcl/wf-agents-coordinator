@@ -16,7 +16,14 @@ export function registerTerminalIpcHandlers(params: {
     TERMINAL_IPC_CHANNELS.create,
     (
       event,
-      input: { cwd: string; cols: number; rows: number; launchCommand?: string | null; persistKey?: string | null },
+      input: {
+        cwd: string;
+        cols: number;
+        rows: number;
+        launchCommand?: string | null;
+        environment?: Record<string, string>;
+        persistKey?: string | null;
+      },
     ) => {
     const shell = input.launchCommand
       ? resolveShellForCommand({ platform: process.platform, env: process.env, command: input.launchCommand })
@@ -26,6 +33,7 @@ export function registerTerminalIpcHandlers(params: {
       shell,
       cols: input.cols,
       rows: input.rows,
+      environment: input.environment,
     });
 
     const persistKey = input.persistKey ?? null;

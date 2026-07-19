@@ -52,6 +52,8 @@ export const DANGEROUS_SUPPORTED: Record<AgentKind, boolean> = {
 export interface AgentLaunchCommandResult {
   command: string;
   warnings: string[];
+  /** Per-process environment overrides required by this provider. */
+  environment?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -77,7 +79,7 @@ function withUnwiredSessionWarning(
 ): AgentLaunchCommandResult {
   if (!session) return result;
   return {
-    command: result.command,
+    ...result,
     warnings: [...result.warnings, `${kind} resume is not wired; relaunching fresh`],
   };
 }
@@ -108,7 +110,8 @@ function buildCodexLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommand
   return { command: parts.join(" "), warnings: [] };
 }
 
-// kimi [--session <existing-id>] [--model <model>] [--yolo]
+// KIMI_MODEL_THINKING_EFFORT=<effort> kimi [--session <existing-id>]
+//      [--model <model>] [--yolo]
 // A fresh launch intentionally omits --session: the current Kimi Code CLI
 // generates its own session_<uuid>, which the terminal captures for reopening.
 function buildKimiLaunchCommand(
@@ -119,9 +122,13 @@ function buildKimiLaunchCommand(
   if (session?.mode === "resume") parts.push("--session", session.id);
   if (model(config)) parts.push("--model", model(config));
   if (config.dangerous) parts.push("--yolo");
-  const warnings: string[] = [];
-  if (config.effort) warnings.push("Kimi Code CLI has no reasoning-effort launch flag; effort ignored.");
-  return { command: parts.join(" "), warnings };
+  return {
+    command: parts.join(" "),
+    warnings: [],
+    ...(config.effort
+      ? { environment: { KIMI_MODEL_THINKING_EFFORT: config.effort } }
+      : {}),
+  };
 }
 
 // copilot [--allow-all]

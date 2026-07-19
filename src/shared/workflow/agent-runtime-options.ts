@@ -28,7 +28,7 @@ export const AGENT_RUNTIME_OPTION_CATALOG: Readonly<Record<AgentKind, AgentRunti
   kimi: {
     modelSuggestions: ["kimi-code/kimi-for-coding"],
     modelSupported: true,
-    effortOptions: [],
+    effortOptions: ["low", "medium", "high", "xhigh", "max"],
   },
   opencode: {
     modelSuggestions: ["anthropic/claude-opus-4-8"],

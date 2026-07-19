@@ -11,13 +11,13 @@ function sanitizeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return result;
 }
 
-export const spawnRealPty: SpawnPty = ({ cwd, shell, cols, rows }) => {
+export const spawnRealPty: SpawnPty = ({ cwd, shell, cols, rows, environment }) => {
   const proc = pty.spawn(shell.file, shell.args, {
     name: "xterm-color",
     cwd,
     cols,
     rows,
-    env: sanitizeEnv(process.env),
+    env: sanitizeEnv({ ...process.env, ...environment }),
   });
 
   const spawned: PtySpawn = {

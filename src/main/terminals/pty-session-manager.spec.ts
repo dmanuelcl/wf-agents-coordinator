@@ -47,6 +47,24 @@ function createFakePty(): FakePty {
 const SHELL = { file: "/bin/bash", args: ["-l"] };
 
 describe("createPtySessionManager", () => {
+  it("forwards provider environment overrides to the PTY", () => {
+    const fakePty = createFakePty();
+    const spawnPty = vi.fn(() => fakePty);
+    const manager = createPtySessionManager({ spawnPty });
+
+    manager.create({
+      cwd: "/repo",
+      shell: SHELL,
+      cols: 80,
+      rows: 24,
+      environment: { KIMI_MODEL_THINKING_EFFORT: "high" },
+    });
+
+    expect(spawnPty).toHaveBeenCalledWith(
+      expect.objectContaining({ environment: { KIMI_MODEL_THINKING_EFFORT: "high" } }),
+    );
+  });
+
   it("create returns an id and registers the session", () => {
     const fakePty = createFakePty();
     const manager = createPtySessionManager({ spawnPty: () => fakePty });

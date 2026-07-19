@@ -257,6 +257,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     async function start(): Promise<void> {
       let agentCommand: string | null = null;
       let agentKind: SessionRoleLaunch["agentKind"] | null = null;
+      let agentEnvironment: Record<string, string> = {};
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
@@ -290,6 +291,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (disposed) return;
         agentCommand = launch.agentCommand;
         agentKind = launch.agentKind;
+        agentEnvironment = launch.environment;
         shellCwd = launch.cwd;
         wfPreType = launch.wfCommand;
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
@@ -430,6 +432,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         cols: term.cols,
         rows: term.rows,
         launchCommand: setupCommand ?? agentCommand,
+        environment: setupCommand ? undefined : agentEnvironment,
         persistKey: persistKey ?? null,
       });
       if (disposed) {
