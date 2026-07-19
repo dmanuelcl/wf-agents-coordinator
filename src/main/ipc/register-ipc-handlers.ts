@@ -19,10 +19,10 @@ import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
 import {
-  buildPrFixKickoff,
-  buildPrFixReviewKickoff,
+  buildPrFixRoleCommand,
   prFixCompletionCheckpointPath,
 } from "../../shared/workflow/pr-fix-kickoff";
+import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
 import { truncateSessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
@@ -128,6 +128,19 @@ export function registerIpcHandlers(params: {
     await checkpointWatchManager.watchProject(project);
   }
 
+  async function readSessionCheckpoint(session: WorkSession) {
+    if (!session.checkpointPath) return null;
+    const absolutePath = join(session.worktreePath, session.checkpointPath);
+    let markdown: string;
+    try {
+      markdown = await readFile(absolutePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    return parseCheckpointMarkdown({ checkpointPath: session.checkpointPath, markdown });
+  }
+
   // Combine the project's non-secret VCS config with its stored token.
   async function vcsCredentialsFor(project: ProjectRecord): Promise<{ token: string; email?: string }> {
     const token = await vcsSecretStore.getToken(project.id);
@@ -179,25 +192,23 @@ export function registerIpcHandlers(params: {
     project: ProjectRecord,
     role: SessionAgentRole,
   ): Promise<string | null> {
-    // PR fix: both stages read the complete conversation from a local artifact.
-    // The reviewer is launched on demand after implementation, so refresh the
-    // artifact again in case new PR comments arrived meanwhile.
+    // PR fix: the initial implementer gets the PR-specific kickoff. From the
+    // first checkpoint onward every role follows wf/NEXT as the sole authority.
+    // Refresh the referenced artifact in case new PR comments arrived meanwhile.
     if (session.kind === "pr-fix" && session.pr && (role === "implementer" || role === "reviewer")) {
       await refreshPrContextArtifact(session, project, "fix");
-      const params = {
+      return buildPrFixRoleCommand({
         title: session.name,
         source: session.branch,
         target: session.baseBranch ?? "",
         contextFile: PR_CONTEXT_ARTIFACT,
         fixBaseSha: session.pr.fixBaseSha,
-      };
-      return role === "implementer"
-        ? buildPrFixKickoff({
-            ...params,
-            slug: session.slug,
-            completionCheckpoint: prFixCompletionCheckpointPath(session.slug),
-          })
-        : buildPrFixReviewKickoff(params);
+        slug: session.slug,
+        worktreePath: session.worktreePath,
+        completionCheckpoint: prFixCompletionCheckpointPath(session.slug),
+        role,
+        checkpointPath: session.checkpointPath,
+      });
     }
 
     if (session.kind !== "review" || role !== "reviewer") {
@@ -474,6 +485,8 @@ export function registerIpcHandlers(params: {
     const session = await sessionRegistry.getSession({ sessionId });
     if (!session) throw new Error("Session not found.");
     if (session.kind !== "pr-fix") throw new Error("Only a PR fix session can push.");
+    const pushGate = getPrFixPushGate(await readSessionCheckpoint(session));
+    if (!pushGate.allowed) throw new Error(`Push blocked: ${pushGate.reason}`);
     // The branch tracks origin/<source>, so a bare push updates the PR.
     const res = await execFileAsync("git", ["push"], { cwd: session.worktreePath });
     return { output: `${res.stdout}${res.stderr}`.trim() || "Pushed." };
@@ -588,20 +601,7 @@ export function registerIpcHandlers(params: {
 
   ipcMain.handle(IPC_CHANNELS.sessionsReadCheckpoint, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
-    if (!session || !session.checkpointPath) {
-      return null;
-    }
-    const absolutePath = join(session.worktreePath, session.checkpointPath);
-    let markdown: string;
-    try {
-      markdown = await readFile(absolutePath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    }
-    return parseCheckpointMarkdown({ checkpointPath: session.checkpointPath, markdown });
+    return session ? readSessionCheckpoint(session) : null;
   });
 
   ipcMain.handle(IPC_CHANNELS.sessionsWatchCheckpoint, async (_event, sessionId: string) => {

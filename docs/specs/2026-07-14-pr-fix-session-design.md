@@ -24,7 +24,7 @@ link-resolution, comment fetching, and the PR-session UI.
 ## Model
 
 - `WorkSessionKind += "pr-fix"`. `WorkSession.pr` (already exists) is set for pr-fix too.
-- No review artifact / no `.git/info/exclude` for pr-fix (it edits real files).
+- The full PR conversation lives in the gitignored `.agent-pr-context.md`; the workflow checkpoint is gitignored too.
 
 ## Writable worktree
 
@@ -49,13 +49,17 @@ mapper fills it from the comment's `inline` field (`path`, `to ?? from`). The fi
 > **commit** de cada cambio con un mensaje claro. **NO hagas push** — yo reviso y pusheo. Si un
 > comentario ya está resuelto en el código, anótalo y sigue."
 
-Delivered via the same auto-submit path (fetched comments injected in `buildRoleLaunch`).
+Delivered via the same auto-submit path. The initial implementer is the only custom entrypoint: it reads the
+gitignored context artifact, captures the review baseline/scope, implements, tests and commits, then writes the
+session checkpoint. Once that checkpoint exists, the normal workflow is authoritative: reviewer launches with
+`wf review <checkpoint>` and a correction loop launches with `wf implement <checkpoint>`.
 
 ## Push to PR
 
 Gated topbar button (pr-fix only) → `sessions.pushFixBranch(sessionId)` → `git push` in the
-worktree (the branch tracks `origin/<source>`). Shows the result. Outward action → button-only,
-never automatic.
+worktree (the branch tracks `origin/<source>`). The renderer and IPC both require a live checkpoint
+with `status: DONE`, zero open findings and a passing `PR_REVIEW` ledger cell. Shows the result.
+Outward action → button-only, never automatic.
 
 ## SessionView generalization
 

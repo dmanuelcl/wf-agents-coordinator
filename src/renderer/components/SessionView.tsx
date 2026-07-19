@@ -19,6 +19,9 @@ import type { ConductorAction } from "../../shared/workflow/conductor";
 import { useConductor } from "../hooks/useConductor";
 import { buildSlackPostCommand, buildSlackSummaryCommand } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
+import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
+import { planFileCandidates, planFileToken } from "./log-plan-link";
+import { SessionNotice, toneForReviewMessage } from "./session-notice";
 
 // A dynamic plain-shell tab. The `+` mints these; each carries a renameable
 // title so several shells in one session can be told apart. `root` shells run
@@ -92,9 +95,12 @@ function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: 
   }
   if (kind === "pr-fix") {
     if (role === "implementer") {
+      if (hasCheckpoint) {
+        return "The PR Fix is now checkpoint-driven. When ▶ NEXT returns to Implementer, run `wf implement <checkpoint>` in this agent and keep the same findings and review scope.";
+      }
       return "This reads the PR comments and implements them on the writable branch. After commits and tests it writes the checkpoint that unlocks `Reviewer`. It never pushes.";
     }
-    return "Checkpoint ready — this pre-types an independent review of every PR comment, the resulting diff, and relevant tests. Press Enter to run it before `Push to PR`.";
+    return "Checkpoint ready — this pre-types `wf review <checkpoint>`, which reconciles the PR context, diff, findings, and correction plan in the same workflow. Press Enter to run it before `Push to PR`.";
   }
   if (role === "architect") {
     if (hasCheckpoint) {
@@ -121,6 +127,11 @@ const SHELL_HINT_REPO = "Plain terminal in the repo root — run any command. Dr
 const WORKTREE_SEGMENT = /[/\\]\.worktrees[/\\]/;
 function repoRootOf(worktreePath: string): string {
   return worktreePath.split(WORKTREE_SEGMENT)[0] || worktreePath;
+}
+
+/** Join paths in the sandboxed renderer, where node:path is unavailable. */
+function joinRendererPath(base: string, rel: string): string {
+  return `${base.replace(/[/\\]+$/, "")}/${rel.replace(/^[/\\]+/, "")}`;
 }
 
 function NextBlock(props: { next: WorkflowNext }): JSX.Element {
@@ -159,8 +170,8 @@ function NextBlock(props: { next: WorkflowNext }): JSX.Element {
   );
 }
 
-function LedgerTable(props: { rows: LedgerRow[] }): JSX.Element {
-  const { rows } = props;
+function LedgerTable(props: { rows: LedgerRow[]; onOpenPlan: (planCell: string) => void }): JSX.Element {
+  const { rows, onOpenPlan } = props;
   if (rows.length === 0) {
     return <p className="session-view-muted">No plans in the ledger yet.</p>;
   }
@@ -177,16 +188,33 @@ function LedgerTable(props: { rows: LedgerRow[] }): JSX.Element {
         </tr>
       </thead>
       <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.index}-${index}`}>
-            <td>{row.index}</td>
-            <td>{row.plan}</td>
-            <td>{row.implement}</td>
-            <td>{row.archReview}</td>
-            <td>{row.prReview}</td>
-            <td>{row.state}</td>
-          </tr>
-        ))}
+        {rows.map((row, index) => {
+          const planPath = planFileToken(row.plan);
+          return (
+            <tr key={`${row.index}-${index}`}>
+              <td>{row.index}</td>
+              <td>
+                {planPath ? (
+                  <button
+                    type="button"
+                    className="session-log-plan-link"
+                    title={`Open ${planPath}`}
+                    onClick={() => onOpenPlan(row.plan)}
+                  >
+                    <span>{row.plan}</span>
+                    <span className="session-log-plan-link-icon" aria-hidden="true">↗</span>
+                  </button>
+                ) : (
+                  row.plan
+                )}
+              </td>
+              <td>{row.implement}</td>
+              <td>{row.archReview}</td>
+              <td>{row.prReview}</td>
+              <td>{row.state}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -232,8 +260,12 @@ function CorrectionPlanPanel(props: { checkpoint: ParsedCheckpoint }): JSX.Eleme
   );
 }
 
-function LogPanel(props: { checkpoint: ParsedCheckpoint | null; hasCheckpoint: boolean }): JSX.Element {
-  const { checkpoint, hasCheckpoint } = props;
+function LogPanel(props: {
+  checkpoint: ParsedCheckpoint | null;
+  hasCheckpoint: boolean;
+  onOpenPlan: (planCell: string) => void;
+}): JSX.Element {
+  const { checkpoint, hasCheckpoint, onOpenPlan } = props;
 
   if (!hasCheckpoint) {
     return (
@@ -263,7 +295,7 @@ function LogPanel(props: { checkpoint: ParsedCheckpoint | null; hasCheckpoint: b
 
       <div className="session-log-section">
         <p className="session-log-section-title">Plans ledger</p>
-        <LedgerTable rows={checkpoint.ledgerRows} />
+        <LedgerTable rows={checkpoint.ledgerRows} onOpenPlan={onOpenPlan} />
       </div>
 
       <div className="session-log-section">
@@ -356,6 +388,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // Which root the file tree browses: this session's worktree, or the main repo.
   const [filesScope, setFilesScope] = useState<"worktree" | "repo">("worktree");
   const [checkpoint, setCheckpoint] = useState<ParsedCheckpoint | null>(null);
+  const prFixPushGate = getPrFixPushGate(fixMode ? checkpoint : null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   // Auto-pilot conductor: per-session on/off, the roles it opened (which auto-submit
@@ -411,18 +444,44 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     });
   }, [session.id, openedRoleTabs, shellTabs, activeTab, onLayoutChange]);
 
-  // Load (and refresh on each Log open) the parsed checkpoint. Re-runs when the
-  // gate flips (checkpointPath: null -> path) so the Log renders as soon as it exists.
+  // Keep the parsed checkpoint live even when Log is closed. PR Fix uses this
+  // state to gate push as the reviewer updates findings and marks the flow DONE.
   useEffect(() => {
-    if (repoMode || activeTab !== "log" || !hasCheckpoint) return;
+    if (repoMode || !hasCheckpoint || !session.checkpointPath) return;
     let cancelled = false;
-    void window.agentCoordinator.sessions.readCheckpoint(session.id).then((result) => {
-      if (!cancelled) setCheckpoint(result);
+    let receivedLiveUpdate = false;
+    const repoRoot = repoRootOf(session.worktreePath);
+    const sessionAbs = joinRendererPath(session.worktreePath, session.checkpointPath);
+    void window.agentCoordinator.sessions
+      .readCheckpoint(session.id)
+      .then((result) => {
+        if (!cancelled && !receivedLiveUpdate) setCheckpoint(result);
+      })
+      .catch(() => {
+        if (!cancelled && !receivedLiveUpdate) setCheckpoint(null);
+      });
+    const unsubscribeChanged = window.agentCoordinator.checkpoints.onChanged((event) => {
+      if (event.projectId !== session.projectId) return;
+      const changedAbs = joinRendererPath(repoRoot, event.checkpoint.checkpointPath);
+      if (changedAbs === sessionAbs) {
+        receivedLiveUpdate = true;
+        setCheckpoint(event.checkpoint);
+      }
+    });
+    const unsubscribeRemoved = window.agentCoordinator.checkpoints.onRemoved((event) => {
+      if (event.projectId !== session.projectId) return;
+      const removedAbs = joinRendererPath(repoRoot, event.checkpointPath);
+      if (removedAbs === sessionAbs) {
+        receivedLiveUpdate = true;
+        setCheckpoint(null);
+      }
     });
     return () => {
       cancelled = true;
+      unsubscribeChanged();
+      unsubscribeRemoved();
     };
-  }, [session.id, session.checkpointPath, activeTab, hasCheckpoint, repoMode]);
+  }, [session.id, session.projectId, session.worktreePath, session.checkpointPath, hasCheckpoint, repoMode]);
 
   // Seeding opens the first shell; this only repairs a restored-but-stale active
   // tab (repo mode has no agent/Log tabs for it to point at).
@@ -499,6 +558,15 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         void window.agentCoordinator.system.openPath(info.absPath, session.worktreePath);
       }
     });
+  }
+
+  async function handleOpenPlanFile(planCell: string): Promise<void> {
+    for (const candidate of planFileCandidates(planCell)) {
+      const info = await window.agentCoordinator.system.resolveFile(candidate, session.worktreePath);
+      if (!info.exists) continue;
+      handleOpenFile(info.absPath);
+      return;
+    }
   }
 
   function actuallyCloseFile(id: string): void {
@@ -590,7 +658,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
   // Push the committed fixes to the PR branch (git push). Outward action — button only.
   async function handlePushFix(): Promise<void> {
-    if (posting) return;
+    if (posting || !prFixPushGate.allowed) return;
     setPosting(true);
     setReviewPostMsg("Pushing to the PR branch…");
     try {
@@ -689,8 +757,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             <button
               type="button"
               className="session-topbar-diff"
-              disabled={posting}
-              title="Push the committed fixes to the PR branch (git push)"
+              disabled={posting || !prFixPushGate.allowed}
+              title={prFixPushGate.reason ?? "Push reviewed fixes to the PR branch (git push)"}
               onClick={() => void handlePushFix()}
             >
               {posting ? "Pushing…" : "Push to PR"}
@@ -780,7 +848,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               </span>
               {session.checkpointPath ? (
                 <span className="session-topbar-chip session-topbar-chip-ok" title={session.checkpointPath}>
-                  {fixMode ? "ready for review" : "checkpoint ready"}
+                  {fixMode
+                    ? prFixPushGate.allowed
+                      ? "review passed"
+                      : checkpoint?.findingCounts.open
+                        ? `${checkpoint.findingCounts.open} ${checkpoint.findingCounts.open === 1 ? "finding" : "findings"} open`
+                        : "review in progress"
+                    : "checkpoint ready"}
                 </span>
               ) : (
                 <span className="session-topbar-chip session-topbar-chip-pending">
@@ -793,10 +867,14 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       </header>
 
       {!repoMode && !prSession && autoPilotEnabled && conductorLog && (
-        <div className="session-conductor-strip">{conductorLog}</div>
+        <SessionNotice tone={conductorLog.startsWith("paused") ? "warning" : "info"}>
+          {conductorLog}
+        </SessionNotice>
       )}
 
-      {prSession && reviewPostMsg && <div className="session-conductor-strip">{reviewPostMsg}</div>}
+      {prSession && reviewPostMsg && (
+        <SessionNotice tone={toneForReviewMessage(reviewPostMsg)}>{reviewPostMsg}</SessionNotice>
+      )}
 
       <div className="session-split">
       <div className="session-main">
@@ -982,7 +1060,11 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         )}
         {setupReady && !repoMode && activeTab === "log" && (
           <div className="session-log-scroll">
-            <LogPanel checkpoint={checkpoint} hasCheckpoint={hasCheckpoint} />
+            <LogPanel
+              checkpoint={checkpoint}
+              hasCheckpoint={hasCheckpoint}
+              onOpenPlan={(planCell) => void handleOpenPlanFile(planCell)}
+            />
           </div>
         )}
         {setupReady && repoMode && !repoActiveTabExists && (

@@ -22,6 +22,7 @@ export function SetupRecoveryBanner(props: SetupRecoveryBannerProps): JSX.Elemen
 
   return (
     <div className="setup-recovery" role="alert">
+      <span className="setup-recovery-icon" aria-hidden="true">!</span>
       <div className="setup-recovery-copy">
         <p className="setup-recovery-title">Setup requiere intervención</p>
         <p className="setup-recovery-message">

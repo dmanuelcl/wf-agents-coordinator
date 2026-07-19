@@ -35,6 +35,28 @@
   --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
 
+@keyframes notice-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes notice-progress-pulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -543,11 +565,14 @@ button:disabled {
 
 .error-banner {
   background: var(--danger-bg);
-  border: 1px solid var(--danger);
+  border: 1px solid rgba(204, 68, 68, 0.72);
+  border-left: 4px solid var(--danger);
   color: var(--danger-fg);
-  padding: 9px 12px;
+  padding: 10px 14px;
   border-radius: var(--radius-md);
   margin-bottom: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28), inset 0 0 18px rgba(204, 68, 68, 0.06);
+  animation: notice-enter 0.28s ease-out both;
 }
 
 /* ── Session view (Phase 2 stub) ────────────────────────────── */
@@ -853,21 +878,39 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 12px 10px 15px;
-  border-bottom: 1px solid rgba(212, 168, 75, 0.38);
-  border-left: 3px solid var(--gold);
-  background: rgba(212, 168, 75, 0.1);
+  gap: 12px;
+  margin: 8px 10px 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(212, 168, 75, 0.48);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, rgba(212, 168, 75, 0.2), rgba(212, 168, 75, 0.09));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3), inset 0 0 22px rgba(212, 168, 75, 0.05);
   flex-shrink: 0;
+  animation: notice-enter 0.3s ease-out both;
+}
+.setup-recovery-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: 1px solid rgba(212, 168, 75, 0.7);
+  border-radius: 50%;
+  background: rgba(212, 168, 75, 0.18);
+  color: #f0c96f;
+  font-size: 14px;
+  font-weight: 800;
 }
 .setup-recovery-copy {
   min-width: 0;
 }
 .setup-recovery-title {
   margin: 0;
-  color: var(--gold);
-  font-size: 12.5px;
-  font-weight: 650;
+  color: #f0c96f;
+  font-size: 13px;
+  font-weight: 700;
 }
 .setup-recovery-message,
 .setup-recovery-error {
@@ -903,11 +946,14 @@ button:disabled {
   background: var(--bg);
 }
 .terminal-pane-warnings {
-  background: var(--danger-bg);
+  background: linear-gradient(90deg, rgba(204, 68, 68, 0.2), var(--danger-bg));
   color: var(--danger-fg);
-  padding: 5px 10px;
+  padding: 8px 12px;
   font-size: 12px;
-  border-bottom: 1px solid var(--danger);
+  border-bottom: 1px solid rgba(204, 68, 68, 0.55);
+  border-left: 4px solid var(--danger);
+  box-shadow: inset 0 0 18px rgba(204, 68, 68, 0.06);
+  animation: notice-enter 0.28s ease-out both;
 }
 /* "How to start" hint — a green callout at the top of a tab's terminal. */
 .terminal-hint {
@@ -915,10 +961,12 @@ button:disabled {
   align-items: center;
   gap: 9px;
   padding: 8px 8px 8px 12px;
-  background: rgba(80, 168, 120, 0.12);
-  border-bottom: 1px solid rgba(80, 168, 120, 0.28);
-  border-left: 3px solid var(--green);
+  background: linear-gradient(90deg, rgba(80, 168, 120, 0.19), rgba(80, 168, 120, 0.08));
+  border-bottom: 1px solid rgba(80, 168, 120, 0.38);
+  border-left: 4px solid var(--green);
+  box-shadow: inset 0 0 18px rgba(80, 168, 120, 0.05);
   flex-shrink: 0;
+  animation: notice-enter 0.28s ease-out both;
 }
 .terminal-hint-icon {
   flex-shrink: 0;
@@ -1428,13 +1476,76 @@ button:disabled {
   background: var(--green);
   box-shadow: 0 0 6px var(--green);
 }
-.session-conductor-strip {
-  padding: 4px 12px;
-  font-size: 12px;
+.session-notice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-bottom: 1px solid;
+  border-left: 4px solid;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 600;
   font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
-  color: var(--green);
-  background: rgba(80, 168, 120, 0.1);
-  border-bottom: 1px solid rgba(80, 168, 120, 0.25);
+  box-shadow: inset 0 0 24px rgba(255, 255, 255, 0.025), 0 5px 15px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+  animation: notice-enter 0.28s ease-out both;
+}
+.session-notice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+}
+.session-notice-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.session-notice-info,
+.session-notice-success {
+  border-color: rgba(80, 168, 120, 0.5);
+  border-left-color: var(--green);
+  background: linear-gradient(90deg, rgba(80, 168, 120, 0.2), rgba(80, 168, 120, 0.08));
+}
+.session-notice-info .session-notice-icon,
+.session-notice-success .session-notice-icon {
+  color: #83d5a6;
+}
+.session-notice-progress,
+.session-notice-warning {
+  border-color: rgba(212, 168, 75, 0.52);
+  border-left-color: var(--gold);
+  background: linear-gradient(90deg, rgba(212, 168, 75, 0.2), rgba(212, 168, 75, 0.08));
+}
+.session-notice-progress .session-notice-icon,
+.session-notice-warning .session-notice-icon {
+  color: #f0c96f;
+}
+.session-notice-progress .session-notice-icon::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: notice-progress-pulse 1.15s ease-in-out infinite;
+}
+.session-notice-danger {
+  border-color: rgba(204, 68, 68, 0.62);
+  border-left-color: var(--danger);
+  background: linear-gradient(90deg, rgba(204, 68, 68, 0.22), var(--danger-bg));
+  color: var(--danger-fg);
+}
+.session-notice-danger .session-notice-icon {
+  color: var(--danger-fg);
 }
 
 /* Split: main tab area on the left, collapsible file tree on the right. */
@@ -1957,6 +2068,38 @@ button:disabled {
   color: var(--faint-fg);
   font-weight: 600;
 }
+.session-log-plan-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin: -2px -5px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8fd6ab;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: inherit;
+  text-align: left;
+}
+.session-log-plan-link > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-log-plan-link:hover,
+.session-log-plan-link:focus-visible {
+  border-color: rgba(80, 168, 120, 0.38);
+  background: rgba(80, 168, 120, 0.12);
+  color: #b0e9c7;
+  outline: none;
+}
+.session-log-plan-link-icon {
+  flex-shrink: 0;
+  opacity: 0.65;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10px;
+}
 .session-log-latest {
   margin: 0;
   white-space: pre-wrap;
@@ -1969,6 +2112,17 @@ button:disabled {
   color: var(--muted-fg);
   max-height: 320px;
   overflow-y: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .error-banner,
+  .setup-recovery,
+  .terminal-pane-warnings,
+  .terminal-hint,
+  .session-notice,
+  .session-notice-progress .session-notice-icon::after {
+    animation: none;
+  }
 }
 
 /* ── Badges ─────────────────────────────────────────────────── */
