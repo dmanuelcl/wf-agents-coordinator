@@ -2053,6 +2053,48 @@ button:disabled {
   font-weight: 600;
   font-size: 13px;
 }
+
+/* At-a-glance checkpoint state at the top of the Log tab. */
+.session-log-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.session-log-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.session-log-status-role {
+  font-size: 12px;
+}
+.session-log-status-findings {
+  margin-left: auto;
+}
+.session-log-status-context {
+  font-size: 11px;
+}
+
+/* Parser warnings — the checkpoint may be malformed; surface them, don't hide. */
+.session-log-warnings {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger-fg);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-log-warnings p {
+  margin: 0;
+}
 .session-log-ledger {
   width: 100%;
   border-collapse: collapse;

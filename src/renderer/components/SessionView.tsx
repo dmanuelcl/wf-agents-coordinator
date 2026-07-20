@@ -12,7 +12,7 @@ import type { AgentLaunchMode } from "../../shared/ipc/contract";
 import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { LedgerRow, ParsedCheckpoint, WorkflowNext } from "../../shared/workflow/workflow-types";
+import type { LedgerRow, ParsedCheckpoint, WorkflowNext, WorkflowStatus } from "../../shared/workflow/workflow-types";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ConductorAction } from "../../shared/workflow/conductor";
@@ -162,6 +162,10 @@ function NextBlock(props: { next: WorkflowNext }): JSX.Element {
           <dd>{next.cwd ? <code>{next.cwd}</code> : <span className="session-view-muted">—</span>}</dd>
         </div>
         <div>
+          <dt>Tier</dt>
+          <dd>{next.tier ?? <span className="session-view-muted">—</span>}</dd>
+        </div>
+        <div>
           <dt>Task</dt>
           <dd>{next.task ?? <span className="session-view-muted">—</span>}</dd>
         </div>
@@ -222,6 +226,42 @@ function LedgerTable(props: { rows: LedgerRow[]; onOpenPlan: (planCell: string) 
 
 function findingCountLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function statusBadgeClass(status: WorkflowStatus): string {
+  if (status === "BLOCKED") return "badge badge-attention";
+  if (status === "DONE") return "badge badge-done";
+  return "badge";
+}
+
+// At-a-glance state for deciding what to do next: status, who's active, open vs
+// closed findings, and the feature/tier/branch context — all already parsed but
+// previously not surfaced in the Log tab.
+function CheckpointStatusHeader(props: { checkpoint: ParsedCheckpoint }): JSX.Element {
+  const { status, activeRole, findingCounts, feature, slug, kind, branch, next } = props.checkpoint;
+  const context = [feature ?? slug, kind !== "unknown" ? kind : null, next?.tier ? `tier ${next.tier}` : null, branch]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  return (
+    <section className="session-log-status" aria-label="Estado del checkpoint">
+      <div className="session-log-status-row">
+        <span className={statusBadgeClass(status)}>{status}</span>
+        <span className="session-log-status-role">
+          Activo: <strong>{activeRole}</strong>
+        </span>
+        <span className="session-finding-counts session-log-status-findings" aria-label="Hallazgos">
+          <span className="session-finding-count session-finding-count-open">
+            {findingCountLabel(findingCounts.open, "abierto", "abiertos")}
+          </span>
+          <span className="session-finding-count session-finding-count-closed">
+            {findingCountLabel(findingCounts.closed, "cerrado", "cerrados")}
+          </span>
+          <span className="session-view-muted">· {findingCounts.total} total</span>
+        </span>
+      </div>
+      {context && <div className="session-log-status-context session-view-muted">{context}</div>}
+    </section>
+  );
 }
 
 function CorrectionPlanPanel(props: { checkpoint: ParsedCheckpoint }): JSX.Element | null {
@@ -285,6 +325,16 @@ function LogPanel(props: {
 
   return (
     <div className="session-panel session-log-panel">
+      <CheckpointStatusHeader checkpoint={checkpoint} />
+
+      {checkpoint.warnings.length > 0 && (
+        <div className="session-log-warnings" role="alert">
+          {checkpoint.warnings.map((warning) => (
+            <p key={warning}>⚠ {warning}</p>
+          ))}
+        </div>
+      )}
+
       {checkpoint.next ? (
         <NextBlock next={checkpoint.next} />
       ) : (
