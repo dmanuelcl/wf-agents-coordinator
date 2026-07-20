@@ -34,13 +34,7 @@ afterEach(() => vi.useRealTimers());
 describe("createConductorController", () => {
   it("does nothing while disabled", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return true;
-      },
-    });
+    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(10000);
     expect(actions).toEqual([]);
@@ -48,13 +42,7 @@ describe("createConductorController", () => {
 
   it("acts after the settle delay once enabled", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return true;
-      },
-    });
+    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(3999);
@@ -66,13 +54,7 @@ describe("createConductorController", () => {
 
   it("debounces rapid changes into a single action (quiescence)", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return true;
-      },
-    });
+    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(2000);
@@ -85,68 +67,16 @@ describe("createConductorController", () => {
 
   it("catches up on enable when a checkpoint is already stored", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return true;
-      },
-    });
+    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
     c.notifyCheckpoint(cp("implementer", "P1")); // while disabled
     c.setEnabled(true);
     vi.advanceTimersByTime(4000);
     expect(actions).toHaveLength(1);
   });
 
-  it("does not commit a step whose delivery failed, and retries until it lands", () => {
-    const actions: ConductorAction[] = [];
-    let deliverable = false;
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return deliverable;
-      },
-    });
-    c.setEnabled(true);
-    c.notifyCheckpoint(cp("implementer", "P1"));
-    vi.advanceTimersByTime(4000); // first attempt — the agent tab isn't live yet
-    expect(actions).toHaveLength(1);
-
-    deliverable = true;
-    vi.advanceTimersByTime(700); // retry — now it lands
-    expect(actions).toHaveLength(2);
-
-    // Committed now: an identical re-save of the same NEXT is a no-op (not re-sent).
-    c.notifyCheckpoint(cp("implementer", "P1"));
-    vi.advanceTimersByTime(4000);
-    expect(actions).toHaveLength(2);
-  });
-
-  it("stops retrying a persistently failing delivery instead of spinning forever", () => {
-    const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return false; // the target never becomes live
-      },
-    });
-    c.setEnabled(true);
-    c.notifyCheckpoint(cp("implementer", "P1"));
-    vi.advanceTimersByTime(4000 + 700 * 10); // drain every retry
-    expect(actions).toHaveLength(4); // 1 attempt + 3 bounded retries
-  });
-
   it("does not fire after dispose", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({
-      getConfig: () => CONFIG,
-      onAction: (a) => {
-        actions.push(a);
-        return true;
-      },
-    });
+    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     c.dispose();

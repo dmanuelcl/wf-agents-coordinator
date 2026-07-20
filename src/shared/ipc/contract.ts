@@ -40,15 +40,6 @@ export interface SessionRoleLaunch {
   warnings: string[];
 }
 
-/** A single-shot NON-INTERACTIVE agent run for the auto-pilot conductor. */
-export interface SessionRoleExec {
-  execCommand: string;
-  agentKind: AgentKind;
-  environment: Record<string, string>;
-  cwd: string;
-  warnings: string[];
-}
-
 export interface SessionSetupPlan {
   // ready: no command is needed/already done; run: this caller owns the setup;
   // wait: another caller owns it and this caller must retry without launching.
@@ -131,7 +122,6 @@ export const IPC_CHANNELS = {
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
   sessionsBuildRoleLaunch: "sessions:build-role-launch",
-  sessionsBuildRoleExec: "sessions:build-role-exec",
   sessionsRecordRoleAgentSession: "sessions:record-role-agent-session",
   sessionStateGet: "session-state:get",
   sessionStateSet: "session-state:set",
@@ -270,7 +260,6 @@ export interface AgentCoordinatorApi {
     unwatchCheckpoint(sessionId: string): Promise<void>;
     onCheckpointDetected(cb: (e: SessionCheckpointDetectedEvent) => void): () => void;
     buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
-    buildRoleExec(sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleExec>;
     recordRoleAgentSession(sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void>;
   };
   terminal: TerminalApi;

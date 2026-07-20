@@ -23,8 +23,7 @@ export function useConductor(params: {
   repoRoot: string;
   enabled: boolean;
   getConfig: () => AutoPilotConfig;
-  /** Returns whether the action was actually delivered (see conductor-controller). */
-  onAction: (action: ConductorAction) => boolean;
+  onAction: (action: ConductorAction) => void;
 }): void {
   const { session, repoRoot, enabled } = params;
   const controllerRef = useRef<ConductorController | null>(null);
@@ -47,19 +46,6 @@ export function useConductor(params: {
     });
     controllerRef.current = controller;
 
-    // Seed with the checkpoint that already exists on disk. The subscription
-    // below only observes FUTURE writes, so without this, enabling auto-pilot on
-    // a static checkpoint (e.g. right after reopening the app) would do nothing
-    // until the next change. notifyCheckpoint acts immediately only if enabled.
-    let cancelled = false;
-    void window.agentCoordinator.sessions
-      .readCheckpoint(session.id)
-      .then((current) => {
-        if (cancelled || !current) return;
-        controller.notifyCheckpoint(current);
-      })
-      .catch(() => {});
-
     const unsubscribe = window.agentCoordinator.checkpoints.onChanged((event) => {
       const changedAbs = joinPath(repoRoot, event.checkpoint.checkpointPath);
       if (changedAbs !== sessionAbs) return;
@@ -67,7 +53,6 @@ export function useConductor(params: {
     });
 
     return () => {
-      cancelled = true;
       unsubscribe();
       controller.dispose();
       controllerRef.current = null;

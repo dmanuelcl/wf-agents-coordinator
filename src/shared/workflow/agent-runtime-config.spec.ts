@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildAgentExecCommand,
   buildAgentLaunchCommand,
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
@@ -174,92 +173,6 @@ describe("createDefaultProjectRuntimeConfig", () => {
     const config = createDefaultProjectRuntimeConfig();
     config.architect.model = "changed";
     expect(config.implementer.model).not.toBe("changed");
-  });
-});
-
-describe("buildAgentExecCommand — non-interactive auto-pilot runs", () => {
-  const WF = "wf implement docs/x-checkpoint.md";
-
-  it("claude: -p with the shell-quoted prompt, model, effort and dangerous bypass", () => {
-    expect(buildAgentExecCommand(makeConfig({ kind: "claude", model: "opus" }), WF).command).toBe(
-      "claude -p 'wf implement docs/x-checkpoint.md' --model opus",
-    );
-    const dangerous = buildAgentExecCommand(
-      makeConfig({ kind: "claude", model: "opus", effort: "high", dangerous: true }),
-      WF,
-    );
-    expect(dangerous.command).toBe(
-      "claude -p 'wf implement docs/x-checkpoint.md' --model opus --effort high --dangerously-skip-permissions",
-    );
-    expect(dangerous.warnings).toEqual([]);
-  });
-
-  it("codex: exec subcommand, workspace-write sandbox when safe, full bypass when dangerous", () => {
-    expect(buildAgentExecCommand(makeConfig({ kind: "codex", model: "gpt-5.5", effort: "high" }), WF).command).toBe(
-      "codex exec 'wf implement docs/x-checkpoint.md' --model gpt-5.5 -c model_reasoning_effort=\"high\" --sandbox workspace-write",
-    );
-    expect(buildAgentExecCommand(makeConfig({ kind: "codex", model: "gpt-5.5", dangerous: true }), WF).command).toBe(
-      "codex exec 'wf implement docs/x-checkpoint.md' --model gpt-5.5 --dangerously-bypass-approvals-and-sandbox",
-    );
-  });
-
-  it("gemini: -p with model, --yolo only when dangerous", () => {
-    expect(buildAgentExecCommand(makeConfig({ kind: "gemini", model: "gemini-2.5-pro" }), WF).command).toBe(
-      "gemini -p 'wf implement docs/x-checkpoint.md' --model gemini-2.5-pro",
-    );
-    expect(
-      buildAgentExecCommand(makeConfig({ kind: "gemini", model: "gemini-2.5-pro", dangerous: true }), WF).command,
-    ).toBe("gemini -p 'wf implement docs/x-checkpoint.md' --model gemini-2.5-pro --yolo");
-  });
-
-  it("kimi: -p (auto-approves) with model; NEVER --yolo; effort via env", () => {
-    const dangerous = buildAgentExecCommand(
-      makeConfig({ kind: "kimi", model: "kimi-code/kimi-for-coding", effort: "high", dangerous: true }),
-      WF,
-    );
-    expect(dangerous.command).toBe(
-      "kimi -p 'wf implement docs/x-checkpoint.md' --model kimi-code/kimi-for-coding",
-    );
-    expect(dangerous.command).not.toContain("--yolo");
-    expect(dangerous.environment).toEqual({ KIMI_MODEL_THINKING_EFFORT: "high" });
-  });
-
-  it("copilot: -p, --allow-all-tools when dangerous, no model flag (warns)", () => {
-    expect(buildAgentExecCommand(makeConfig({ kind: "copilot", model: "", dangerous: true }), WF).command).toBe(
-      "copilot -p 'wf implement docs/x-checkpoint.md' --allow-all-tools",
-    );
-    const withModel = buildAgentExecCommand(makeConfig({ kind: "copilot", model: "x", dangerous: true }), WF);
-    expect(withModel.command).toBe("copilot -p 'wf implement docs/x-checkpoint.md' --allow-all-tools");
-    expect(withModel.warnings.some((w) => /model/i.test(w))).toBe(true);
-  });
-
-  it("opencode: run subcommand with model and --dangerously-skip-permissions when dangerous", () => {
-    expect(
-      buildAgentExecCommand(makeConfig({ kind: "opencode", model: "anthropic/claude-opus-4-8", dangerous: true }), WF)
-        .command,
-    ).toBe("opencode run 'wf implement docs/x-checkpoint.md' --model anthropic/claude-opus-4-8 --dangerously-skip-permissions");
-  });
-
-  it("antigravity: agy -p, always warns it is unverified", () => {
-    const result = buildAgentExecCommand(makeConfig({ kind: "antigravity", model: "m" }), WF);
-    expect(result.command).toBe("agy -p 'wf implement docs/x-checkpoint.md' --model m");
-    expect(result.warnings.some((w) => /unverified/i.test(w))).toBe(true);
-  });
-
-  it("warns non-dangerous stages may block on permission prompts (claude/gemini/copilot/opencode)", () => {
-    for (const kind of ["claude", "gemini", "copilot", "opencode"] as const) {
-      const result = buildAgentExecCommand(makeConfig({ kind, model: "m", dangerous: false }), WF);
-      expect(result.warnings.some((w) => /permission|dangerous/i.test(w))).toBe(true);
-    }
-    // codex (workspace-write) and kimi (-p auto-approve) run unattended without it.
-    expect(buildAgentExecCommand(makeConfig({ kind: "codex", model: "m" }), WF).warnings).toEqual([]);
-    expect(buildAgentExecCommand(makeConfig({ kind: "kimi", model: "m" }), WF).warnings).toEqual([]);
-  });
-
-  it("shell-quotes a prompt containing a single quote", () => {
-    expect(buildAgentExecCommand(makeConfig({ kind: "claude", model: "" }), "wf 'weird' arg").command).toBe(
-      "claude -p 'wf '\\''weird'\\'' arg'",
-    );
   });
 });
 

@@ -25,30 +25,19 @@ interface TerminalFollowUpGateOptions {
 export function createTerminalFollowUpGate(options: TerminalFollowUpGateOptions): TerminalFollowUpGate {
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let finished = false;
   let started = false;
 
   function clearTimers(): void {
     if (settleTimer) clearTimeout(settleTimer);
     if (deadlineTimer) clearTimeout(deadlineTimer);
-    if (retryTimer) clearTimeout(retryTimer);
     settleTimer = null;
     deadlineTimer = null;
-    retryTimer = null;
   }
 
   function tryDeliver(): void {
     if (finished) return;
-    if (options.canDeliver && !options.canDeliver()) {
-      // Blocked by an interactive startup confirmation. Do NOT drop the delivery
-      // (the old behavior silently lost it at the deadline): keep polling until
-      // the confirmation clears, or until cancel()/finish stops us. onOutput /
-      // onUserInput also re-arm the settle path when they fire.
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = setTimeout(tryDeliver, options.settleMs);
-      return;
-    }
+    if (options.canDeliver && !options.canDeliver()) return;
     finished = true;
     clearTimers();
     options.deliver();
