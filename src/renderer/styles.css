@@ -1173,6 +1173,7 @@ button:disabled {
 /* ── Markdown file tab (preview / edit) ─────────────────────── */
 .file-view {
   flex: 1;
+  min-width: 0; /* flex item in a row: allow it to shrink so wide content wraps, not overflow */
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1901,8 +1902,10 @@ button:disabled {
 }
 .file-view-preview {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden; /* content wraps to fit, so nothing is cut and no h-scroll appears */
   padding: 28px 48px;
 }
 .file-view-editor {
@@ -1925,6 +1928,9 @@ button:disabled {
   line-height: 1.65;
   /* Fill the pane (symmetric padding on the container reads as centered). */
   width: 100%;
+  min-width: 0;
+  /* Long words / URLs / paths wrap instead of overflowing and being clipped. */
+  overflow-wrap: break-word;
 }
 .markdown-body h1,
 .markdown-body h2,
@@ -2005,13 +2011,16 @@ button:disabled {
   padding: 1px 5px;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.86em;
+  overflow-wrap: anywhere; /* long inline code (paths, ids) breaks instead of overflowing */
 }
 .markdown-body pre {
   background: var(--elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
-  overflow-x: auto;
+  /* Wrap code lines downward rather than overflowing off-screen (no h-scroll). */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   margin: 0.9em 0;
 }
 .markdown-body pre code {
@@ -2030,12 +2039,15 @@ button:disabled {
   border-collapse: collapse;
   margin: 0.9em 0;
   font-size: 0.92em;
+  /* Fit the pane and wrap cells instead of stretching the table off-screen. */
+  width: 100%;
 }
 .markdown-body th,
 .markdown-body td {
   border: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
+  overflow-wrap: anywhere;
 }
 .markdown-body th {
   background: var(--elevated);
