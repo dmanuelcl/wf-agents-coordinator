@@ -12,6 +12,7 @@ import type {
   ProjectCreateInput,
   ReviewSessionCreateInput,
   SessionCreateInput,
+  SessionRoleExec,
   SessionRoleLaunch,
   SessionSetupPlan,
 } from "../../shared/ipc/contract";
@@ -44,7 +45,7 @@ function credsFrom(email: string, token: string): { token: string; email?: strin
   return email.trim() ? { token, email: email.trim() } : { token };
 }
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
-import { buildAgentLaunchCommand } from "../../shared/workflow/agent-runtime-config";
+import { buildAgentExecCommand, buildAgentLaunchCommand } from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
@@ -691,6 +692,30 @@ export function registerIpcHandlers(params: {
         cwd: session.worktreePath,
         sessionUuid: uuid,
         warnings: launch.warnings,
+      };
+    },
+  );
+
+  // The auto-pilot conductor's per-step launch: a fresh NON-INTERACTIVE agent run
+  // that executes `wfPrompt` (the checkpoint's ▶ NEXT command) and exits. Uses the
+  // project's current per-stage config, so switching the stage's agent/model takes
+  // effect on the next step.
+  ipcMain.handle(
+    IPC_CHANNELS.sessionsBuildRoleExec,
+    async (_event, sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleExec> => {
+      const session = await sessionRegistry.getSession({ sessionId });
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+      const project = await findProject(projectRegistry, session.projectId);
+      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const exec = buildAgentExecCommand(agentConfig, wfPrompt);
+      return {
+        execCommand: exec.command,
+        agentKind: agentConfig.kind,
+        environment: { ...exec.environment },
+        cwd: session.worktreePath,
+        warnings: exec.warnings,
       };
     },
   );

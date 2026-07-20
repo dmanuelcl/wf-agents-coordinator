@@ -12,7 +12,6 @@ import type {
   TerminalExitEvent,
   WorkSession,
 } from "../../shared/ipc/contract";
-import { CONTEXT_RESET_COMMAND } from "../../shared/workflow/agent-runtime-config";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { createTerminalFollowUpGate } from "./terminal-follow-up-gate";
 import type { TerminalFollowUpGate } from "./terminal-follow-up-gate";
@@ -59,6 +58,11 @@ export interface SessionTerminalProps {
   // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
   // instead of only pre-typing it for the user to press Enter.
   autoSubmitWf?: boolean;
+  // Auto-pilot only: when set, this tab runs a NON-INTERACTIVE agent command that
+  // executes the wf step and exits, instead of an interactive agent. The output
+  // streams (watchable) and Ctrl-C stops it. The tab is remounted per step by its
+  // React key, so a fresh process runs each time.
+  execRun?: { command: string; environment: Record<string, string>; cwd: string } | null;
   // Setup terminal only: called after there is no setup to run, or after the
   // single setup owner exits 0 and setupDone has been persisted.
   onSetupReady?: () => void;
@@ -95,25 +99,23 @@ export interface SessionTerminalHandle {
   // get the paste WITHOUT it so the user refines a prompt and presses Enter.
   // No-ops until the PTY exists.
   sendText: (text: string, execute: boolean) => void;
-  // Auto-pilot delivery to a LIVE agent, gated on the agent going quiet (the same
-  // readiness wait fresh launches use) so nothing is pasted mid-render — which is
-  // what dropped the command or its Enter. When `clearContext` is set and the
-  // kind has a reset command, it clears first, waits for the re-render to settle,
-  // then runs `command`; otherwise it just runs `command` once the agent is idle.
-  deliverConductorWf: (command: string, clearContext: boolean) => void;
+  // Auto-pilot delivery to a LIVE interactive agent (the architect, which must
+  // keep its context so can't be re-run as a fresh exec): waits for the agent's
+  // output to go quiet, then pastes + submits `command` so it doesn't land
+  // mid-render. Best-effort — the interactive path is inherently less certain
+  // than an exec run.
+  deliverWhenIdle: (command: string) => void;
 }
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, onSetupReady, onSetupFailed } = props;
+  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, execRun, onSetupReady, onSetupFailed } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
   // PTY (which is reassigned on fall-back-to-shell).
   const ptyIdRef = useRef<string | null>(null);
-  // The launched agent's kind, so the handle can pick its context-reset command.
-  const agentKindRef = useRef<SessionRoleLaunch["agentKind"] | null>(null);
-  // Readiness gate for a conductor delivery in flight (see deliverConductorWf).
+  // Readiness gate for an in-flight conductor delivery to a live agent (architect).
   const deliveryGateRef = useRef<TerminalFollowUpGate | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -153,39 +155,22 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         const payload = `\x1b[200~${trimmed}\x1b[201~` + (execute ? "\r" : "");
         window.agentCoordinator.terminal.write(id, payload);
       },
-      deliverConductorWf: (command: string, clearContext: boolean) => {
+      deliverWhenIdle: (command: string) => {
         const id = ptyIdRef.current;
         if (!id) return;
         const trimmed = command.replace(/\s+$/, "");
         if (!trimmed) return;
-        const submit = (text: string): void => {
-          // Re-check the pty: the tab may have fallen back to a shell while the
-          // gate was waiting; never paste a wf into a plain shell.
-          if (ptyIdRef.current === id) {
-            window.agentCoordinator.terminal.write(id, `\x1b[200~${text}\x1b[201~\r`);
-          }
-        };
-        // Deliver only after the agent's output goes quiet, so the paste + Enter
-        // never lands mid-render. Priming with onOutput() makes an already-idle
-        // agent deliver after the settle window instead of the hard deadline.
-        const armGate = (deliver: () => void): void => {
-          deliveryGateRef.current?.cancel();
-          const gate = createTerminalFollowUpGate({ settleMs: SETTLE_MS, maxWaitMs: MAX_FOLLOW_UP_WAIT_MS, deliver });
-          deliveryGateRef.current = gate;
-          gate.start();
-          gate.onOutput();
-        };
-        const reset =
-          clearContext && agentKindRef.current ? CONTEXT_RESET_COMMAND[agentKindRef.current] : null;
-        if (!reset) {
-          armGate(() => submit(trimmed));
-          return;
-        }
-        // Clear once idle, then run the wf once the post-clear re-render settles.
-        armGate(() => {
-          submit(reset);
-          armGate(() => submit(trimmed));
+        deliveryGateRef.current?.cancel();
+        const gate = createTerminalFollowUpGate({
+          settleMs: SETTLE_MS,
+          maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
+          deliver: () => {
+            if (ptyIdRef.current === id) window.agentCoordinator.terminal.write(id, `\x1b[200~${trimmed}\x1b[201~\r`);
+          },
         });
+        deliveryGateRef.current = gate;
+        gate.start();
+        gate.onOutput(); // prime: an already-idle agent delivers after the settle window
       },
     }),
     [],
@@ -233,6 +218,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     let shellCwd = cwdOverride ?? session.worktreePath;
     const isSetupTab = role === "setup";
     const isAgentTab = role !== "shell" && !isSetupTab;
+    const isExecRun = Boolean(execRun) && isAgentTab;
     const disposables: Array<() => void> = [];
 
     // Clickable file paths: clicking a path the agent printed opens it in the OS
@@ -332,12 +318,17 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
         if (disposed) return;
+      } else if (execRun) {
+        // Auto-pilot: run the non-interactive command that executes the wf step
+        // and exits. No wfPreType — nothing is typed; the command carries the work.
+        agentCommand = execRun.command;
+        agentEnvironment = execRun.environment;
+        shellCwd = execRun.cwd;
       } else if (role !== "shell") {
         const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
         if (disposed) return;
         agentCommand = launch.agentCommand;
         agentKind = launch.agentKind;
-        agentKindRef.current = launch.agentKind;
         agentEnvironment = launch.environment;
         shellCwd = launch.cwd;
         wfPreType = launch.wfCommand;
@@ -458,7 +449,13 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           return;
         }
         if (phase === "finishing-setup") return;
-        if (isAgentTab && !fellBackToShell) {
+        if (isExecRun) {
+          // A conductor exec run finished (or was Ctrl-C'd) — that's expected;
+          // keep its output visible instead of dropping to a shell. The next
+          // step remounts a fresh run; the checkpoint it wrote drives advancement.
+          term.write(`\r\n\x1b[2m—— run finished (exit ${event.code}) ——\x1b[0m\r\n`);
+          setExitCode(event.code);
+        } else if (isAgentTab && !fellBackToShell) {
           // Agent quit → become a usable shell instead of a dead pane.
           fellBackToShell = true;
           followUpSent = true; // never pre-type the wf command into the shell
@@ -526,7 +523,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     return () => {
       disposed = true;
-      agentKindRef.current = null;
       deliveryGateRef.current?.cancel();
       deliveryGateRef.current = null;
       resizeObserver.disconnect();
