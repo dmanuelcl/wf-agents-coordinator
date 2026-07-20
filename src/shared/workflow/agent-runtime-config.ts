@@ -194,3 +194,49 @@ export function buildAgentLaunchCommand(
       return withUnwiredSessionWarning(buildAntigravityLaunchCommand(config), config.kind, session);
   }
 }
+
+/** POSIX single-quote a value so it survives `$SHELL -c "exec <command>"`. */
+function shellQuoteSingle(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export interface AutopilotLaunchCommand extends AgentLaunchCommandResult {
+  /**
+   * When set, the CLI has no "start interactive with this initial prompt" flag,
+   * so the wf must be TYPED into the agent after it launches (kimi/opencode/
+   * copilot). Null when the wf is already embedded in `command` as an argument.
+   */
+  typePrompt: string | null;
+}
+
+/**
+ * The command auto-pilot uses to run one wf step for a role. It launches the
+ * agent INTERACTIVELY (so the user can watch it work and Ctrl-C to stop) and
+ * seeds the wf. Where the CLI supports an initial prompt on an interactive
+ * session — claude/codex positional, gemini/agy `-i` — the wf is embedded as an
+ * argument (no typing race). Where it does not (kimi/opencode/copilot), the base
+ * launch is returned plus `typePrompt`, which the terminal types once ready.
+ *
+ * Reuses buildAgentLaunchCommand so model/effort/dangerous flags and warnings
+ * match a normal interactive launch. The prompt is shell-quoted because the
+ * command runs through `$SHELL -c "exec <command>"`.
+ */
+export function buildAutopilotLaunchCommand(config: AgentRuntimeConfig, wfPrompt: string): AutopilotLaunchCommand {
+  const base = buildAgentLaunchCommand(config);
+  const q = shellQuoteSingle(wfPrompt);
+  switch (config.kind) {
+    case "claude":
+    case "codex":
+      // Positional initial prompt: `claude … "<wf>"` / `codex … "<wf>"`.
+      return { ...base, command: `${base.command} ${q}`, typePrompt: null };
+    case "gemini":
+    case "antigravity":
+      // `-i/--prompt-interactive <wf>`: runs the prompt, then stays interactive.
+      return { ...base, command: `${base.command} -i ${q}`, typePrompt: null };
+    case "kimi":
+    case "opencode":
+    case "copilot":
+      // No interactive-with-initial-prompt flag → launch interactive, type the wf.
+      return { ...base, typePrompt: wfPrompt };
+  }
+}

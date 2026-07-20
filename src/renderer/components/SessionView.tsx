@@ -445,6 +445,18 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // their wf command), and the last action line shown in the feedback strip.
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
   const [conductorAutoRoles, setConductorAutoRoles] = useState<Set<SessionAgentRole>>(() => new Set());
+  // Auto-pilot launches for implementer/reviewer: the interactive command to run
+  // and a generation counter. Bumping the generation remounts the tab (a fresh,
+  // watchable agent per step). The architect is not driven this way — it keeps its
+  // context by having the wf typed into its live agent. Empty until auto-pilot runs.
+  const [roleAutopilot, setRoleAutopilot] = useState<
+    Partial<
+      Record<
+        SessionAgentRole,
+        { command: string; environment: Record<string, string>; cwd: string; typePrompt: string | null; gen: number }
+      >
+    >
+  >({});
   const [conductorLog, setConductorLog] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
@@ -730,20 +742,52 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const hasSeparateRoot = repoRoot !== session.worktreePath;
   const filesRootPath = filesScope === "repo" && hasSeparateRoot ? repoRoot : session.worktreePath;
 
-  // Deliver a conductor decision to the tabs. A forward step to a role tab that
-  // isn't open yet opens it and lets the tab's own launch follow-up submit the
-  // wf command (autoSubmitWf); a step to an already-open tab sends straight into
-  // the live agent. Pause pre-types (no Enter) so the human runs it.
+  // Run one auto-pilot step for implementer/reviewer as a fresh, watchable agent.
+  // Bumping the generation remounts the tab, which replaces whatever ran there
+  // (the previous, now-idle step) with a clean process launched with the wf
+  // embedded (or typed, for CLIs without an initial-prompt flag). Built from the
+  // project's CURRENT per-stage config, so switching a stage's agent applies next.
+  function launchAutopilotStep(role: SessionAgentRole, wfPrompt: string): void {
+    void window.agentCoordinator.sessions
+      .buildRoleAutopilot(session.id, role, wfPrompt)
+      .then((launch) => {
+        setRoleAutopilot((current) => ({
+          ...current,
+          [role]: {
+            command: launch.command,
+            environment: launch.environment,
+            cwd: launch.cwd,
+            typePrompt: launch.typePrompt,
+            gen: (current[role]?.gen ?? 0) + 1,
+          },
+        }));
+        setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
+        setActiveTab(role);
+        if (launch.warnings.length > 0) setConductorLog(`⚠ ${roleLabel(role, kind)}: ${launch.warnings[0]}`);
+      })
+      .catch((error: unknown) => setConductorLog(`✖ ${roleLabel(role, kind)}: no se pudo lanzar (${String(error)})`));
+  }
+
+  // Turn a conductor decision into an action on the tabs.
+  // - implementer/reviewer: run the step as a fresh interactive agent seeded with
+  //   the wf (no typing race, watchable). See launchAutopilotStep.
+  // - architect: keep its context — type the wf into its already-open live agent
+  //   (never a fresh agent); if it isn't open, open it and auto-submit on launch.
+  // - pause: pre-type the command (no Enter) so the human runs it.
   function performConductorAction(action: ConductorAction): void {
     if (action.kind === "noop") return;
     if (action.kind === "send") {
       const role = action.role;
-      if (openedRoleTabs.has(role)) {
-        terminalHandles.current.get(role)?.sendText(action.command, true);
-        setActiveTab(role);
+      if (role === "architect") {
+        if (openedRoleTabs.has(role)) {
+          terminalHandles.current.get(role)?.sendText(action.command, true);
+          setActiveTab(role);
+        } else {
+          setConductorAutoRoles((current) => new Set(current).add(role));
+          selectRole(role);
+        }
       } else {
-        setConductorAutoRoles((current) => new Set(current).add(role));
-        selectRole(role);
+        launchAutopilotStep(role, action.command);
       }
       setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
       return;
@@ -1132,19 +1176,40 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         )}
         {setupReady &&
           !repoMode &&
-          Array.from(openedRoleTabs.entries()).map(([role, mode]) => (
-            <div key={role} className="session-terminal-host" hidden={activeTab !== role}>
-              <SessionTerminal
-                ref={(handle) => registerTerminalHandle(role, handle)}
-                session={session}
-                role={role}
-                mode={mode}
-                onOpenPath={handleOpenPath}
-                hint={roleHint(role, kind, hasCheckpoint)}
-                autoSubmitWf={reviewMode || (fixMode && role === "implementer") || conductorAutoRoles.has(role)}
-              />
-            </div>
-          ))}
+          Array.from(openedRoleTabs.entries()).map(([role, mode]) => {
+            const autopilot = roleAutopilot[role] ?? null;
+            return (
+              // The generation in the key remounts the tab for each auto-pilot
+              // step, running a fresh agent (and replacing the previous one).
+              <div
+                key={`${role}:${autopilot?.gen ?? 0}`}
+                className="session-terminal-host"
+                hidden={activeTab !== role}
+              >
+                <SessionTerminal
+                  ref={(handle) => registerTerminalHandle(role, handle)}
+                  session={session}
+                  role={role}
+                  mode={mode}
+                  onOpenPath={handleOpenPath}
+                  hint={roleHint(role, kind, hasCheckpoint)}
+                  autoSubmitWf={
+                    reviewMode || (fixMode && role === "implementer") || conductorAutoRoles.has(role) || autopilot !== null
+                  }
+                  autopilotLaunch={
+                    autopilot
+                      ? {
+                          command: autopilot.command,
+                          environment: autopilot.environment,
+                          cwd: autopilot.cwd,
+                          typePrompt: autopilot.typePrompt,
+                        }
+                      : null
+                  }
+                />
+              </div>
+            );
+          })}
         {setupReady && shellTabs.map((tab) => (
           <div key={tab.id} className="session-terminal-host" hidden={activeTab !== tab.id}>
             <SessionTerminal

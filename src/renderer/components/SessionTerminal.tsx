@@ -57,6 +57,12 @@ export interface SessionTerminalProps {
   // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
   // instead of only pre-typing it for the user to press Enter.
   autoSubmitWf?: boolean;
+  // Auto-pilot only (implementer/reviewer): launch this INTERACTIVE command seeded
+  // with a wf step instead of the normal role launch. The tab is remounted per
+  // step by its React key, so each step is a fresh, watchable agent. `command`
+  // usually embeds the wf; when it can't, `typePrompt` is typed + submitted after
+  // the agent is ready (via the follow-up gate, autoSubmitWf).
+  autopilotLaunch?: { command: string; environment: Record<string, string>; cwd: string; typePrompt: string | null } | null;
   // Setup terminal only: called after there is no setup to run, or after the
   // single setup owner exits 0 and setupDone has been persisted.
   onSetupReady?: () => void;
@@ -97,7 +103,7 @@ export interface SessionTerminalHandle {
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, onSetupReady, onSetupFailed } = props;
+  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, autopilotLaunch, onSetupReady, onSetupFailed } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
@@ -286,6 +292,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
         if (disposed) return;
+      } else if (autopilotLaunch) {
+        // Auto-pilot step: interactive launch seeded with the wf. When the wf is
+        // embedded in the command, typePrompt is null (nothing to type); otherwise
+        // the follow-up gate types + submits it once the agent is ready.
+        agentCommand = autopilotLaunch.command;
+        agentEnvironment = autopilotLaunch.environment;
+        shellCwd = autopilotLaunch.cwd;
+        wfPreType = autopilotLaunch.typePrompt;
       } else if (role !== "shell") {
         const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
         if (disposed) return;

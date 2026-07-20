@@ -12,6 +12,7 @@ import type {
   ProjectCreateInput,
   ReviewSessionCreateInput,
   SessionCreateInput,
+  SessionRoleAutopilot,
   SessionRoleLaunch,
   SessionSetupPlan,
 } from "../../shared/ipc/contract";
@@ -44,7 +45,7 @@ function credsFrom(email: string, token: string): { token: string; email?: strin
   return email.trim() ? { token, email: email.trim() } : { token };
 }
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
-import { buildAgentLaunchCommand } from "../../shared/workflow/agent-runtime-config";
+import { buildAgentLaunchCommand, buildAutopilotLaunchCommand } from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
@@ -690,6 +691,31 @@ export function registerIpcHandlers(params: {
         wfCommand,
         cwd: session.worktreePath,
         sessionUuid: uuid,
+        warnings: launch.warnings,
+      };
+    },
+  );
+
+  // Auto-pilot: build the INTERACTIVE launch that runs `wfPrompt` for a role,
+  // using the project's current per-stage config (so switching a stage's agent/
+  // model applies on the next step). Only implementer/reviewer use this; the
+  // architect is driven by typing into its live agent to keep its context.
+  ipcMain.handle(
+    IPC_CHANNELS.sessionsBuildRoleAutopilot,
+    async (_event, sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleAutopilot> => {
+      const session = await sessionRegistry.getSession({ sessionId });
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+      const project = await findProject(projectRegistry, session.projectId);
+      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt);
+      return {
+        command: launch.command,
+        agentKind: agentConfig.kind,
+        environment: { ...launch.environment },
+        cwd: session.worktreePath,
+        typePrompt: launch.typePrompt,
         warnings: launch.warnings,
       };
     },

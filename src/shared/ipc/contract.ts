@@ -40,6 +40,20 @@ export interface SessionRoleLaunch {
   warnings: string[];
 }
 
+/**
+ * An auto-pilot step launch: an INTERACTIVE (watchable) agent seeded with a wf
+ * command. `command` usually embeds the wf as an argument; when the CLI can't
+ * take it as an arg, `typePrompt` is the wf to type into the agent after launch.
+ */
+export interface SessionRoleAutopilot {
+  command: string;
+  agentKind: AgentKind;
+  environment: Record<string, string>;
+  cwd: string;
+  typePrompt: string | null;
+  warnings: string[];
+}
+
 export interface SessionSetupPlan {
   // ready: no command is needed/already done; run: this caller owns the setup;
   // wait: another caller owns it and this caller must retry without launching.
@@ -122,6 +136,7 @@ export const IPC_CHANNELS = {
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
   sessionsBuildRoleLaunch: "sessions:build-role-launch",
+  sessionsBuildRoleAutopilot: "sessions:build-role-autopilot",
   sessionsRecordRoleAgentSession: "sessions:record-role-agent-session",
   sessionStateGet: "session-state:get",
   sessionStateSet: "session-state:set",
@@ -260,6 +275,7 @@ export interface AgentCoordinatorApi {
     unwatchCheckpoint(sessionId: string): Promise<void>;
     onCheckpointDetected(cb: (e: SessionCheckpointDetectedEvent) => void): () => void;
     buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
+    buildRoleAutopilot(sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleAutopilot>;
     recordRoleAgentSession(sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void>;
   };
   terminal: TerminalApi;

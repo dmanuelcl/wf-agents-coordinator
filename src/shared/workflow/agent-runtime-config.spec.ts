@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentLaunchCommand,
+  buildAutopilotLaunchCommand,
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
 } from "./agent-runtime-config";
@@ -218,5 +219,69 @@ describe("buildAgentLaunchCommand — session (resume-aware)", () => {
       expect(result.command).not.toContain(SID);
       expect(result.warnings.some((w) => w.includes(kind) && /not wired/i.test(w))).toBe(true);
     }
+  });
+});
+
+describe("buildAutopilotLaunchCommand — interactive, watchable, seeded with the wf", () => {
+  const WF = "wf implement docs/x-checkpoint.md";
+
+  it("claude: interactive launch + the wf as a positional prompt (no typing)", () => {
+    const plain = buildAutopilotLaunchCommand(makeConfig({ kind: "claude", model: "opus" }), WF);
+    expect(plain.command).toBe("claude --model opus 'wf implement docs/x-checkpoint.md'");
+    expect(plain.typePrompt).toBeNull();
+
+    const dangerous = buildAutopilotLaunchCommand(
+      makeConfig({ kind: "claude", model: "opus", effort: "high", dangerous: true }),
+      WF,
+    );
+    expect(dangerous.command).toBe(
+      "claude --model opus --effort high --dangerously-skip-permissions 'wf implement docs/x-checkpoint.md'",
+    );
+  });
+
+  it("codex: same interactive flags as a launch, plus the positional prompt", () => {
+    expect(buildAutopilotLaunchCommand(makeConfig({ kind: "codex", model: "gpt-5.5", effort: "high" }), WF).command).toBe(
+      'codex --model gpt-5.5 -c model_reasoning_effort="high" -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'wf implement docs/x-checkpoint.md\'',
+    );
+  });
+
+  it("gemini: -i (prompt-interactive) with the wf", () => {
+    expect(buildAutopilotLaunchCommand(makeConfig({ kind: "gemini", model: "gemini-2.5-pro" }), WF).command).toBe(
+      "gemini --model gemini-2.5-pro -i 'wf implement docs/x-checkpoint.md'",
+    );
+  });
+
+  it("antigravity: agy -i with the wf; still warns it is unverified", () => {
+    const result = buildAutopilotLaunchCommand(makeConfig({ kind: "antigravity", model: "m" }), WF);
+    expect(result.command).toBe("agy --model m -i 'wf implement docs/x-checkpoint.md'");
+    expect(result.typePrompt).toBeNull();
+    expect(result.warnings.some((w) => /unverified/i.test(w))).toBe(true);
+  });
+
+  it("kimi: no interactive-prompt flag → interactive launch + typePrompt; effort via env", () => {
+    const result = buildAutopilotLaunchCommand(
+      makeConfig({ kind: "kimi", model: "kimi-code/kimi-for-coding", effort: "high" }),
+      WF,
+    );
+    expect(result.command).toBe("kimi --model kimi-code/kimi-for-coding");
+    expect(result.command).not.toContain(WF);
+    expect(result.typePrompt).toBe(WF);
+    expect(result.environment).toEqual({ KIMI_MODEL_THINKING_EFFORT: "high" });
+  });
+
+  it("opencode & copilot: interactive launch + typePrompt (must be typed)", () => {
+    const oc = buildAutopilotLaunchCommand(makeConfig({ kind: "opencode", model: "anthropic/claude-opus-4-8" }), WF);
+    expect(oc.command).toBe("opencode --model anthropic/claude-opus-4-8");
+    expect(oc.typePrompt).toBe(WF);
+
+    const cp = buildAutopilotLaunchCommand(makeConfig({ kind: "copilot", model: "", dangerous: true }), WF);
+    expect(cp.command).toBe("copilot --allow-all");
+    expect(cp.typePrompt).toBe(WF);
+  });
+
+  it("shell-quotes a wf containing a single quote", () => {
+    expect(buildAutopilotLaunchCommand(makeConfig({ kind: "claude", model: "" }), "wf 'weird' arg").command).toBe(
+      "claude 'wf '\\''weird'\\'' arg'",
+    );
   });
 });
