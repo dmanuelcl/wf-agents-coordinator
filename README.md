@@ -30,40 +30,41 @@ session — see [How it works](#how-it-works).
 **Requirements:** Node 20+ and `pnpm`. Agents you want to launch (`claude`,
 `codex`, `kimi`, …) must be installed and on your `PATH`.
 
-### Kimi Code CLI
+### Agent CLIs
 
-The Kimi integration targets the current TypeScript
+Every agent is a separate CLI **you install and authenticate yourself** — the app
+only launches it, wires the per-stage flags, and (where supported) resumes its
+session. None is privileged: choose a different agent per role (Architect /
+Implementer / Reviewer) in a project's stage config. New stages default to
+`claude` / `opus`.
+
+| Agent | Executable | Default model | Effort | "Dangerous" maps to | Session resume |
+| --- | --- | --- | --- | --- | --- |
+| Claude | `claude` | `opus` | `low…max` → `--effort` | `--dangerously-skip-permissions` | ✅ app-minted id (`--session-id` / `--resume`) |
+| Codex | `codex` | `gpt-5.5` | `none…xhigh` → `-c model_reasoning_effort` | `--ask-for-approval never --sandbox danger-full-access` | fresh (warns) |
+| Kimi | `kimi` | `kimi-code/kimi-for-coding` | `low…max` → `KIMI_MODEL_THINKING_EFFORT` (env) | `--yolo` | ✅ CLI-minted id, captured → `--session` |
+| Gemini | `gemini` | `gemini-2.5-pro` | — | `--yolo` | fresh (warns) |
+| Copilot | `copilot` | — (no model flag) | — | `--allow-all` | fresh (warns) |
+| OpenCode | `opencode` | `anthropic/claude-opus-4-8` | — | — | fresh (warns) |
+
+Model fields are editable — most CLIs accept custom aliases, and clearing the
+field lets the CLI fall back to its own default. Effort is only sent to agents
+that document the flag and is ignored (with a warning) for the rest; it is always
+applied per launch — Kimi through a scoped `KIMI_MODEL_THINKING_EFFORT`, so your
+global config is untouched. An `agy` (Antigravity) runtime is also wired but
+**unverified** — adjust its launcher once checked against the real binary.
+
+**Session resume.** Only Claude and Kimi reopen the exact prior conversation.
+Claude accepts an app-minted id; Kimi mints its own `session_<uuid>` on a fresh
+launch, which the app captures and replays with `kimi --session <id>` (never
+`--continue` — all roles share one worktree, so "most recent for this directory"
+could resume the wrong agent). Every other agent relaunches fresh and warns.
+
+**Install note (Kimi):** its TypeScript
 [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) CLI (executable
-name: `kimi`), not the legacy Python `kimi-cli` package. Install it with one of
-the official options:
-
-```bash
-brew install kimi-code
-# or: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
-# or: npm install -g @moonshot-ai/kimi-code@latest
-```
-
-Then verify it and authenticate once in a regular terminal:
-
-```bash
-kimi --version
-kimi                 # run /login on first launch
-```
-
-In a project's per-stage agent config, selecting **kimi** supplies the official
-`kimi-code/kimi-for-coding` model alias by default; clearing the model field lets
-Kimi use its configured `default_model`. **Dangerous** maps to `--yolo`. The
-Effort selector supports `low`, `medium`, `high`, `xhigh`, and `max`; the app
-applies it only to that agent process through `KIMI_MODEL_THINKING_EFFORT`, so it
-does not rewrite the user's global Kimi configuration.
-
-For a new role tab the app runs `kimi` and captures the `session_<uuid>` shown by
-Kimi. It persists that id per session + role and reopens the exact conversation
-with `kimi --session <id>`. It deliberately does not use `--continue`, because
-all workflow roles share a worktree and "most recent for this directory" could
-resume the wrong agent. See Kimi's official [command
-reference](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html)
-and [session guide](https://moonshotai.github.io/kimi-code/en/guides/sessions.html).
+`kimi`) is **not** the legacy Python `kimi-cli` package — install `kimi-code`
+(`brew install kimi-code`, `npm i -g @moonshot-ai/kimi-code`, or the official
+installer) and run `kimi` once to `/login`.
 
 ---
 
