@@ -38,6 +38,23 @@ export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
   };
 }
 
+/**
+ * The slash command that clears an agent's conversation context, per kind. The
+ * auto-pilot conductor sends this before re-running a `wf` command in a live
+ * implementer/reviewer agent, so context does not pile up across re-loops.
+ * `null` means the CLI has no known reset command — clearing is skipped for it
+ * rather than typing a literal `/clear` the agent would treat as a prompt.
+ */
+export const CONTEXT_RESET_COMMAND: Readonly<Record<AgentKind, string | null>> = {
+  claude: "/clear",
+  codex: "/clear",
+  kimi: "/clear",
+  opencode: "/clear",
+  copilot: "/clear",
+  gemini: "/clear",
+  antigravity: "/clear",
+};
+
 /** Which agent CLIs accept a per-launch "skip all permission prompts" flag. */
 export const DANGEROUS_SUPPORTED: Record<AgentKind, boolean> = {
   claude: true,

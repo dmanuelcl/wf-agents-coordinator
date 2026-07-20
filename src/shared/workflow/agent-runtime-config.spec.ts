@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentLaunchCommand,
+  CONTEXT_RESET_COMMAND,
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
 } from "./agent-runtime-config";
-import type { AgentRuntimeConfig } from "./agent-runtime-config";
+import type { AgentKind, AgentRuntimeConfig } from "./agent-runtime-config";
 
 function makeConfig(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig {
   return {
@@ -173,6 +174,24 @@ describe("createDefaultProjectRuntimeConfig", () => {
     const config = createDefaultProjectRuntimeConfig();
     config.architect.model = "changed";
     expect(config.implementer.model).not.toBe("changed");
+  });
+});
+
+describe("CONTEXT_RESET_COMMAND", () => {
+  const ALL_KINDS: readonly AgentKind[] = [
+    "claude",
+    "codex",
+    "kimi",
+    "opencode",
+    "copilot",
+    "gemini",
+    "antigravity",
+  ];
+
+  it("maps every supported agent kind to /clear (auto-pilot resets live context before each wf)", () => {
+    for (const kind of ALL_KINDS) {
+      expect(CONTEXT_RESET_COMMAND[kind]).toBe("/clear");
+    }
   });
 });
 

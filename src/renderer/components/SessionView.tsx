@@ -395,11 +395,6 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // their wf command), and the last action line shown in the feedback strip.
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
   const [conductorAutoRoles, setConductorAutoRoles] = useState<Set<SessionAgentRole>>(() => new Set());
-  // Per-role remount counter: bumping it changes the tab's React key so a dead
-  // agent tab (exited / failed resume / fell back to a shell) is torn down and a
-  // fresh agent is launched. Used to recover an open-but-not-live role for the
-  // conductor instead of pasting `wf` into a leftover shell.
-  const [roleRelaunch, setRoleRelaunch] = useState<Partial<Record<SessionAgentRole, number>>>({});
   const [conductorLog, setConductorLog] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
@@ -685,48 +680,37 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const hasSeparateRoot = repoRoot !== session.worktreePath;
   const filesRootPath = filesScope === "repo" && hasSeparateRoot ? repoRoot : session.worktreePath;
 
-  // Tear down a role tab's current terminal and launch a fresh agent in it. The
-  // remounted terminal auto-submits its wf command (conductorAutoRoles), and
-  // "fresh" mode avoids re-trying a resume that already failed.
-  function relaunchRoleAgent(role: SessionAgentRole): void {
-    setConductorAutoRoles((current) => new Set(current).add(role));
-    setOpenedRoleTabs((current) => new Map(current).set(role, "fresh"));
-    setRoleRelaunch((current) => ({ ...current, [role]: (current[role] ?? 0) + 1 }));
-    setActiveTab(role);
-  }
-
   // Deliver a conductor decision to the tabs. A forward step to a role tab that
   // isn't open yet opens it and lets the tab's own launch follow-up submit the
-  // wf command (autoSubmitWf); a step to an already-open tab sends straight into
-  // the live agent. Pause pre-types (no Enter) so the human runs it.
+  // wf command (autoSubmitWf); a step to an already-open tab delivers straight
+  // into whatever agent that tab is running. Pause pre-types (no Enter).
+  //
+  // Delivery is NON-destructive: it never relaunches or kills the tab's agent —
+  // the user may have switched agents mid-session (e.g. Claude → Codex after
+  // running out of tokens) or be mid-turn, and auto-pilot must not blow that
+  // away. The readiness gate inside deliverConductorWf waits for the agent to go
+  // quiet before pasting, so the command + Enter isn't dropped mid-render.
   //
   // Returns whether the action was DISPATCHED. A `send` returns false only when
   // it can't be dispatched yet (role locked, or its terminal isn't mounted
   // because setup is still running) so the conductor retries instead of marking
-  // the step done. A tab whose agent isn't live (exited / failed to resume /
-  // fell back to a shell) is RELAUNCHED fresh rather than refused — reopening the
-  // tab by hand doesn't restart the agent, and pasting `wf` into the leftover
-  // shell would just run it outside the agent.
+  // the step done.
   function performConductorAction(action: ConductorAction): boolean {
     if (action.kind === "noop") return true;
     if (action.kind === "send") {
       const role = action.role;
       if (openedRoleTabs.has(role)) {
         const handle = terminalHandles.current.get(role);
-        if (handle && handle.isAgentLive()) {
-          handle.sendText(action.command, true);
-          setActiveTab(role);
-          setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
-          return true;
+        if (!handle) {
+          // The tab's terminal isn't mounted yet (setup still running); retry.
+          setConductorLog(`⏳ ${roleLabel(role, kind)}: montando…`);
+          return false;
         }
-        if (!setupReady) {
-          setConductorLog(`⏳ ${roleLabel(role, kind)}: esperando setup…`);
-          return false; // its terminal isn't mounted yet; retry
-        }
-        // Open but the agent is gone → relaunch a fresh one; its follow-up gate
-        // submits the wf command (autoSubmitWf via conductorAutoRoles).
-        setConductorLog(`↻ relanzando ${roleLabel(role, kind)} (agente no activo)`);
-        relaunchRoleAgent(role);
+        // Implementer/reviewer clear context first so re-loops don't pile up;
+        // the architect keeps its brainstorming/plan context.
+        handle.deliverConductorWf(action.command, role !== "architect");
+        setActiveTab(role);
+        setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
         return true;
       }
       if (isRoleDisabled(role)) {
@@ -1124,11 +1108,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         {setupReady &&
           !repoMode &&
           Array.from(openedRoleTabs.entries()).map(([role, mode]) => (
-            <div
-              key={`${role}:${roleRelaunch[role] ?? 0}`}
-              className="session-terminal-host"
-              hidden={activeTab !== role}
-            >
+            <div key={role} className="session-terminal-host" hidden={activeTab !== role}>
               <SessionTerminal
                 ref={(handle) => registerTerminalHandle(role, handle)}
                 session={session}
