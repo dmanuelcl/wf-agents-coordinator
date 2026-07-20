@@ -684,19 +684,33 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // isn't open yet opens it and lets the tab's own launch follow-up submit the
   // wf command (autoSubmitWf); a step to an already-open tab sends straight into
   // the live agent. Pause pre-types (no Enter) so the human runs it.
-  function performConductorAction(action: ConductorAction): void {
-    if (action.kind === "noop") return;
+  //
+  // Returns whether the action was actually DELIVERED. A `send` that can't reach
+  // a live agent (tab locked, or the agent exited and the tab fell back to a
+  // shell) returns false so the conductor doesn't mark the step done — it retries
+  // instead of silently pasting `wf …` into a shell or stalling forever.
+  function performConductorAction(action: ConductorAction): boolean {
+    if (action.kind === "noop") return true;
     if (action.kind === "send") {
       const role = action.role;
       if (openedRoleTabs.has(role)) {
-        terminalHandles.current.get(role)?.sendText(action.command, true);
+        const handle = terminalHandles.current.get(role);
+        if (!handle || !handle.isAgentLive()) {
+          setConductorLog(`⏸ ${roleLabel(role, kind)} no está activo — reabrí ese tab`);
+          return false;
+        }
+        handle.sendText(action.command, true);
         setActiveTab(role);
       } else {
+        if (isRoleDisabled(role)) {
+          setConductorLog(`⏸ ${roleLabel(role, kind)} bloqueado — esperando el checkpoint`);
+          return false;
+        }
         setConductorAutoRoles((current) => new Set(current).add(role));
         selectRole(role);
       }
       setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
-      return;
+      return true;
     }
     // pause
     if (action.role && openedRoleTabs.has(action.role) && action.command) {
@@ -706,6 +720,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       selectRole(action.role);
     }
     setConductorLog(`paused · ${action.reason}`);
+    return true;
   }
 
   useConductor({

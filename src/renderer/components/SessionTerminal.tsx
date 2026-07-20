@@ -93,6 +93,10 @@ export interface SessionTerminalHandle {
   // get the paste WITHOUT it so the user refines a prompt and presses Enter.
   // No-ops until the PTY exists.
   sendText: (text: string, execute: boolean) => void;
+  // True only while a live agent process owns the PTY. False for shells, before
+  // the agent launches, and after it exits / falls back to a shell — so the
+  // conductor never pastes a `wf` command into a plain shell.
+  isAgentLive: () => boolean;
 }
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
@@ -103,6 +107,8 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
   // PTY (which is reassigned on fall-back-to-shell).
   const ptyIdRef = useRef<string | null>(null);
+  // True only while a live agent process owns the PTY (see SessionTerminalHandle).
+  const agentLiveRef = useRef(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -141,6 +147,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         const payload = `\x1b[200~${trimmed}\x1b[201~` + (execute ? "\r" : "");
         window.agentCoordinator.terminal.write(id, payload);
       },
+      isAgentLive: () => agentLiveRef.current,
     }),
     [],
   );
@@ -241,6 +248,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     // existing onData/onExit/write handlers all target the current `ptyId`, so
     // reassigning it is enough to rewire them to the new shell.
     async function fallBackToShell(): Promise<void> {
+      // The agent is gone; the PTY becomes a plain shell, so it's no longer a
+      // valid conductor target.
+      agentLiveRef.current = false;
       const id = await window.agentCoordinator.terminal.create({
         cwd: shellCwd,
         cols: term.cols,
@@ -441,6 +451,8 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       }
       ptyId = id;
       ptyIdRef.current = id;
+      // A live agent now owns the PTY (setup tabs never reach here as agents).
+      if (isAgentTab && phase === "agent") agentLiveRef.current = true;
 
       // Arm the follow-up gate only when we start directly in the agent phase.
       if (phase === "agent") followUpGate?.start();
@@ -473,6 +485,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     return () => {
       disposed = true;
+      agentLiveRef.current = false;
       resizeObserver.disconnect();
       disposables.forEach((dispose) => dispose());
       if (ptyId) window.agentCoordinator.terminal.kill(ptyId);
