@@ -349,7 +349,12 @@ function LogPanel(props: {
       </div>
 
       <div className="session-log-section">
-        <p className="session-log-section-title">Latest log entry</p>
+        <div className="session-log-latest-head">
+          <p className="session-log-section-title">Latest log entry</p>
+          {checkpoint.latestLogMarkdown && (
+            <CopyButton value={checkpoint.latestLogMarkdown} label="Copy latest log entry" />
+          )}
+        </div>
         {checkpoint.latestLogMarkdown ? (
           <pre className="session-log-latest">{checkpoint.latestLogMarkdown}</pre>
         ) : (

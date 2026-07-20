@@ -2164,8 +2164,20 @@ button:disabled {
   padding: 12px 14px;
   font-size: 12px;
   color: var(--muted-fg);
-  max-height: 320px;
+  /* Taller so more of the entry is readable at once. */
+  max-height: 60vh;
   overflow-y: auto;
+  /* Opt back in to text selection (the app body sets user-select: none) so you
+     can select and copy part of the entry. */
+  user-select: text;
+}
+
+/* Header row for the latest-log section: title on the left, copy on the right. */
+.session-log-latest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 @media (prefers-reduced-motion: reduce) {
