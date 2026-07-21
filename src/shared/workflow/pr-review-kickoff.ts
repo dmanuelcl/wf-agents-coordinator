@@ -34,7 +34,7 @@ export function buildPrReviewKickoff(p: PrReviewKickoffParams): string {
   if (p.lastReviewedSha) {
     parts.push(`Analiza SOLO los cambios nuevos desde el último review: \`git diff ${p.lastReviewedSha}..HEAD\`.`);
   } else {
-    parts.push(`Es el primer review: analiza el diff completo \`git diff ${p.base}...HEAD\`.`);
+    parts.push(`Analiza el diff completo del PR: \`git diff ${p.base}...HEAD\`.`);
   }
 
   parts.push(
