@@ -40,6 +40,8 @@ function checkpoint(params: {
     correctionPlan: null,
     findings: [],
     findingCounts: { open: 0, closed: 0, total: 0 },
+    followUps: [],
+    followUpCounts: { total: 0, open: 0, keep: 0, promoted: 0, done: 0, dropped: 0 },
     latestLogMarkdown: null,
     warnings: [],
   };

@@ -80,6 +80,79 @@ active: none
 | 1 | plan-1-foundation.md | ⏳ | – | – | ACTIVE |
 `;
 
+const FOLLOW_UPS_CHECKPOINT = `---
+feature: Follow-ups coverage
+slug: follow-ups-coverage
+kind: feature
+branch: feature/follow-ups
+worktree: .worktrees/follow-ups
+status: IN_PROGRESS
+active: none
+---
+
+# ▶ NEXT
+- **Rol:** implementer
+- **Corre:** \`wf implement docs/workflow/checkpoints/follow-ups-checkpoint.md\`
+- **Abre sesión fresca en:** capacidad económica · esfuerzo moderado · cwd \`.worktrees/follow-ups\`
+- **Tarea:** Plan-1 — implementación fresca.
+
+# Plans ledger
+| # | Plan | IMPLEMENT | ARCH_REVIEW | PR_REVIEW | Estado |
+|---|------|-----------|-------------|-----------|--------|
+| 1 | plan-1-foundation.md | ✅ | ✅ | ✅ | DONE |
+
+# Follow-ups
+| ID  | Título | Origen | Estado | Detalle |
+|-----|--------|--------|--------|---------|
+| FU1 | short title here | Plan-7 PR V4 | OPEN | – |
+| FU2 | another title | Plan-3 ARCH I2 | PROMOTED→Plan-9 | [ficha](../follow-ups/some-slug.md) |
+| FU3 | deferred cleanup | Plan-2 PR V1 | KEEP | - |
+| FU4 | shipped extra | Plan-1 PR V2 | DONE |  |
+| FU5 | abandoned idea | Plan-4 ARCH I3 | DROPPED | not needed |
+| FU6 | promoted but arrowless | Plan-5 PR V7 | PROMOTED | – |
+| FU7 | weird state | Plan-6 PR V9 | WISHLIST | – |
+> leyenda estado: OPEN (sin discutir) · KEEP (diferido, aceptado) · PROMOTED→Plan-N · DONE · DROPPED
+
+# Log  (append-only, lo nuevo abajo)
+
+## 2026-07-20 · architect · INIT
+Spec + plans written. Plan sufficiency: PASS.
+`;
+
+const FOLLOW_UPS_WITH_FINDINGS = `---
+feature: Follow-ups plus findings
+slug: follow-ups-plus-findings
+kind: feature
+branch: feature/fu-findings
+worktree: .worktrees/fu-findings
+status: IN_PROGRESS
+active: none
+---
+
+# ▶ NEXT
+- **Rol:** reviewer
+- **Corre:** \`wf review docs/workflow/checkpoints/fu-findings-checkpoint.md\`
+- **Abre sesión fresca en:** capacidad alta · esfuerzo alto · cwd \`.worktrees/fu-findings\`
+- **Tarea:** Revisar Plan-1.
+
+# Plans ledger
+| # | Plan | IMPLEMENT | ARCH_REVIEW | PR_REVIEW | Estado |
+|---|------|-----------|-------------|-----------|--------|
+| 1 | plan-1.md | ✅ | ✅ | ⚠ | ISSUES |
+
+# Follow-ups
+| ID  | Título | Origen | Estado | Detalle |
+|-----|--------|--------|--------|---------|
+| FU1 | defer the polish | Plan-1 PR V2 | PROMOTED→Plan-9 | – |
+| FU2 | tidy later | Plan-1 PR V3 | KEEP | – |
+
+# Log
+
+## 2026-07-20 · reviewer · PR_REVIEW · Plan-1 → ⚠ ISSUES
+
+- [ ] V1 [logic][src/auth.ts:18]: The timeout is ignored.
+`;
+
 describe("parseCheckpointMarkdown", () => {
   it("parses the Spanish feature checkpoint sample", () => {
     const result = parseCheckpointMarkdown({
@@ -433,5 +506,150 @@ active: none
 
     expect(result.kind).toBe("feature");
     expect(result.frontmatter["kind"]).toBe("feature");
+  });
+});
+
+describe("follow-ups", () => {
+  it("parses every follow-up row and normalizes each state", () => {
+    const result = parseCheckpointMarkdown({
+      checkpointPath: "docs/workflow/checkpoints/follow-ups-checkpoint.md",
+      markdown: FOLLOW_UPS_CHECKPOINT,
+    });
+
+    expect(
+      result.followUps.map(({ id, title, origin, state, promotedTo, detail }) => ({
+        id,
+        title,
+        origin,
+        state,
+        promotedTo,
+        detail,
+      })),
+    ).toEqual([
+      { id: "FU1", title: "short title here", origin: "Plan-7 PR V4", state: "OPEN", promotedTo: null, detail: null },
+      {
+        id: "FU2",
+        title: "another title",
+        origin: "Plan-3 ARCH I2",
+        state: "PROMOTED",
+        promotedTo: "Plan-9",
+        detail: "[ficha](../follow-ups/some-slug.md)",
+      },
+      { id: "FU3", title: "deferred cleanup", origin: "Plan-2 PR V1", state: "KEEP", promotedTo: null, detail: null },
+      { id: "FU4", title: "shipped extra", origin: "Plan-1 PR V2", state: "DONE", promotedTo: null, detail: null },
+      {
+        id: "FU5",
+        title: "abandoned idea",
+        origin: "Plan-4 ARCH I3",
+        state: "DROPPED",
+        promotedTo: null,
+        detail: "not needed",
+      },
+      {
+        id: "FU6",
+        title: "promoted but arrowless",
+        origin: "Plan-5 PR V7",
+        state: "PROMOTED",
+        promotedTo: null,
+        detail: null,
+      },
+      { id: "FU7", title: "weird state", origin: "Plan-6 PR V9", state: "UNKNOWN", promotedTo: null, detail: null },
+    ]);
+  });
+
+  it("captures promotedTo only for PROMOTED→Plan-N and leaves an arrowless PROMOTED null", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: FOLLOW_UPS_CHECKPOINT });
+
+    const promoted = result.followUps.filter((followUp) => followUp.state === "PROMOTED");
+    expect(promoted.map((followUp) => ({ id: followUp.id, promotedTo: followUp.promotedTo }))).toEqual([
+      { id: "FU2", promotedTo: "Plan-9" },
+      { id: "FU6", promotedTo: null },
+    ]);
+  });
+
+  it("preserves a markdown-link detail and nulls the –, -, and empty details", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: FOLLOW_UPS_CHECKPOINT });
+    const byId = new Map(result.followUps.map((followUp) => [followUp.id, followUp]));
+
+    expect(byId.get("FU2")?.detail).toBe("[ficha](../follow-ups/some-slug.md)");
+    expect(byId.get("FU1")?.detail).toBeNull(); // "–" en dash
+    expect(byId.get("FU3")?.detail).toBeNull(); // "-" hyphen
+    expect(byId.get("FU4")?.detail).toBeNull(); // empty cell
+    expect(byId.get("FU5")?.detail).toBe("not needed");
+  });
+
+  it("ignores the leyenda blockquote and keeps rawCells positional", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: FOLLOW_UPS_CHECKPOINT });
+
+    expect(result.followUps).toHaveLength(7);
+    expect(result.followUps.every((followUp) => followUp.id.startsWith("FU"))).toBe(true);
+    expect(result.followUps[1]?.rawCells).toEqual([
+      "FU2",
+      "another title",
+      "Plan-3 ARCH I2",
+      "PROMOTED→Plan-9",
+      "[ficha](../follow-ups/some-slug.md)",
+    ]);
+  });
+
+  it("computes follow-up counts, excluding UNKNOWN from the per-state buckets", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: FOLLOW_UPS_CHECKPOINT });
+
+    expect(result.followUpCounts).toEqual({ total: 7, open: 1, keep: 1, promoted: 2, done: 1, dropped: 1 });
+  });
+
+  it("returns [] and zeroed counts when the section is absent", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: FEATURE_CHECKPOINT });
+
+    expect(result.followUps).toEqual([]);
+    expect(result.followUpCounts).toEqual({ total: 0, open: 0, keep: 0, promoted: 0, done: 0, dropped: 0 });
+  });
+
+  it("returns [] for a present-but-empty table (header only)", () => {
+    const markdown = `---
+feature: Empty follow-ups
+slug: empty-follow-ups
+kind: feature
+status: IN_PROGRESS
+active: none
+---
+
+# ▶ NEXT
+- **Rol:** implementer
+- **Corre:** \`wf implement checkpoint.md\`
+- **Abre sesión fresca en:** cwd \`.\`
+
+# Follow-ups
+| ID  | Título | Origen | Estado | Detalle |
+|-----|--------|--------|--------|---------|
+
+# Log
+
+## 2026-07-20 · architect · INIT
+Started.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.followUps).toEqual([]);
+    expect(result.followUpCounts).toEqual({ total: 0, open: 0, keep: 0, promoted: 0, done: 0, dropped: 0 });
+  });
+
+  it("does not let follow-up rows contribute to findingCounts", () => {
+    const result = parseCheckpointMarkdown({
+      checkpointPath: "checkpoint.md",
+      markdown: FOLLOW_UPS_WITH_FINDINGS,
+    });
+
+    // The log carries exactly one PR_REVIEW finding (V1). The two follow-up rows
+    // — including a PROMOTED→Plan-9 that mentions "Plan-1 PR V2" — must not leak
+    // into findingCounts or findings.
+    expect(result.findingCounts).toEqual({ open: 1, closed: 0, total: 1 });
+    expect(result.findings.map(({ id }) => id)).toEqual(["V1"]);
+    expect(result.followUps.map(({ id, state, promotedTo }) => ({ id, state, promotedTo }))).toEqual([
+      { id: "FU1", state: "PROMOTED", promotedTo: "Plan-9" },
+      { id: "FU2", state: "KEEP", promotedTo: null },
+    ]);
+    expect(result.followUpCounts).toEqual({ total: 2, open: 0, keep: 1, promoted: 1, done: 0, dropped: 0 });
   });
 });

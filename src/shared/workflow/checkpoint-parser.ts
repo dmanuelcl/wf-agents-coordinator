@@ -2,9 +2,12 @@ import type {
   CorrectionPlan,
   FindingStatus,
   FindingCounts,
+  FollowUpCounts,
+  FollowUpState,
   LedgerRow,
   ParsedCheckpoint,
   WorkflowFinding,
+  WorkflowFollowUp,
   WorkflowKind,
   WorkflowNext,
   WorkflowRole,
@@ -15,6 +18,8 @@ const KNOWN_ROLES: readonly WorkflowRole[] = ["architect", "implementer", "revie
 const KNOWN_ROLE_SET = new Set<string>(KNOWN_ROLES);
 const KNOWN_STATUSES: readonly WorkflowStatus[] = ["IN_PROGRESS", "BLOCKED", "DONE"];
 const KNOWN_STATUS_SET = new Set<string>(KNOWN_STATUSES);
+const KNOWN_FOLLOW_UP_STATES: readonly FollowUpState[] = ["OPEN", "KEEP", "PROMOTED", "DONE", "DROPPED"];
+const KNOWN_FOLLOW_UP_STATE_SET = new Set<string>(KNOWN_FOLLOW_UP_STATES);
 const ROLE_LABELS = new Set(["rol", "role"]);
 const TASK_LABELS = new Set(["tarea", "task"]);
 const TIER_LABELS = new Set(["abre sesion fresca en", "open fresh session in"]);
@@ -30,6 +35,7 @@ function isWorkflowStatus(value: string): value is WorkflowStatus {
 interface Sections {
   next: string | null;
   ledger: string | null;
+  followUps: string | null;
   log: string | null;
 }
 
@@ -83,12 +89,14 @@ function splitSections(body: string): Sections {
       markers.push({ kind: "next", index });
     } else if (trimmed.startsWith("# Plans ledger")) {
       markers.push({ kind: "ledger", index });
+    } else if (trimmed.startsWith("# Follow-ups")) {
+      markers.push({ kind: "followUps", index });
     } else if (trimmed.startsWith("# Log")) {
       markers.push({ kind: "log", index });
     }
   });
 
-  const sections: Sections = { next: null, ledger: null, log: null };
+  const sections: Sections = { next: null, ledger: null, followUps: null, log: null };
   markers.forEach((marker, i) => {
     const nextMarker = markers[i + 1];
     const end = nextMarker ? nextMarker.index : lines.length;
@@ -200,6 +208,73 @@ function parseLedgerSection(sectionText: string): LedgerRow[] {
       rawCells: cells,
     };
   });
+}
+
+const FOLLOW_UP_STATE_TOKEN_PATTERN = new RegExp("[\\s\\u2192]");
+const FOLLOW_UP_PROMOTED_TARGET_PATTERN = new RegExp("\\u2192\\s*(\\S+)");
+
+function normalizeFollowUpState(cell: string): { state: FollowUpState; promotedTo: string | null } {
+  const leadingToken = (cell.split(FOLLOW_UP_STATE_TOKEN_PATTERN)[0] ?? "").toUpperCase();
+  const state: FollowUpState = KNOWN_FOLLOW_UP_STATE_SET.has(leadingToken)
+    ? (leadingToken as FollowUpState)
+    : "UNKNOWN";
+  let promotedTo: string | null = null;
+  if (state === "PROMOTED") {
+    promotedTo = cell.match(FOLLOW_UP_PROMOTED_TARGET_PATTERN)?.[1] ?? null;
+  }
+  return { state, promotedTo };
+}
+
+function parseFollowUpDetail(cell: string): string | null {
+  const trimmed = cell.trim();
+  if (trimmed === "" || trimmed === "–" || trimmed === "-") return null;
+  return trimmed;
+}
+
+function parseFollowUpsSection(sectionText: string): WorkflowFollowUp[] {
+  const tableLines: string[] = [];
+  let inTable = false;
+
+  for (const rawLine of sectionText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("|")) {
+      inTable = true;
+      tableLines.push(line);
+    } else if (inTable) {
+      break;
+    }
+  }
+
+  const dataLines = tableLines.slice(2);
+
+  return dataLines.map((line) => {
+    const cells = line.split("|").map((cell) => cell.trim());
+    if (cells[0] === "") cells.shift();
+    if (cells[cells.length - 1] === "") cells.pop();
+
+    const { state, promotedTo } = normalizeFollowUpState(cells[3] ?? "");
+
+    return {
+      id: cells[0] ?? "",
+      title: cells[1] ?? "",
+      origin: cells[2] ?? "",
+      state,
+      promotedTo,
+      detail: parseFollowUpDetail(cells[4] ?? ""),
+      rawCells: cells,
+    };
+  });
+}
+
+function computeFollowUpCounts(followUps: WorkflowFollowUp[]): FollowUpCounts {
+  return {
+    total: followUps.length,
+    open: followUps.filter((followUp) => followUp.state === "OPEN").length,
+    keep: followUps.filter((followUp) => followUp.state === "KEEP").length,
+    promoted: followUps.filter((followUp) => followUp.state === "PROMOTED").length,
+    done: followUps.filter((followUp) => followUp.state === "DONE").length,
+    dropped: followUps.filter((followUp) => followUp.state === "DROPPED").length,
+  };
 }
 
 function extractLatestLog(sectionText: string): string | null {
@@ -389,6 +464,15 @@ export function parseCheckpointMarkdown(params: { checkpointPath: string; markdo
     warnings.push("Checkpoint is missing a # Log section.");
   }
 
+  // Follow-ups are an OPTIONAL table parsed independently of findings; an absent
+  // section is normal (no warning) and yields an empty list with zeroed counts.
+  let followUps: WorkflowFollowUp[] = [];
+  let followUpCounts: FollowUpCounts = { total: 0, open: 0, keep: 0, promoted: 0, done: 0, dropped: 0 };
+  if (sections.followUps !== null) {
+    followUps = parseFollowUpsSection(sections.followUps);
+    followUpCounts = computeFollowUpCounts(followUps);
+  }
+
   return {
     checkpointPath,
     frontmatter,
@@ -404,6 +488,8 @@ export function parseCheckpointMarkdown(params: { checkpointPath: string; markdo
     correctionPlan,
     findings,
     findingCounts,
+    followUps,
+    followUpCounts,
     latestLogMarkdown,
     warnings,
   };

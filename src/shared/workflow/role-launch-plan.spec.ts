@@ -15,7 +15,9 @@ function makeNext(overrides: Partial<WorkflowNext> = {}): WorkflowNext {
 }
 
 function makeCheckpoint(
-  overrides: Partial<Omit<ParsedCheckpoint, "correctionPlan" | "findings" | "findingCounts">> = {},
+  overrides: Partial<
+    Omit<ParsedCheckpoint, "correctionPlan" | "findings" | "findingCounts" | "followUps" | "followUpCounts">
+  > = {},
 ): ParsedCheckpoint {
   return {
     checkpointPath: ".worktrees/example/docs/workflow/checkpoints/example-checkpoint.md",
@@ -33,6 +35,8 @@ function makeCheckpoint(
     correctionPlan: null,
     findings: [],
     findingCounts: { open: 0, closed: 0, total: 0 },
+    followUps: [],
+    followUpCounts: { total: 0, open: 0, keep: 0, promoted: 0, done: 0, dropped: 0 },
     latestLogMarkdown: overrides.latestLogMarkdown ?? null,
     warnings: overrides.warnings ?? [],
   };

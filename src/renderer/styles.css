@@ -1126,6 +1126,83 @@ button:disabled {
   color: var(--green);
   background: rgba(80, 168, 120, 0.08);
 }
+/* Follow-ups: workflow deferred-work tracking. Violet reads distinctly from
+   the gold (open finding) / green (closed) chips above. */
+.session-finding-count-followup {
+  border-color: rgba(150, 130, 220, 0.45);
+  color: #b9a9f0;
+  background: rgba(150, 130, 220, 0.1);
+}
+.session-topbar-followups {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--muted-fg);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.session-topbar-followups:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.session-topbar-followups.has-open {
+  color: var(--fg);
+  border-color: rgba(150, 130, 220, 0.55);
+  background: rgba(150, 130, 220, 0.16);
+}
+.session-topbar-followups-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(150, 130, 220, 0.9);
+  color: #14110f;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.session-followups-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.session-followups-table th,
+.session-followups-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-strong);
+  vertical-align: top;
+}
+.session-followups-table th {
+  color: var(--muted-fg);
+  font-weight: 600;
+}
+.session-followup-state {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.session-followup-state-OPEN {
+  color: #b9a9f0;
+}
+.session-followup-state-PROMOTED,
+.session-followup-state-DONE {
+  color: var(--green);
+}
+.session-followup-state-KEEP {
+  color: var(--muted-fg);
+}
+.session-followup-state-DROPPED {
+  color: var(--muted-fg);
+  text-decoration: line-through;
+}
+.session-followup-state-UNKNOWN {
+  color: var(--gold);
+}
 .session-correction-plan-body,
 .session-correction-plan-empty {
   margin-top: 13px;

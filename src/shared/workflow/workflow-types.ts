@@ -36,6 +36,27 @@ export interface FindingCounts {
   total: number;
 }
 
+export type FollowUpState = "OPEN" | "KEEP" | "PROMOTED" | "DONE" | "DROPPED" | "UNKNOWN";
+
+export interface WorkflowFollowUp {
+  id: string;
+  title: string;
+  origin: string;
+  state: FollowUpState;
+  promotedTo: string | null;
+  detail: string | null;
+  rawCells: string[];
+}
+
+export interface FollowUpCounts {
+  total: number;
+  open: number;
+  keep: number;
+  promoted: number;
+  done: number;
+  dropped: number;
+}
+
 export interface CorrectionPlan {
   title: string;
   markdown: string;
@@ -56,6 +77,8 @@ export interface ParsedCheckpoint {
   correctionPlan: CorrectionPlan | null;
   findings: WorkflowFinding[];
   findingCounts: FindingCounts;
+  followUps: WorkflowFollowUp[];
+  followUpCounts: FollowUpCounts;
   latestLogMarkdown: string | null;
   warnings: string[];
 }

@@ -12,7 +12,7 @@ import type { AgentLaunchMode } from "../../shared/ipc/contract";
 import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { LedgerRow, ParsedCheckpoint, WorkflowNext, WorkflowStatus } from "../../shared/workflow/workflow-types";
+import type { LedgerRow, ParsedCheckpoint, WorkflowFollowUp, WorkflowNext, WorkflowStatus } from "../../shared/workflow/workflow-types";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ConductorAction } from "../../shared/workflow/conductor";
@@ -238,7 +238,7 @@ function statusBadgeClass(status: WorkflowStatus): string {
 // closed findings, and the feature/tier/branch context — all already parsed but
 // previously not surfaced in the Log tab.
 function CheckpointStatusHeader(props: { checkpoint: ParsedCheckpoint }): JSX.Element {
-  const { status, activeRole, findingCounts, feature, slug, kind, branch, next } = props.checkpoint;
+  const { status, activeRole, findingCounts, followUpCounts, feature, slug, kind, branch, next } = props.checkpoint;
   const context = [feature ?? slug, kind !== "unknown" ? kind : null, next?.tier ? `tier ${next.tier}` : null, branch]
     .filter((part): part is string => Boolean(part))
     .join(" · ");
@@ -258,6 +258,18 @@ function CheckpointStatusHeader(props: { checkpoint: ParsedCheckpoint }): JSX.El
           </span>
           <span className="session-view-muted">· {findingCounts.total} total</span>
         </span>
+        {followUpCounts.total > 0 && (
+          <span
+            className="session-finding-count session-finding-count-followup"
+            aria-label="Follow-ups"
+            title="Follow-ups: deferred work tracked on this checkpoint"
+          >
+            ⚑{" "}
+            {followUpCounts.open > 0
+              ? `${followUpCounts.open} sin discutir`
+              : `${followUpCounts.total} follow-up${followUpCounts.total === 1 ? "" : "s"}`}
+          </span>
+        )}
       </div>
       {context && <div className="session-log-status-context session-view-muted">{context}</div>}
     </section>
@@ -297,6 +309,48 @@ function CorrectionPlanPanel(props: { checkpoint: ParsedCheckpoint }): JSX.Eleme
         </p>
       )}
     </section>
+  );
+}
+
+function followUpStateClass(state: WorkflowFollowUp["state"]): string {
+  return `session-followup-state session-followup-state-${state}`;
+}
+
+// Deferred work harvested onto the checkpoint. Rendered as a compact table so a
+// buried "nit / deferred" can no longer scroll out of sight in the Log. Promoted
+// rows link the plan they became. Hidden entirely when there are none.
+function FollowUpsPanel(props: { followUps: WorkflowFollowUp[] }): JSX.Element | null {
+  const { followUps } = props;
+  if (followUps.length === 0) return null;
+  return (
+    <div className="session-log-section">
+      <p className="session-log-section-title">Follow-ups</p>
+      <table className="session-followups-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Título</th>
+            <th>Origen</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {followUps.map((followUp, index) => (
+            <tr key={`${followUp.id}-${index}`}>
+              <td>{followUp.id}</td>
+              <td>{followUp.title}</td>
+              <td className="session-view-muted">{followUp.origin}</td>
+              <td>
+                <span className={followUpStateClass(followUp.state)}>
+                  {followUp.state}
+                  {followUp.state === "PROMOTED" && followUp.promotedTo ? `→${followUp.promotedTo}` : ""}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -347,6 +401,8 @@ function LogPanel(props: {
         <p className="session-log-section-title">Plans ledger</p>
         <LedgerTable rows={checkpoint.ledgerRows} onOpenPlan={onOpenPlan} />
       </div>
+
+      <FollowUpsPanel followUps={checkpoint.followUps} />
 
       <div className="session-log-section">
         <div className="session-log-latest-head">
@@ -773,6 +829,21 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       .catch((error: unknown) => setConductorLog(`✖ ${roleLabel(role, kind)}: no se pudo lanzar (${String(error)})`));
   }
 
+  // The global "Discuss follow-ups" action launches an architect-tier `wf followups`
+  // triage session (turn-independent — it does not need to be the architect's turn).
+  // If the architect agent is already live, type the command into it (keeps its
+  // context); otherwise spin a fresh, watchable agent seeded with the command.
+  function handleDiscussFollowUps(): void {
+    if (!session.checkpointPath) return;
+    const command = `wf followups ${session.checkpointPath}`;
+    if (openedRoleTabs.has("architect")) {
+      terminalHandles.current.get("architect")?.sendText(command, true);
+      setActiveTab("architect");
+    } else {
+      launchAutopilotStep("architect", command);
+    }
+  }
+
   // Turn a conductor decision into an action on the tabs.
   // - implementer/reviewer: run the step as a fresh interactive agent seeded with
   //   the wf (no typing race, watchable). See launchAutopilotStep.
@@ -909,6 +980,25 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             >
               <span className="session-topbar-autopilot-dot" />
               Auto-pilot
+            </button>
+          )}
+          {!repoMode && !prSession && (
+            <button
+              type="button"
+              className={`session-topbar-followups${(checkpoint?.followUpCounts.open ?? 0) > 0 ? " has-open" : ""}`}
+              disabled={!hasCheckpoint}
+              title={
+                hasCheckpoint
+                  ? "Discuss follow-ups: harvest deferred items and choose which to promote to plans"
+                  : "Follow-ups activate once a checkpoint exists"
+              }
+              onClick={() => handleDiscussFollowUps()}
+            >
+              <span aria-hidden="true">⚑</span>
+              Discuss follow-ups
+              {(checkpoint?.followUpCounts.open ?? 0) > 0 && (
+                <span className="session-topbar-followups-count">{checkpoint?.followUpCounts.open}</span>
+              )}
             </button>
           )}
           <button
