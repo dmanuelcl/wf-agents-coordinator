@@ -46,6 +46,20 @@ export function useConductor(params: {
     });
     controllerRef.current = controller;
 
+    // Catch up on the checkpoint that already exists so ENABLING auto-pilot acts
+    // on the current ▶ NEXT immediately, instead of sitting idle until the next
+    // checkpoint change. Without this the user has to run a step by hand to get
+    // things moving — and that manual run is what then triggers a duplicate.
+    // notifyCheckpoint only acts once enabled (setEnabled schedules on latest).
+    let cancelled = false;
+    void window.agentCoordinator.sessions
+      .readCheckpoint(session.id)
+      .then((current) => {
+        if (cancelled || !current) return;
+        controller.notifyCheckpoint(current);
+      })
+      .catch(() => {});
+
     const unsubscribe = window.agentCoordinator.checkpoints.onChanged((event) => {
       const changedAbs = joinPath(repoRoot, event.checkpoint.checkpointPath);
       if (changedAbs !== sessionAbs) return;
@@ -53,6 +67,7 @@ export function useConductor(params: {
     });
 
     return () => {
+      cancelled = true;
       unsubscribe();
       controller.dispose();
       controllerRef.current = null;
