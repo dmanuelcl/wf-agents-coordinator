@@ -19,6 +19,7 @@ import type {
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
+import { sanitizeCommentBody } from "../../shared/workflow/sanitize-comment";
 import {
   buildPrFixRoleCommand,
   prFixCompletionCheckpointPath,
@@ -508,7 +509,9 @@ export function registerIpcHandlers(params: {
     }
     if (!report.trim()) throw new Error(`The review file (${REVIEW_ARTIFACT}) is empty.`);
 
-    const body = `${report.trim()}\n\n${REVIEW_COMMENT_MARKER}`;
+    // Terminal artifacts (NUL bytes, ANSI escapes) can end up in the file; the
+    // provider APIs reject them (Bitbucket 400s on NUL). Strip before posting.
+    const body = `${sanitizeCommentBody(report).trim()}\n\n${REVIEW_COMMENT_MARKER}`;
     const posted = await getProvider(session.pr.host).postComment(
       prRefOf(session.pr),
       body,
