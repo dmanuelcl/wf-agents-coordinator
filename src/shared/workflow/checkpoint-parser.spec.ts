@@ -254,6 +254,31 @@ active: none
     expect(result.warnings.some((warning) => /role/i.test(warning))).toBe(true);
   });
 
+  it("derives architect for `wf followups` and does not warn about its missing role/cwd", () => {
+    const markdown = `---
+feature: Follow-ups
+slug: followups
+kind: feature
+status: DONE
+active: none
+---
+
+# ▶ NEXT
+- **Corre:** \`wf followups docs/workflow/checkpoints/followups-checkpoint.md\`
+
+# Log
+## 2026-07-08 · architect · DONE
+Done.
+`;
+
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown });
+
+    expect(result.next?.role).toBe("architect");
+    expect(result.next?.command).toBe("wf followups docs/workflow/checkpoints/followups-checkpoint.md");
+    expect(result.warnings.some((warning) => /cwd/i.test(warning))).toBe(false);
+    expect(result.warnings.some((warning) => /role/i.test(warning))).toBe(false);
+  });
+
   it("matches accented Spanish labels and preserves the accented text", () => {
     const result = parseCheckpointMarkdown({
       checkpointPath: "checkpoint.md",

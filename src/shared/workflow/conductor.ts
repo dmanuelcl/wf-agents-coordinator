@@ -33,6 +33,11 @@ function taskKeyOf(tier: string | null, task: string | null, command: string): s
   return key === "|" ? command : key;
 }
 
+/** `wf followups` is a manual-only post-workflow step (run via its own button). */
+function isFollowupsCommand(command: string | null): boolean {
+  return command != null && /^wf\s+followups\b/.test(command);
+}
+
 /**
  * Decide what the auto-pilot conductor should do given the freshly-parsed
  * checkpoint and the prior state. Pure and deterministic — no I/O, no timers.
@@ -53,8 +58,14 @@ export function decideConductor(params: {
     return { action: { kind: "pause", role: null, command: null, reason: "BLOCKED" }, next: prev };
   }
 
-  // 3. Unactionable NEXT.
   const next = checkpoint.next;
+
+  // followups is a manual-only step (triggered by its button), never auto-run.
+  if (isFollowupsCommand(next?.command ?? null)) {
+    return { action: { kind: "pause", role: null, command: null, reason: "followups is manual" }, next: prev };
+  }
+
+  // 3. Unactionable NEXT.
   if (!next || next.role === "unknown" || !isAgentRole(next.role) || !next.command) {
     return { action: { kind: "pause", role: null, command: null, reason: "NEXT not actionable" }, next: prev };
   }

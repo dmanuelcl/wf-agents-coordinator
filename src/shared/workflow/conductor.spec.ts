@@ -85,6 +85,15 @@ describe("decideConductor — guardrails", () => {
         .action.kind,
     ).toBe("pause");
   });
+
+  it("never auto-runs wf followups — it's a manual-only step, even mid-workflow", () => {
+    const result = decideConductor({
+      prev: INITIAL_CONDUCTOR_STATE,
+      checkpoint: checkpoint({ role: "architect", command: "wf followups docs/x-checkpoint.md", status: "IN_PROGRESS" }),
+      config: CONFIG,
+    });
+    expect(result.action.kind).toBe("pause");
+  });
 });
 
 describe("decideConductor — forward progress", () => {

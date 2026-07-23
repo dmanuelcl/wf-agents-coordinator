@@ -111,9 +111,15 @@ function roleFromCommand(command: string | null): WorkflowRole | null {
   const match = command.match(/^wf\s+(\S+)/);
   const verb = match?.[1];
   if (verb === "implement") return "implementer";
-  if (verb === "verify" || verb === "fix") return "architect";
+  // followups is a post-workflow triage step run in the architect/diagnose tab.
+  if (verb === "verify" || verb === "fix" || verb === "followups") return "architect";
   if (verb === "review") return "reviewer";
   return null;
+}
+
+/** `wf followups` legitimately carries no Role label or cwd, so it doesn't warn. */
+function isFollowupsCommand(command: string | null): boolean {
+  return command != null && /^wf\s+followups\b/.test(command);
 }
 
 function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: string[] } {
@@ -140,9 +146,11 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
   const commandMatch = sectionText.match(/`(wf\s[^`]*)`/);
   const command = commandMatch ? (commandMatch[1] ?? "").trim() : null;
 
+  const isFollowups = isFollowupsCommand(command);
+
   const cwdMatch = sectionText.match(/cwd\s*`([^`]*)`/);
   const cwd = cwdMatch ? (cwdMatch[1] ?? "").trim() : null;
-  if (!cwd) {
+  if (!cwd && !isFollowups) {
     warnings.push("NEXT block is missing a cwd value.");
   }
 
@@ -158,7 +166,8 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
     const derived = roleFromCommand(command);
     if (derived) {
       role = derived;
-      warnings.push("NEXT role label is missing; derived role from the command instead.");
+      // followups intentionally omits the Role label, so deriving it isn't noteworthy.
+      if (!isFollowups) warnings.push("NEXT role label is missing; derived role from the command instead.");
     } else {
       warnings.push("NEXT role is missing and could not be derived from the command.");
     }
