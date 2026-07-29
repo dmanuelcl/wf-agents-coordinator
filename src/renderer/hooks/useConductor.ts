@@ -23,7 +23,7 @@ export function useConductor(params: {
   repoRoot: string;
   enabled: boolean;
   getConfig: () => AutoPilotConfig;
-  onAction: (action: ConductorAction) => void;
+  onAction: (action: ConductorAction) => Promise<void>;
 }): void {
   const { session, repoRoot, enabled } = params;
   const controllerRef = useRef<ConductorController | null>(null);

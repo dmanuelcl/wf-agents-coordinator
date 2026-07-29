@@ -207,14 +207,16 @@ describe("buildAgentLaunchCommand — session (resume-aware)", () => {
     expect(buildAgentLaunchCommand(makeConfig({ kind: "claude", model: "opus" })).command).toBe("claude --model opus");
   });
 
-  it("warns and does NOT inject the id for a non-claude kind (resume not wired)", () => {
+  it("codex resumes the exact stored session id", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "codex", model: "gpt-5.5" }), { id: SID, mode: "resume" });
-    expect(result.command).not.toContain(SID);
-    expect(result.warnings.some((w) => /not wired/i.test(w))).toBe(true);
+    expect(result.command).toBe(
+      `codex resume --model gpt-5.5 -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true ${SID}`,
+    );
+    expect(result.warnings).toEqual([]);
   });
 
-  it("names the kind in the not-wired warning for each non-claude kind", () => {
-    for (const kind of ["codex", "opencode", "copilot", "gemini"] as const) {
+  it("names the kind in the not-wired warning for unsupported kinds", () => {
+    for (const kind of ["opencode", "copilot", "gemini"] as const) {
       const result = buildAgentLaunchCommand(makeConfig({ kind, model: "m" }), { id: SID, mode: "fresh" });
       expect(result.command).not.toContain(SID);
       expect(result.warnings.some((w) => w.includes(kind) && /not wired/i.test(w))).toBe(true);
@@ -242,6 +244,17 @@ describe("buildAutopilotLaunchCommand — interactive, watchable, seeded with th
   it("codex: same interactive flags as a launch, plus the positional prompt", () => {
     expect(buildAutopilotLaunchCommand(makeConfig({ kind: "codex", model: "gpt-5.5", effort: "high" }), WF).command).toBe(
       'codex --model gpt-5.5 -c model_reasoning_effort="high" -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'wf implement docs/x-checkpoint.md\'',
+    );
+  });
+
+  it("codex: resumes a preallocated lane and submits the wf as the first prompt", () => {
+    const result = buildAutopilotLaunchCommand(
+      makeConfig({ kind: "codex", model: "gpt-5.5", effort: "high" }),
+      WF,
+      { id: "11111111-1111-4111-8111-111111111111", mode: "resume" },
+    );
+    expect(result.command).toBe(
+      'codex resume --model gpt-5.5 -c model_reasoning_effort="high" -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true 11111111-1111-4111-8111-111111111111 \'wf implement docs/x-checkpoint.md\'',
     );
   });
 

@@ -17,8 +17,8 @@ cap, and a settle delay so it never fires while the agent is still writing.
 (`parseCheckpointMarkdown` → `next.role` / `next.command` / `next.cwd` / `next.task`).
 "Which tab + which command" is a pure function of that block — the architect already
 encoded the intelligence into the checkpoint. The conductor is deterministic glue over
-primitives that already exist in the renderer (`selectRole`, `sendText`). Zero tokens,
-zero API key, fully unit-testable.
+the checkpoint parser, durable session bindings, and watchable terminal launches. Zero
+additional planning tokens, zero additional API key, fully unit-testable.
 
 ## Goals
 
@@ -40,6 +40,26 @@ zero API key, fully unit-testable.
 
 ## Architecture
 
+### Durable session lanes (2026-07-29 contract)
+
+Every actionable checkpoint `# ▶ NEXT` includes a backticked `Session lane`.
+Canonical lanes are `architect`, `plan-N/implementer`, `plan-N/reviewer`,
+`feature-review/implementer`, `feature-review/reviewer`, `fix/implementer`, and
+`fix/reviewer`.
+
+The lane is the logical context boundary. The coordinator stores its provider
+conversation binding in app data: the first action for a lane creates a
+conversation, later actions in that same lane resume it, and another plan/scope
+starts clean because it has another lane. Switching provider replaces only that
+lane's binding. Codex conversations are preallocated with App Server
+`thread/start`, then attached in the watchable TUI with
+`codex resume <thread-id> <wf-prompt>`.
+
+All roles, including Architect, are launched through this path. A `send` action
+is committed to conductor state only after the terminal acknowledges that its
+PTY exists and the workflow prompt was embedded or delivered; the coordinator
+never relies on an optional imperative write to an already-live TTY.
+
 Two layers, matching the codebase's "pure shared logic + thin adapter" style (cf.
 `buildRoleLaunchPlan`):
 
@@ -51,8 +71,8 @@ Two layers, matching the codebase's "pure shared logic + thin adapter" style (cf
 2. **Renderer adapter** — `src/renderer/hooks/useConductor.ts` (used by `SessionView`).
    Owns all the I/O and timing: subscribes to checkpoint changes for this session,
    applies the settle-delay debounce, calls `decideConductor`, and performs the action
-   via the existing `selectRole` + `sendText` primitives. Holds the conductor state and
-   the auto-pilot on/off flag.
+   through a lane-aware interactive launch. Holds the conductor state and the
+   auto-pilot on/off flag.
 
 ### Data flow
 
@@ -68,7 +88,7 @@ useConductor (renderer, this session — matches broadcast to session by absolut
       ▼
 decideConductor({ prev, checkpoint, config }) ──▶ { action, next }
       │
-      ├─ send  → selectRole(role); sendText(command, execute=true); feedback line
+      ├─ send  → create/resume lane; mount PTY; acknowledge prompt delivery; feedback
       ├─ pause → selectRole(role); pre-type command (no Enter); feedback line
       └─ noop  → nothing
 ```

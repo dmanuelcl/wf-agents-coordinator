@@ -18,7 +18,15 @@ function cp(role: WorkflowRole, task: string): ParsedCheckpoint {
     worktree: null,
     status: "IN_PROGRESS",
     activeRole: "none",
-    next: { role, command: `wf ${verb} docs/x-checkpoint.md`, cwd: ".worktrees/x", tier: null, task, rawMarkdown: "" },
+    next: {
+      role,
+      command: `wf ${verb} docs/x-checkpoint.md`,
+      cwd: ".worktrees/x",
+      tier: null,
+      task,
+      sessionLane: role === "architect" ? "architect" : `plan-1/${role}`,
+      rawMarkdown: "",
+    },
     ledgerRows: [],
     correctionPlan: null,
     findings: [],
@@ -36,27 +44,43 @@ afterEach(() => vi.useRealTimers());
 describe("createConductorController", () => {
   it("does nothing while disabled", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(10000);
     expect(actions).toEqual([]);
   });
 
-  it("acts after the settle delay once enabled", () => {
+  it("acts after the settle delay once enabled", async () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(3999);
     expect(actions).toEqual([]);
     vi.advanceTimersByTime(1);
+    await vi.runAllTicks();
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({ kind: "send", role: "implementer" });
   });
 
-  it("debounces rapid changes into a single action (quiescence)", () => {
+  it("debounces rapid changes into a single action (quiescence)", async () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     vi.advanceTimersByTime(2000);
@@ -64,25 +88,64 @@ describe("createConductorController", () => {
     vi.advanceTimersByTime(2000);
     expect(actions).toEqual([]); // window restarted, not elapsed
     vi.advanceTimersByTime(2000);
+    await vi.runAllTicks();
     expect(actions).toHaveLength(1);
   });
 
-  it("catches up on enable when a checkpoint is already stored", () => {
+  it("catches up on enable when a checkpoint is already stored", async () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
     c.notifyCheckpoint(cp("implementer", "P1")); // while disabled
     c.setEnabled(true);
     vi.advanceTimersByTime(4000);
+    await vi.runAllTicks();
     expect(actions).toHaveLength(1);
   });
 
   it("does not fire after dispose", () => {
     const actions: ConductorAction[] = [];
-    const c = createConductorController({ getConfig: () => CONFIG, onAction: (a) => actions.push(a) });
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
     c.setEnabled(true);
     c.notifyCheckpoint(cp("implementer", "P1"));
     c.dispose();
     vi.advanceTimersByTime(10000);
     expect(actions).toEqual([]);
+  });
+
+  it("does not consume a NEXT key until dispatch resolves", async () => {
+    const pending: { release?: () => void } = {};
+    const actions: ConductorAction[] = [];
+    const c = createConductorController({
+      getConfig: () => CONFIG,
+      onAction: (action) =>
+        new Promise<void>((resolve) => {
+          actions.push(action);
+          pending.release = resolve;
+        }),
+    });
+
+    c.setEnabled(true);
+    c.notifyCheckpoint(cp("architect", "P1"));
+    vi.advanceTimersByTime(4000);
+    c.notifyCheckpoint(cp("architect", "P1"));
+    vi.advanceTimersByTime(4000);
+    expect(actions).toHaveLength(1);
+
+    if (!pending.release) throw new Error("expected pending dispatch");
+    pending.release();
+    await vi.runAllTicks();
+    c.notifyCheckpoint(cp("architect", "P1"));
+    vi.advanceTimersByTime(4000);
+    expect(actions).toHaveLength(1);
   });
 });

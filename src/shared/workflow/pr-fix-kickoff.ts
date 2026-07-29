@@ -45,7 +45,8 @@ active: none
 # ▶ NEXT
 - **Rol:** reviewer
 - **Corre:** \`wf review ${params.completionCheckpoint}\`
-- **Abre sesión fresca en:** capacidad alta (juicio) · esfuerzo moderado · cwd \`.\`
+- **Session lane:** \`fix/reviewer\`
+- **Ejecuta sesión en:** capacidad alta (juicio) · esfuerzo moderado · cwd \`.\`
 - **Tarea:** Revisar las correcciones del PR antes del push.
 
 # Plans ledger

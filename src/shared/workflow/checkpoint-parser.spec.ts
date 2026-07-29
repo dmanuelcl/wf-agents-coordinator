@@ -15,7 +15,8 @@ active: none
 # ▶ NEXT
 - **Rol:** implementer
 - **Corre:** \`wf implement docs/workflow/checkpoints/2026-07-08-frontend-rich-text-editor-checkpoint.md\`
-- **Abre sesión fresca en:** capacidad económica · esfuerzo moderado · cwd \`.worktrees/frontend-rich-text\`
+- **Session lane:** \`plan-1/implementer\`
+- **Ejecuta sesión en:** capacidad económica · esfuerzo moderado · cwd \`.worktrees/frontend-rich-text\`
 - **Tarea:** Plan-1 (foundation) — implementación fresca desde el plan.
 
 # Plans ledger
@@ -44,6 +45,7 @@ active: implementer
 # ▶ NEXT
 - **Rol:** architect
 - **Corre:** \`wf verify docs/workflow/checkpoints/2026-07-08-banking-duplicate-sync-checkpoint.md\`
+- **Session lane:** \`architect\`
 - **Abre sesión fresca en:** capacidad alta · esfuerzo alto · cwd \`.worktrees/banking-duplicate-sync\`
 - **Tarea:** Responder bloqueo de implementer.
 
@@ -71,6 +73,7 @@ active: none
 # ▶ NEXT
 - **Role:** implementer
 - **Run:** \`wf implement docs/workflow/checkpoints/2026-07-08-frontend-rich-text-editor-checkpoint.md\`
+- **Session lane:** \`plan-1/implementer\`
 - **Open fresh session in:** economical capacity · moderate effort · cwd \`.worktrees/frontend-rich-text\`
 - **Task:** Plan-1 (foundation) — fresh implementation from the plan.
 
@@ -165,6 +168,7 @@ describe("parseCheckpointMarkdown", () => {
       "wf implement docs/workflow/checkpoints/2026-07-08-frontend-rich-text-editor-checkpoint.md",
     );
     expect(result.next?.cwd).toBe(".worktrees/frontend-rich-text");
+    expect(result.next?.sessionLane).toBe("plan-1/implementer");
     expect(result.status).toBe("IN_PROGRESS");
     expect(result.activeRole).toBe("none");
     expect(result.ledgerRows).toHaveLength(2);
@@ -181,6 +185,7 @@ describe("parseCheckpointMarkdown", () => {
     expect(result.status).toBe("BLOCKED");
     expect(result.activeRole).toBe("implementer");
     expect(result.next?.role).toBe("architect");
+    expect(result.next?.sessionLane).toBe("architect");
     expect(result.next?.command).toBe(
       "wf verify docs/workflow/checkpoints/2026-07-08-banking-duplicate-sync-checkpoint.md",
     );
@@ -302,6 +307,20 @@ Done.
     expect(english.next?.role).toBe(spanish.next?.role);
     expect(english.next?.command).toBe(spanish.next?.command);
     expect(english.next?.cwd).toBe(spanish.next?.cwd);
+    expect(english.next?.sessionLane).toBe(spanish.next?.sessionLane);
+  });
+
+  it("rejects a session lane that belongs to a different NEXT role", () => {
+    const result = parseCheckpointMarkdown({
+      checkpointPath: "checkpoint.md",
+      markdown: FEATURE_CHECKPOINT.replace(
+        "- **Session lane:** `plan-1/implementer`",
+        "- **Session lane:** `plan-1/reviewer`",
+      ),
+    });
+
+    expect(result.next?.sessionLane).toBeNull();
+    expect(result.warnings.some((warning) => /session lane/i.test(warning))).toBe(true);
   });
 
   it("extracts the latest correction plan and counts its open findings", () => {

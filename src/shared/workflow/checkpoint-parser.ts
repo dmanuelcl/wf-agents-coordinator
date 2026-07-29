@@ -22,7 +22,15 @@ const KNOWN_FOLLOW_UP_STATES: readonly FollowUpState[] = ["OPEN", "KEEP", "PROMO
 const KNOWN_FOLLOW_UP_STATE_SET = new Set<string>(KNOWN_FOLLOW_UP_STATES);
 const ROLE_LABELS = new Set(["rol", "role"]);
 const TASK_LABELS = new Set(["tarea", "task"]);
-const TIER_LABELS = new Set(["abre sesion fresca en", "open fresh session in"]);
+const TIER_LABELS = new Set([
+  "ejecuta sesion en",
+  "run session in",
+  // Legacy checkpoints remain readable during migration.
+  "abre sesion fresca en",
+  "open fresh session in",
+]);
+const SESSION_LANE_LABELS = new Set(["session lane"]);
+const SESSION_LANE_PATTERN = /^(architect|plan-\d+\/(?:implementer|reviewer)|feature-review\/(?:implementer|reviewer)|fix\/(?:implementer|reviewer))$/;
 
 function isWorkflowRole(value: string): value is WorkflowRole {
   return KNOWN_ROLE_SET.has(value);
@@ -30,6 +38,18 @@ function isWorkflowRole(value: string): value is WorkflowRole {
 
 function isWorkflowStatus(value: string): value is WorkflowStatus {
   return KNOWN_STATUS_SET.has(value);
+}
+
+function roleForSessionLane(lane: string): WorkflowRole | null {
+  if (lane === "architect") return "architect";
+  const match = lane.match(/\/(implementer|reviewer)$/);
+  const role = match?.[1] ?? null;
+  return role && isWorkflowRole(role) ? role : null;
+}
+
+function parseSessionLane(value: string): string {
+  const backticked = value.match(/^`([^`]+)`$/);
+  return (backticked?.[1] ?? value).trim();
 }
 
 interface Sections {
@@ -127,6 +147,7 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
   let roleValue: string | null = null;
   let taskValue: string | null = null;
   let tierValue: string | null = null;
+  let sessionLaneValue: string | null = null;
 
   for (const rawLine of sectionText.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -140,6 +161,8 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
       taskValue = value;
     } else if (TIER_LABELS.has(label)) {
       tierValue = value;
+    } else if (SESSION_LANE_LABELS.has(label)) {
+      sessionLaneValue = parseSessionLane(value);
     }
   }
 
@@ -173,6 +196,20 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
     }
   }
 
+  let sessionLane: string | null = null;
+  if (sessionLaneValue) {
+    const laneRole = roleForSessionLane(sessionLaneValue);
+    if (!SESSION_LANE_PATTERN.test(sessionLaneValue) || !laneRole) {
+      warnings.push(`NEXT session lane "${sessionLaneValue}" is invalid.`);
+    } else if (role !== "unknown" && laneRole !== role) {
+      warnings.push(`NEXT session lane "${sessionLaneValue}" belongs to ${laneRole}, not ${role}.`);
+    } else {
+      sessionLane = sessionLaneValue;
+    }
+  } else if (!isFollowups) {
+    warnings.push("NEXT block is missing a Session lane value; legacy derivation will be used.");
+  }
+
   return {
     next: {
       role,
@@ -180,6 +217,7 @@ function parseNextSection(sectionText: string): { next: WorkflowNext; warnings: 
       cwd,
       tier: tierValue,
       task: taskValue,
+      sessionLane,
       rawMarkdown: sectionText.trim(),
     },
     warnings,

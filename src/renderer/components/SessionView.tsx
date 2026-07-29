@@ -8,7 +8,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { SessionTerminal } from "./SessionTerminal";
 import type { SessionTerminalHandle } from "./SessionTerminal";
 import { continueAfterSetupRepair, SetupRecoveryBanner } from "./setup-recovery";
-import type { AgentLaunchMode } from "../../shared/ipc/contract";
+import type { AgentLaunchMode, SessionRoleLaunch } from "../../shared/ipc/contract";
 import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
@@ -502,22 +502,32 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const prFixPushGate = getPrFixPushGate(fixMode ? checkpoint : null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  // Auto-pilot conductor: per-session on/off, the roles it opened (which auto-submit
-  // their wf command), and the last action line shown in the feedback strip.
+  // Auto-pilot conductor: per-session on/off and the last action line shown in
+  // the feedback strip.
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
-  const [conductorAutoRoles, setConductorAutoRoles] = useState<Set<SessionAgentRole>>(() => new Set());
-  // Auto-pilot launches for implementer/reviewer: the interactive command to run
-  // and a generation counter. Bumping the generation remounts the tab (a fresh,
-  // watchable agent per step). The architect is not driven this way — it keeps its
-  // context by having the wf typed into its live agent. Empty until auto-pilot runs.
+  // Auto-pilot launches for every role. Bumping the generation remounts the
+  // watchable process; its session lane determines whether the provider
+  // conversation is new or resumed.
   const [roleAutopilot, setRoleAutopilot] = useState<
     Partial<
       Record<
         SessionAgentRole,
-        { command: string; environment: Record<string, string>; cwd: string; typePrompt: string | null; gen: number }
+        {
+          command: string;
+          agentKind: SessionRoleLaunch["agentKind"];
+          environment: Record<string, string>;
+          cwd: string;
+          sessionLane: string;
+          typePrompt: string | null;
+          requestId: string;
+          gen: number;
+        }
       >
     >
   >({});
+  const autopilotDispatches = useRef<
+    Map<string, { resolve: () => void; reject: (reason: Error) => void }>
+  >(new Map());
   const [conductorLog, setConductorLog] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
@@ -803,69 +813,77 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const hasSeparateRoot = repoRoot !== session.worktreePath;
   const filesRootPath = filesScope === "repo" && hasSeparateRoot ? repoRoot : session.worktreePath;
 
-  // Run one auto-pilot step for implementer/reviewer as a fresh, watchable agent.
-  // Bumping the generation remounts the tab, which replaces whatever ran there
-  // (the previous, now-idle step) with a clean process launched with the wf
-  // embedded (or typed, for CLIs without an initial-prompt flag). Built from the
-  // project's CURRENT per-stage config, so switching a stage's agent applies next.
-  function launchAutopilotStep(role: SessionAgentRole, wfPrompt: string): void {
-    void window.agentCoordinator.sessions
-      .buildRoleAutopilot(session.id, role, wfPrompt)
-      .then((launch) => {
-        setRoleAutopilot((current) => ({
-          ...current,
-          [role]: {
-            command: launch.command,
-            environment: launch.environment,
-            cwd: launch.cwd,
-            typePrompt: launch.typePrompt,
-            gen: (current[role]?.gen ?? 0) + 1,
-          },
-        }));
-        setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
-        setActiveTab(role);
-        if (launch.warnings.length > 0) setConductorLog(`⚠ ${roleLabel(role, kind)}: ${launch.warnings[0]}`);
-      })
-      .catch((error: unknown) => setConductorLog(`✖ ${roleLabel(role, kind)}: no se pudo lanzar (${String(error)})`));
+  // Launch a watchable workflow step. The promise resolves only when
+  // SessionTerminal confirms that the PTY exists and the prompt is embedded or
+  // delivered, so the conductor cannot consume an action that never launched.
+  async function launchAutopilotStep(
+    role: SessionAgentRole,
+    sessionLane: string,
+    wfPrompt: string,
+  ): Promise<void> {
+    try {
+      const launch = await window.agentCoordinator.sessions.buildRoleAutopilot(
+        session.id,
+        role,
+        sessionLane,
+        wfPrompt,
+      );
+      const requestId = crypto.randomUUID();
+      const started = new Promise<void>((resolve, reject) => {
+        autopilotDispatches.current.set(requestId, { resolve, reject });
+      });
+      setRoleAutopilot((current) => ({
+        ...current,
+        [role]: {
+          command: launch.command,
+          agentKind: launch.agentKind,
+          environment: launch.environment,
+          cwd: launch.cwd,
+          sessionLane: launch.sessionLane,
+          typePrompt: launch.typePrompt,
+          requestId,
+          gen: (current[role]?.gen ?? 0) + 1,
+        },
+      }));
+      setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
+      setActiveTab(role);
+      if (launch.warnings.length > 0) {
+        setConductorLog(`⚠ ${roleLabel(role, kind)}: ${launch.warnings[0]}`);
+      }
+      await started;
+    } catch (error) {
+      setConductorLog(`✖ ${roleLabel(role, kind)}: no se pudo lanzar (${String(error)})`);
+      throw error;
+    }
+  }
+
+  function settleAutopilot(requestId: string, error?: string): void {
+    const pending = autopilotDispatches.current.get(requestId);
+    if (!pending) return;
+    autopilotDispatches.current.delete(requestId);
+    if (error) pending.reject(new Error(error));
+    else pending.resolve();
   }
 
   // The global "Discuss follow-ups" action launches an architect-tier `wf followups`
   // triage session (turn-independent — it does not need to be the architect's turn).
-  // If the architect agent is already live, type the command into it (keeps its
-  // context); otherwise spin a fresh, watchable agent seeded with the command.
+  // Reopen the durable architect lane with the command. This preserves provider
+  // context without relying on an imperative write racing PTY creation.
   function handleDiscussFollowUps(): void {
     if (!session.checkpointPath) return;
     const command = `wf followups ${session.checkpointPath}`;
-    if (openedRoleTabs.has("architect")) {
-      terminalHandles.current.get("architect")?.sendText(command, true);
-      setActiveTab("architect");
-    } else {
-      launchAutopilotStep("architect", command);
-    }
+    void launchAutopilotStep("architect", "architect", command).catch(() => {});
   }
 
   // Turn a conductor decision into an action on the tabs.
-  // - implementer/reviewer: run the step as a fresh interactive agent seeded with
-  //   the wf (no typing race, watchable). See launchAutopilotStep.
-  // - architect: keep its context — type the wf into its already-open live agent
-  //   (never a fresh agent); if it isn't open, open it and auto-submit on launch.
+  // - send: remount a watchable process attached to the action's durable lane.
   // - pause: pre-type the command (no Enter) so the human runs it.
-  function performConductorAction(action: ConductorAction): void {
+  async function performConductorAction(action: ConductorAction): Promise<void> {
     if (action.kind === "noop") return;
     if (action.kind === "send") {
       const role = action.role;
-      if (role === "architect") {
-        if (openedRoleTabs.has(role)) {
-          terminalHandles.current.get(role)?.sendText(action.command, true);
-          setActiveTab(role);
-        } else {
-          setConductorAutoRoles((current) => new Set(current).add(role));
-          selectRole(role);
-        }
-      } else {
-        launchAutopilotStep(role, action.command);
-      }
       setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
+      await launchAutopilotStep(role, action.lane, action.command);
       return;
     }
     // pause
@@ -1289,17 +1307,27 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   onOpenPath={handleOpenPath}
                   hint={roleHint(role, kind, hasCheckpoint)}
                   autoSubmitWf={
-                    reviewMode || (fixMode && role === "implementer") || conductorAutoRoles.has(role) || autopilot !== null
+                    reviewMode || (fixMode && role === "implementer") || autopilot !== null
                   }
                   autopilotLaunch={
                     autopilot
                       ? {
                           command: autopilot.command,
+                          agentKind: autopilot.agentKind,
                           environment: autopilot.environment,
                           cwd: autopilot.cwd,
+                          sessionLane: autopilot.sessionLane,
                           typePrompt: autopilot.typePrompt,
                         }
                       : null
+                  }
+                  onAutopilotStarted={
+                    autopilot ? () => settleAutopilot(autopilot.requestId) : undefined
+                  }
+                  onAutopilotFailed={
+                    autopilot
+                      ? (reason) => settleAutopilot(autopilot.requestId, reason)
+                      : undefined
                   }
                 />
               </div>

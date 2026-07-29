@@ -50,6 +50,8 @@ export interface SessionRoleAutopilot {
   agentKind: AgentKind;
   environment: Record<string, string>;
   cwd: string;
+  sessionLane: string;
+  sessionUuid: string | null;
   typePrompt: string | null;
   warnings: string[];
 }
@@ -275,8 +277,18 @@ export interface AgentCoordinatorApi {
     unwatchCheckpoint(sessionId: string): Promise<void>;
     onCheckpointDetected(cb: (e: SessionCheckpointDetectedEvent) => void): () => void;
     buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
-    buildRoleAutopilot(sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleAutopilot>;
-    recordRoleAgentSession(sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void>;
+    buildRoleAutopilot(
+      sessionId: string,
+      role: SessionAgentRole,
+      sessionLane: string,
+      wfPrompt: string,
+    ): Promise<SessionRoleAutopilot>;
+    recordRoleAgentSession(
+      sessionId: string,
+      role: SessionAgentRole,
+      sessionLane: string,
+      agentSessionId: string,
+    ): Promise<void>;
   };
   terminal: TerminalApi;
   sessionState: {

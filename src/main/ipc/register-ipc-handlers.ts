@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -46,7 +45,10 @@ function credsFrom(email: string, token: string): { token: string; email?: strin
   return email.trim() ? { token, email: email.trim() } : { token };
 }
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
-import { buildAgentLaunchCommand, buildAutopilotLaunchCommand } from "../../shared/workflow/agent-runtime-config";
+import {
+  buildAgentLaunchCommand,
+  buildAutopilotLaunchCommand,
+} from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
@@ -65,7 +67,9 @@ import type { SessionCheckpointWatchManager } from "../projects/session-checkpoi
 import type { SessionRegistry } from "../projects/session-registry";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspace-layout-store";
+import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
 import { claudeConversationExists } from "../terminals/claude-session-store";
+import type { CodexThreadAllocator } from "../terminals/codex-thread-allocator";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { getWorktreeDiff } from "../projects/worktree-diff";
 import { addWorktreeExclude } from "../projects/worktree-exclude";
@@ -95,6 +99,7 @@ export function registerIpcHandlers(params: {
   sessionRegistry: SessionRegistry;
   sessionCheckpointWatchManager: SessionCheckpointWatchManager;
   sessionAgentUuidStore: SessionAgentUuidStore;
+  codexThreadAllocator: CodexThreadAllocator;
   workspaceLayoutStore: WorkspaceLayoutStore;
   vcsSecretStore: VcsSecretStore;
 }): void {
@@ -104,10 +109,31 @@ export function registerIpcHandlers(params: {
     sessionRegistry,
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
+    codexThreadAllocator,
     workspaceLayoutStore,
     vcsSecretStore,
   } = params;
   const sessionSetupCoordinator = createSessionSetupCoordinator();
+  const agentSessionLaneResolver = createAgentSessionLaneResolver({
+    sessionAgentUuidStore,
+    codexThreadAllocator,
+  });
+
+  function assertSessionLaneRole(sessionLane: string, role: SessionAgentRole): void {
+    // Normal manually-opened tabs retain the legacy role-sized binding.
+    if (sessionLane === role) return;
+    if (
+      !/^(plan-\d+|feature-review|fix)\/(implementer|reviewer)$/.test(sessionLane)
+    ) {
+      throw new Error(`Invalid session lane: "${sessionLane}"`);
+    }
+    const laneRole = sessionLane === "architect"
+      ? "architect"
+      : sessionLane.match(/\/(implementer|reviewer)$/)?.[1] ?? null;
+    if (laneRole !== role) {
+      throw new Error(`Session lane "${sessionLane}" does not belong to role "${role}"`);
+    }
+  }
 
   function hasWorkflowCheckpoint(session: WorkSession): boolean {
     return session.kind === "feature" || session.kind === "fix" || session.kind === "pr-fix";
@@ -624,7 +650,14 @@ export function registerIpcHandlers(params: {
 
   ipcMain.handle(
     IPC_CHANNELS.sessionsRecordRoleAgentSession,
-    async (_event, sessionId: string, role: SessionAgentRole, agentSessionId: string): Promise<void> => {
+    async (
+      _event,
+      sessionId: string,
+      role: SessionAgentRole,
+      sessionLane: string,
+      agentSessionId: string,
+    ): Promise<void> => {
+      assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
       if (!session) {
         throw new Error(`Session not found: ${sessionId}`);
@@ -637,7 +670,11 @@ export function registerIpcHandlers(params: {
       if (!isKimiSessionId(agentSessionId)) {
         throw new Error(`Invalid Kimi session id: ${agentSessionId}`);
       }
-      await sessionAgentUuidStore.set({ sessionId, role, uuid: agentSessionId });
+      await sessionAgentUuidStore.set({
+        sessionId,
+        lane: sessionLane,
+        binding: { agentKind: "kimi", sessionUuid: agentSessionId },
+      });
     },
   );
 
@@ -650,38 +687,36 @@ export function registerIpcHandlers(params: {
       }
       const project = await findProject(projectRegistry, session.projectId);
       const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const sessionLane = role;
 
-      // A restore needs a previously captured/minted id. If the store was
-      // cleared, fall back to a clean fresh launch instead of asking the CLI to
-      // resume a non-existent conversation.
-      let effectiveMode: AgentLaunchMode = mode;
-      let uuid = mode === "resume" ? await sessionAgentUuidStore.get({ sessionId, role }) : null;
+      // Manual tabs retain their legacy role-sized lane. A fresh open replaces
+      // that binding; a restored open attaches to the exact provider session.
+      let sessionDirective = await agentSessionLaneResolver.resolve({
+        sessionId,
+        sessionLane,
+        cwd: session.worktreePath,
+        agentConfig,
+        forceFresh: mode === "fresh",
+      });
 
       // Even with a stored id, `claude --resume` fails ("No conversation found")
       // when the tab was opened but its pre-typed command was never sent, so
       // nothing was written to disk. Only resume when the conversation file
       // exists; otherwise launch fresh and REUSE the id, so a later real use
       // persists it and the next restart resumes cleanly.
-      if (uuid && mode === "resume" && agentConfig.kind === "claude" && !(await claudeConversationExists(uuid))) {
-        effectiveMode = "fresh";
+      if (
+        sessionDirective?.mode === "resume" &&
+        agentConfig.kind === "claude" &&
+        !(await claudeConversationExists(sessionDirective.id))
+      ) {
+        sessionDirective = { ...sessionDirective, mode: "fresh" };
       }
 
       // The current Kimi CLI does not accept a caller-provided id when creating
       // a TUI session. Launch it without --session; SessionTerminal captures
       // the session_<uuid> Kimi renders and persists it through the IPC above.
       // On reopen, the stored id is passed as --session for an exact resume.
-      if (!uuid && agentConfig.kind === "kimi") {
-        effectiveMode = "fresh";
-      } else if (!uuid) {
-        effectiveMode = "fresh";
-        uuid = randomUUID();
-        await sessionAgentUuidStore.set({ sessionId, role, uuid });
-      }
-
-      const launch = buildAgentLaunchCommand(
-        agentConfig,
-        uuid ? { id: uuid, mode: effectiveMode } : undefined,
-      );
+      const launch = buildAgentLaunchCommand(agentConfig, sessionDirective);
       // A fresh PR session auto-runs its kickoff. A restored PR session only
       // resumes the conversation: injecting it again would repeat the work.
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
@@ -693,31 +728,54 @@ export function registerIpcHandlers(params: {
         environment: { ...launch.environment },
         wfCommand,
         cwd: session.worktreePath,
-        sessionUuid: uuid,
+        sessionUuid: sessionDirective?.id ?? null,
         warnings: launch.warnings,
       };
     },
   );
 
   // Auto-pilot: build the INTERACTIVE launch that runs `wfPrompt` for a role,
-  // using the project's current per-stage config (so switching a stage's agent/
-  // model applies on the next step). Only implementer/reviewer use this; the
-  // architect is driven by typing into its live agent to keep its context.
+  // using the project's current per-stage config. The lane decides whether the
+  // provider conversation is created or resumed; switching provider replaces
+  // only that lane's binding.
   ipcMain.handle(
     IPC_CHANNELS.sessionsBuildRoleAutopilot,
-    async (_event, sessionId: string, role: SessionAgentRole, wfPrompt: string): Promise<SessionRoleAutopilot> => {
+    async (
+      _event,
+      sessionId: string,
+      role: SessionAgentRole,
+      sessionLane: string,
+      wfPrompt: string,
+    ): Promise<SessionRoleAutopilot> => {
+      assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
       if (!session) {
         throw new Error(`Session not found: ${sessionId}`);
       }
       const project = await findProject(projectRegistry, session.projectId);
       const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
-      const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt);
+      let sessionDirective = await agentSessionLaneResolver.resolve({
+        sessionId,
+        sessionLane,
+        cwd: session.worktreePath,
+        agentConfig,
+        forceFresh: false,
+      });
+      if (
+        sessionDirective?.mode === "resume" &&
+        agentConfig.kind === "claude" &&
+        !(await claudeConversationExists(sessionDirective.id))
+      ) {
+        sessionDirective = { ...sessionDirective, mode: "fresh" };
+      }
+      const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt, sessionDirective);
       return {
         command: launch.command,
         agentKind: agentConfig.kind,
         environment: { ...launch.environment },
         cwd: session.worktreePath,
+        sessionLane,
+        sessionUuid: sessionDirective?.id ?? null,
         typePrompt: launch.typePrompt,
         warnings: launch.warnings,
       };

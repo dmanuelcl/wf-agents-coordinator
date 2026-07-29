@@ -8,6 +8,7 @@ export interface WorkflowNext {
   cwd: string | null;
   tier: string | null;
   task: string | null;
+  sessionLane: string | null;
   rawMarkdown: string;
 }
 

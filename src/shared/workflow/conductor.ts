@@ -3,7 +3,7 @@ import type { SessionAgentRole } from "./session-role-launch";
 import type { ParsedCheckpoint } from "./workflow-types";
 
 export type ConductorAction =
-  | { kind: "send"; role: SessionAgentRole; command: string; reason: string }
+  | { kind: "send"; role: SessionAgentRole; lane: string; command: string; reason: string }
   | { kind: "pause"; role: SessionAgentRole | null; command: string | null; reason: string }
   | { kind: "noop"; reason: string };
 
@@ -28,9 +28,16 @@ function isAgentRole(role: string): role is SessionAgentRole {
   return AGENT_ROLES.has(role);
 }
 
-function taskKeyOf(tier: string | null, task: string | null, command: string): string {
-  const key = `${tier ?? ""}|${task ?? ""}`;
-  return key === "|" ? command : key;
+function legacyLaneOf(checkpoint: ParsedCheckpoint, role: SessionAgentRole): string | null {
+  if (role === "architect") return "architect";
+  if (checkpoint.kind === "fix") return `fix/${role}`;
+  if (/FEATURE_REVIEW/i.test(checkpoint.next?.task ?? "")) return `feature-review/${role}`;
+  const planMatch = (checkpoint.next?.task ?? "").match(/\bPlan-(\d+)\b/i);
+  return planMatch ? `plan-${planMatch[1]}/${role}` : null;
+}
+
+function scopeKeyOfLane(lane: string): string {
+  return lane.replace(/\/(?:implementer|reviewer)$/, "");
 }
 
 /** `wf followups` is a manual-only post-workflow step (run via its own button). */
@@ -72,8 +79,15 @@ export function decideConductor(params: {
 
   const role = next.role;
   const command = next.command;
-  const tKey = taskKeyOf(next.tier, next.task, command);
-  const nextKey = `${role}|${command}|${next.tier ?? ""}|${next.task ?? ""}`;
+  const lane = next.sessionLane ?? legacyLaneOf(checkpoint, role);
+  if (!lane) {
+    return {
+      action: { kind: "pause", role, command, reason: "NEXT session lane is missing or cannot be derived" },
+      next: prev,
+    };
+  }
+  const tKey = scopeKeyOfLane(lane);
+  const nextKey = `${role}|${lane}|${command}|${next.tier ?? ""}|${next.task ?? ""}`;
 
   // 4. Idempotency: same step we just acted on → noop.
   if (nextKey === prev.lastActedKey) {
@@ -96,7 +110,7 @@ export function decideConductor(params: {
     role === "reviewer" && !prev.reviewedTasks.includes(tKey) ? [...prev.reviewedTasks, tKey] : prev.reviewedTasks;
 
   return {
-    action: { kind: "send", role, command, reason: isReloop ? "re-loop fix" : "advance" },
+    action: { kind: "send", role, lane, command, reason: isReloop ? "re-loop fix" : "advance" },
     next: { lastActedKey: nextKey, reloopCount, reviewedTasks },
   };
 }

@@ -17,12 +17,14 @@ export interface ConductorController {
  */
 export function createConductorController(deps: {
   getConfig: () => AutoPilotConfig;
-  onAction: (action: ConductorAction) => void;
+  onAction: (action: ConductorAction) => Promise<void>;
 }): ConductorController {
   let state: ConductorState = INITIAL_CONDUCTOR_STATE;
   let enabled = false;
   let latest: ParsedCheckpoint | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight = false;
+  let rerunAfterFlight = false;
 
   function clearTimer(): void {
     if (timer !== null) {
@@ -34,9 +36,35 @@ export function createConductorController(deps: {
   function fire(): void {
     timer = null;
     if (!enabled || !latest) return;
+    if (inFlight) {
+      rerunAfterFlight = true;
+      return;
+    }
     const { action, next } = decideConductor({ prev: state, checkpoint: latest, config: deps.getConfig() });
-    state = next;
-    if (action.kind !== "noop") deps.onAction(action);
+    if (action.kind === "noop") return;
+    if (action.kind === "pause") {
+      state = next;
+      void deps.onAction(action);
+      return;
+    }
+    inFlight = true;
+    void deps.onAction(action).then(
+      () => {
+        state = next;
+        inFlight = false;
+        if (enabled && rerunAfterFlight) {
+          rerunAfterFlight = false;
+          schedule();
+        }
+      },
+      () => {
+        inFlight = false;
+        if (enabled && rerunAfterFlight) {
+          rerunAfterFlight = false;
+          schedule();
+        }
+      },
+    );
   }
 
   function schedule(): void {
@@ -47,13 +75,20 @@ export function createConductorController(deps: {
   return {
     notifyCheckpoint(checkpoint) {
       latest = checkpoint;
-      if (enabled) schedule();
+      if (enabled && inFlight) {
+        rerunAfterFlight = true;
+      } else if (enabled) {
+        schedule();
+      }
     },
     setEnabled(value) {
       if (enabled === value) return;
       enabled = value;
       if (enabled && latest) schedule();
-      if (!enabled) clearTimer();
+      if (!enabled) {
+        clearTimer();
+        rerunAfterFlight = false;
+      }
     },
     dispose() {
       clearTimer();

@@ -11,6 +11,7 @@ function checkpoint(params: {
   command?: string | null;
   tier?: string | null;
   task?: string | null;
+  sessionLane?: string | null;
   status?: WorkflowStatus;
   hasNext?: boolean;
 }): ParsedCheckpoint {
@@ -23,6 +24,9 @@ function checkpoint(params: {
           cwd: ".worktrees/x",
           tier: params.tier ?? null,
           task: params.task ?? null,
+          sessionLane:
+            params.sessionLane ??
+            (params.role === "architect" ? "architect" : `plan-1/${params.role ?? "implementer"}`),
           rawMarkdown: "",
         };
   return {
@@ -134,6 +138,7 @@ describe("decideConductor — forward progress", () => {
       role: "reviewer",
       command: "wf review docs/x-checkpoint.md",
       task: "FEATURE_REVIEW — holistic whole-branch review",
+      sessionLane: "feature-review/reviewer",
       status: "IN_PROGRESS",
     });
     featureReview.ledgerRows = [
@@ -160,7 +165,12 @@ describe("decideConductor — forward progress", () => {
   it("re-runs review after a fix: review X → implement X → review X, the final review sends (not swallowed)", () => {
     const rev1 = decideConductor({
       prev: INITIAL_CONDUCTOR_STATE,
-      checkpoint: checkpoint({ role: "reviewer", command: "wf review docs/x-checkpoint.md", task: "P1" }),
+      checkpoint: checkpoint({
+        role: "reviewer",
+        command: "wf review docs/x-checkpoint.md",
+        task: "P1",
+        sessionLane: "plan-1/reviewer",
+      }),
       config: CONFIG,
     });
     const impl = decideConductor({
@@ -170,12 +180,18 @@ describe("decideConductor — forward progress", () => {
     });
     const rev2 = decideConductor({
       prev: impl.next,
-      checkpoint: checkpoint({ role: "reviewer", command: "wf review docs/x-checkpoint.md", task: "P1" }),
+      checkpoint: checkpoint({
+        role: "reviewer",
+        command: "wf review docs/x-checkpoint.md",
+        task: "P1",
+        sessionLane: "plan-1/reviewer",
+      }),
       config: CONFIG,
     });
     expect(rev1.action.kind).toBe("send");
     expect(impl.action.kind).toBe("send"); // first bounce, under cap
     expect(rev2.action.kind).toBe("send");
+    expect(rev2.action).toMatchObject({ lane: "plan-1/reviewer" });
   });
 });
 
@@ -229,12 +245,17 @@ describe("decideConductor — re-loop cap", () => {
     }
     state = decideConductor({
       prev: state,
-      checkpoint: checkpoint({ role: "reviewer", command: "wf review docs/x-checkpoint.md", task: "P2" }),
+      checkpoint: checkpoint({
+        role: "reviewer",
+        command: "wf review docs/x-checkpoint.md",
+        task: "P2",
+        sessionLane: "plan-2/reviewer",
+      }),
       config: CONFIG,
     }).next;
     const p2Impl = decideConductor({
       prev: state,
-      checkpoint: checkpoint({ role: "implementer", task: "P2" }),
+      checkpoint: checkpoint({ role: "implementer", task: "P2", sessionLane: "plan-2/implementer" }),
       config: CONFIG,
     });
     expect(p2Impl.action.kind).toBe("send");

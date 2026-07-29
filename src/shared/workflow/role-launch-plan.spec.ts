@@ -9,6 +9,7 @@ function makeNext(overrides: Partial<WorkflowNext> = {}): WorkflowNext {
     cwd: ".worktrees/example",
     tier: null,
     task: null,
+    sessionLane: "plan-1/implementer",
     rawMarkdown: "",
     ...overrides,
   };

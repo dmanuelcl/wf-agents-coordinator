@@ -57,12 +57,23 @@ export interface SessionTerminalProps {
   // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
   // instead of only pre-typing it for the user to press Enter.
   autoSubmitWf?: boolean;
-  // Auto-pilot only (implementer/reviewer): launch this INTERACTIVE command seeded
-  // with a wf step instead of the normal role launch. The tab is remounted per
-  // step by its React key, so each step is a fresh, watchable agent. `command`
+  // Auto-pilot: launch this INTERACTIVE command seeded with a wf step instead
+  // of the normal role launch. The tab is remounted per step by its React key,
+  // so each step gets a clean, watchable process attached to its session lane. `command`
   // usually embeds the wf; when it can't, `typePrompt` is typed + submitted after
   // the agent is ready (via the follow-up gate, autoSubmitWf).
-  autopilotLaunch?: { command: string; environment: Record<string, string>; cwd: string; typePrompt: string | null } | null;
+  autopilotLaunch?: {
+    command: string;
+    agentKind: SessionRoleLaunch["agentKind"];
+    environment: Record<string, string>;
+    cwd: string;
+    sessionLane: string;
+    typePrompt: string | null;
+  } | null;
+  // Auto-pilot acknowledgement: the conductor consumes a checkpoint action
+  // only after the PTY exists and its workflow prompt was embedded or delivered.
+  onAutopilotStarted?: () => void;
+  onAutopilotFailed?: (reason: string) => void;
   // Setup terminal only: called after there is no setup to run, or after the
   // single setup owner exits 0 and setupDone has been persisted.
   onSetupReady?: () => void;
@@ -103,7 +114,21 @@ export interface SessionTerminalHandle {
 
 export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminalProps>(
   function SessionTerminal(props, ref): JSX.Element {
-  const { session, role, mode, persistKey, onOpenPath, hint, cwdOverride, autoSubmitWf, autopilotLaunch, onSetupReady, onSetupFailed } = props;
+  const {
+    session,
+    role,
+    mode,
+    persistKey,
+    onOpenPath,
+    hint,
+    cwdOverride,
+    autoSubmitWf,
+    autopilotLaunch,
+    onAutopilotStarted,
+    onAutopilotFailed,
+    onSetupReady,
+    onSetupFailed,
+  } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
   // Mirrors the effect-local `ptyId` so the imperative handle can reach the live
@@ -155,10 +180,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   // capture a stale onOpenPath (and stale open-tabs). Route through a ref that
   // always points at the latest handler.
   const onOpenPathRef = useRef(onOpenPath);
+  const onAutopilotStartedRef = useRef(onAutopilotStarted);
+  const onAutopilotFailedRef = useRef(onAutopilotFailed);
   const onSetupReadyRef = useRef(onSetupReady);
   const onSetupFailedRef = useRef(onSetupFailed);
   useEffect(() => {
     onOpenPathRef.current = onOpenPath;
+    onAutopilotStartedRef.current = onAutopilotStarted;
+    onAutopilotFailedRef.current = onAutopilotFailed;
     onSetupReadyRef.current = onSetupReady;
     onSetupFailedRef.current = onSetupFailed;
   });
@@ -188,6 +217,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     let ptyId: string | null = null;
     let disposed = false;
     let followUpSent = false;
+    let autopilotAcknowledged = false;
     let fellBackToShell = false;
     let ownsSetupClaim = false;
     let shellCwd = cwdOverride ?? session.worktreePath;
@@ -240,6 +270,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // open only pre-types it (the user presses Enter).
       const paste = `\x1b[200~${wfPreType}\x1b[201~`;
       window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${paste}\r` : paste);
+      if (autopilotLaunch && !autopilotAcknowledged) {
+        autopilotAcknowledged = true;
+        onAutopilotStartedRef.current?.();
+      }
     }
 
     // An agent runs AS the PTY process, so quitting it closes the PTY. Instead of
@@ -297,6 +331,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         // embedded in the command, typePrompt is null (nothing to type); otherwise
         // the follow-up gate types + submits it once the agent is ready.
         agentCommand = autopilotLaunch.command;
+        agentKind = autopilotLaunch.agentKind;
         agentEnvironment = autopilotLaunch.environment;
         shellCwd = autopilotLaunch.cwd;
         wfPreType = autopilotLaunch.typePrompt;
@@ -352,7 +387,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (!kimiSessionId || kimiSessionId === recordedKimiSessionId) return;
         recordedKimiSessionId = kimiSessionId;
         void window.agentCoordinator.sessions
-          .recordRoleAgentSession(session.id, role, kimiSessionId)
+          .recordRoleAgentSession(
+            session.id,
+            role,
+            autopilotLaunch?.sessionLane ?? role,
+            kimiSessionId,
+          )
           .catch((error: unknown) => {
             if (!disposed) setWarnings((current) => [...current, `Could not persist Kimi session: ${String(error)}`]);
           });
@@ -455,6 +495,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       }
       ptyId = id;
       ptyIdRef.current = id;
+      if (autopilotLaunch && wfPreType === null && !autopilotAcknowledged) {
+        autopilotAcknowledged = true;
+        onAutopilotStartedRef.current?.();
+      }
 
       // Arm the follow-up gate only when we start directly in the agent phase.
       if (phase === "agent") followUpGate?.start();
@@ -473,7 +517,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         ownsSetupClaim = false;
         void window.agentCoordinator.sessions.releaseSetup(session.id);
       }
-      if (!disposed) setWarnings((current) => [...current, String(error)]);
+      if (!disposed) {
+        const reason = String(error);
+        setWarnings((current) => [...current, reason]);
+        if (autopilotLaunch && !autopilotAcknowledged) {
+          autopilotAcknowledged = true;
+          onAutopilotFailedRef.current?.(reason);
+        }
+      }
     });
 
     const resizeObserver = new ResizeObserver(() => {

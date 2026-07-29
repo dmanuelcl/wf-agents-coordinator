@@ -14,6 +14,7 @@ import { createWorkspaceLayoutStore } from "./projects/workspace-layout-store";
 import { createVcsSecretStore } from "./vcs/vcs-secret-store";
 import { spawnRealPty } from "./terminals/node-pty-adapter";
 import { createPtySessionManager } from "./terminals/pty-session-manager";
+import { createCodexThreadAllocator } from "./terminals/codex-thread-allocator";
 import { createSessionAgentUuidStore } from "./terminals/session-agent-uuid-store";
 import { createSessionStateStore } from "./terminals/session-state-store";
 import { createTerminalScrollbackStore } from "./terminals/terminal-scrollback-store";
@@ -85,6 +86,7 @@ void app.whenReady().then(() => {
   const sessionAgentUuidStore = createSessionAgentUuidStore({
     storeFilePath: join(app.getPath("userData"), "session-agents.json"),
   });
+  const codexThreadAllocator = createCodexThreadAllocator();
 
   const workspaceLayoutStore = createWorkspaceLayoutStore({
     storeFilePath: join(app.getPath("userData"), "workspace-layout.json"),
@@ -129,6 +131,7 @@ void app.whenReady().then(() => {
     sessionRegistry,
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
+    codexThreadAllocator,
     workspaceLayoutStore,
     vcsSecretStore,
   });

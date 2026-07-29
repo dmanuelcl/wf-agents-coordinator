@@ -1,19 +1,31 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
+import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 
-type Store = Record<string, Partial<Record<SessionAgentRole, string>>>;
+export interface AgentSessionBinding {
+  agentKind: AgentKind | null;
+  sessionUuid: string;
+}
+
+interface StoredAgentSessionBinding {
+  agentKind: AgentKind;
+  sessionUuid: string;
+}
+
+type Store = Record<string, Record<string, StoredAgentSessionBinding | string>>;
 
 /**
- * Remembers the agent conversation id for each (session, role) tab. Claude's
- * id is minted by the app; Kimi's `session_<uuid>` is captured from its TUI.
- * A later launch can then restore that exact conversation instead of relying
- * on a cwd-wide "most recent" heuristic. One flat JSON file, mirroring the
- * other registries.
+ * Remembers the provider conversation for each workflow session lane. A lane
+ * is bounded to one plan/stage (for example `plan-2/reviewer`) so correction
+ * loops resume their context while the next plan starts clean.
  */
 export interface SessionAgentUuidStore {
-  get(params: { sessionId: string; role: SessionAgentRole }): Promise<string | null>;
-  set(params: { sessionId: string; role: SessionAgentRole; uuid: string }): Promise<void>;
+  get(params: { sessionId: string; lane: string }): Promise<AgentSessionBinding | null>;
+  set(params: {
+    sessionId: string;
+    lane: string;
+    binding: StoredAgentSessionBinding;
+  }): Promise<void>;
 }
 
 export function createSessionAgentUuidStore(params: { storeFilePath: string }): SessionAgentUuidStore {
@@ -37,15 +49,19 @@ export function createSessionAgentUuidStore(params: { storeFilePath: string }): 
   }
 
   return {
-    async get({ sessionId, role }) {
+    async get({ sessionId, lane }) {
       const records = await readAll();
-      return records[sessionId]?.[role] ?? null;
+      const stored = records[sessionId]?.[lane] ?? null;
+      if (typeof stored === "string") {
+        return { agentKind: null, sessionUuid: stored };
+      }
+      return stored ?? null;
     },
 
-    async set({ sessionId, role, uuid }) {
+    async set({ sessionId, lane, binding }) {
       const records = await readAll();
       const forSession = records[sessionId] ?? {};
-      forSession[role] = uuid;
+      forSession[lane] = binding;
       records[sessionId] = forSession;
       await writeAll(records);
     },

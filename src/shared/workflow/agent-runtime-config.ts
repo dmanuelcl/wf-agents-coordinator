@@ -58,9 +58,9 @@ export interface AgentLaunchCommandResult {
 
 /**
  * A deterministic session directive for an agent launch. Claude accepts an
- * app-minted id for both modes. Kimi mints its own id on a fresh launch, which
- * the renderer captures, and accepts it here on resume. Every other kind
- * relaunches fresh and warns.
+ * app-minted id for both modes. Codex receives an app-server-preallocated id
+ * and opens it through `codex resume`. Kimi mints its own id on a fresh launch,
+ * which the renderer captures, and accepts it here on resume.
  */
 export interface AgentSessionLaunch {
   id: string;
@@ -99,14 +99,19 @@ function buildClaudeLaunchCommand(
   return { command: parts.join(" "), warnings: [] };
 }
 
-// codex --model gpt-5.5 -c model_reasoning_effort="high" [--ask-for-approval never --sandbox danger-full-access]
+// codex [resume <session-id>] --model gpt-5.5 -c model_reasoning_effort="high"
+//       [--ask-for-approval never --sandbox danger-full-access]
 //       -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true
-function buildCodexLaunchCommand(config: AgentRuntimeConfig): AgentLaunchCommandResult {
-  const parts = ["codex"];
+function buildCodexLaunchCommand(
+  config: AgentRuntimeConfig,
+  session: AgentSessionLaunch | undefined,
+): AgentLaunchCommandResult {
+  const parts = session ? ["codex", "resume"] : ["codex"];
   if (model(config)) parts.push("--model", model(config));
   if (config.effort) parts.push("-c", `model_reasoning_effort="${config.effort}"`);
   if (config.dangerous) parts.push("--ask-for-approval", "never", "--sandbox", "danger-full-access");
   parts.push("-c", 'model_reasoning_summary="detailed"', "-c", "model_supports_reasoning_summaries=true");
+  if (session) parts.push(session.id);
   return { command: parts.join(" "), warnings: [] };
 }
 
@@ -181,7 +186,7 @@ export function buildAgentLaunchCommand(
     case "claude":
       return buildClaudeLaunchCommand(config, session);
     case "codex":
-      return withUnwiredSessionWarning(buildCodexLaunchCommand(config), config.kind, session);
+      return buildCodexLaunchCommand(config, session);
     case "kimi":
       return buildKimiLaunchCommand(config, session);
     case "opencode":
@@ -221,8 +226,12 @@ export interface AutopilotLaunchCommand extends AgentLaunchCommandResult {
  * match a normal interactive launch. The prompt is shell-quoted because the
  * command runs through `$SHELL -c "exec <command>"`.
  */
-export function buildAutopilotLaunchCommand(config: AgentRuntimeConfig, wfPrompt: string): AutopilotLaunchCommand {
-  const base = buildAgentLaunchCommand(config);
+export function buildAutopilotLaunchCommand(
+  config: AgentRuntimeConfig,
+  wfPrompt: string,
+  session?: AgentSessionLaunch,
+): AutopilotLaunchCommand {
+  const base = buildAgentLaunchCommand(config, session);
   const q = shellQuoteSingle(wfPrompt);
   switch (config.kind) {
     case "claude":
