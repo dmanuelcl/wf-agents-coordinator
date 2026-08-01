@@ -1,4 +1,3 @@
-import { safeStorage } from "electron";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -15,8 +14,14 @@ export interface VcsSecretStore {
   deleteToken(projectId: string): Promise<void>;
 }
 
-export function createVcsSecretStore(params: { storeFilePath: string }): VcsSecretStore {
-  const { storeFilePath } = params;
+export interface SecretCipher {
+  isAvailable(): boolean;
+  encrypt(plaintext: string): string;
+  decrypt(ciphertext: string): string;
+}
+
+export function createVcsSecretStore(params: { storeFilePath: string; cipher: SecretCipher }): VcsSecretStore {
+  const { storeFilePath, cipher } = params;
 
   async function readAll(): Promise<Record<string, string>> {
     try {
@@ -34,21 +39,20 @@ export function createVcsSecretStore(params: { storeFilePath: string }): VcsSecr
 
   return {
     async setToken(projectId, token) {
-      if (!safeStorage.isEncryptionAvailable()) {
+      if (!cipher.isAvailable()) {
         throw new Error("Secure storage is unavailable on this OS; refusing to store the token in plaintext.");
       }
-      const cipher = safeStorage.encryptString(token).toString("base64");
+      const ciphertext = cipher.encrypt(token);
       const map = await readAll();
-      map[projectId] = cipher;
+      map[projectId] = ciphertext;
       await writeAll(map);
     },
 
     async getToken(projectId) {
       const map = await readAll();
-      const cipher = map[projectId];
-      if (!cipher) return null;
-      if (!safeStorage.isEncryptionAvailable()) return null;
-      return safeStorage.decryptString(Buffer.from(cipher, "base64"));
+      const ciphertext = map[projectId];
+      if (!ciphertext || !cipher.isAvailable()) return null;
+      return cipher.decrypt(ciphertext);
     },
 
     async hasToken(projectId) {

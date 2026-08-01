@@ -1,0 +1,18 @@
+[Unit]
+Description=Agent Coordinator remote runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Copy this file into ~/.config/systemd/user/ and adjust paths (and pnpm if needed).
+WorkingDirectory=/srv/agent-coordinator/app
+EnvironmentFile=/srv/agent-coordinator/runner.env
+ExecStart=/usr/bin/pnpm remote:runner
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

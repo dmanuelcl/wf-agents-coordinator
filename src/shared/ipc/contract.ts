@@ -196,6 +196,13 @@ export interface TerminalExitEvent {
   code: number;
 }
 
+export interface TerminalCreateResult {
+  sessionId: string;
+  // True when a remote client reattached to a still-running terminal rather
+  // than spawning another agent process after a reconnect.
+  reused: boolean;
+}
+
 export interface TerminalApi {
   // When `launchCommand` is set the PTY runs that command as its process (the
   // agent CLI); otherwise it opens a plain interactive shell (the `+` tab).
@@ -207,7 +214,7 @@ export interface TerminalApi {
     launchCommand?: string | null;
     environment?: Record<string, string>;
     persistKey?: string | null;
-  }): Promise<string>;
+  }): Promise<TerminalCreateResult>;
   write(sessionId: string, data: string): void;
   resize(sessionId: string, cols: number, rows: number): void;
   kill(sessionId: string): void;
@@ -231,6 +238,10 @@ export interface SystemDirEntry {
 }
 
 export interface AgentCoordinatorApi {
+  connection: {
+    mode: "local" | "remote";
+    endpoint?: string;
+  };
   projects: {
     list(): Promise<ProjectRecord[]>;
     add(input: ProjectCreateInput): Promise<ProjectRecord>;

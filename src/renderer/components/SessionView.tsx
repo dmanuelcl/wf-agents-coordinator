@@ -1304,6 +1304,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   session={session}
                   role={role}
                   mode={mode}
+                  persistKey={autopilot ? undefined : `${session.id}::role::${role}`}
                   onOpenPath={handleOpenPath}
                   hint={roleHint(role, kind, hasCheckpoint)}
                   autoSubmitWf={

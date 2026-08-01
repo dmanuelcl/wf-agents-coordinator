@@ -144,6 +144,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   function handleDrop(event: ReactDragEvent): void {
     event.preventDefault();
     setDragOver(false);
+    if (window.agentCoordinator.connection.mode === "remote") {
+      setWarnings((current) => [...current, "Put local files on the runner before attaching them to a remote terminal."]);
+      return;
+    }
     const id = ptyIdRef.current;
     if (!id) return;
     const paths = Array.from(event.dataTransfer?.files ?? [])
@@ -155,6 +159,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   }
 
   function handleDragOver(event: ReactDragEvent): void {
+    if (window.agentCoordinator.connection.mode === "remote") return;
     if (event.dataTransfer?.types?.includes("Files")) {
       event.preventDefault();
       setDragOver(true);
@@ -281,11 +286,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     // existing onData/onExit/write handlers all target the current `ptyId`, so
     // reassigning it is enough to rewire them to the new shell.
     async function fallBackToShell(): Promise<void> {
-      const id = await window.agentCoordinator.terminal.create({
+      const created = await window.agentCoordinator.terminal.create({
         cwd: shellCwd,
         cols: term.cols,
         rows: term.rows,
       });
+      const id = created.sessionId;
       if (disposed) {
         window.agentCoordinator.terminal.kill(id);
         return;
@@ -481,7 +487,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (setupCommand) {
         term.write(`\x1b[2m—— setup: ${setupCommand} ——\x1b[0m\r\n`);
       }
-      const id = await window.agentCoordinator.terminal.create({
+      const created = await window.agentCoordinator.terminal.create({
         cwd: shellCwd,
         cols: term.cols,
         rows: term.rows,
@@ -489,12 +495,21 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         environment: setupCommand ? undefined : agentEnvironment,
         persistKey: persistKey ?? null,
       });
+      const id = created.sessionId;
       if (disposed) {
-        window.agentCoordinator.terminal.kill(id);
+        if (window.agentCoordinator.connection.mode === "local") window.agentCoordinator.terminal.kill(id);
         return;
       }
       ptyId = id;
       ptyIdRef.current = id;
+      // A remote runner survives a closed/reloaded client. Its output was
+      // replayed from scrollback above and we are subscribed again, so never
+      // re-send the role kickoff into an already-running agent.
+      if (created.reused) {
+        for (const event of pendingData.splice(0)) handleData(event);
+        for (const event of pendingExits.splice(0)) handleExit(event);
+        return;
+      }
       if (autopilotLaunch && wfPreType === null && !autopilotAcknowledged) {
         autopilotAcknowledged = true;
         onAutopilotStartedRef.current?.();
@@ -540,7 +555,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       disposed = true;
       resizeObserver.disconnect();
       disposables.forEach((dispose) => dispose());
-      if (ptyId) window.agentCoordinator.terminal.kill(ptyId);
+      if (ptyId && window.agentCoordinator.connection.mode === "local") window.agentCoordinator.terminal.kill(ptyId);
       ptyIdRef.current = null;
       term.dispose();
       // Send kill before releasing ownership so another window cannot claim

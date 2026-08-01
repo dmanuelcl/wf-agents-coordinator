@@ -219,6 +219,11 @@ export function ProjectRail(props: ProjectRailProps): JSX.Element {
           <SidebarToggleIcon />
         </button>
         {!collapsed && <h2>Projects</h2>}
+        {!collapsed && window.agentCoordinator.connection.mode === "remote" && (
+          <span className="project-rail-remote" title={window.agentCoordinator.connection.endpoint}>
+            Remote
+          </span>
+        )}
         {!collapsed && (
           <button type="button" className="project-rail-add" aria-label="Add project" onClick={onRequestCreateProject}>
             <PlusIcon />

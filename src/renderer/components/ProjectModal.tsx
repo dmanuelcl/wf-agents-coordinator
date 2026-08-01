@@ -105,6 +105,7 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   const [vcsTestResult, setVcsTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const remote = window.agentCoordinator.connection.mode === "remote";
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -163,13 +164,21 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   }
 
   async function handlePickExistingFolder(): Promise<void> {
-    const picked = await window.agentCoordinator.projects.pickFolder();
-    if (picked) setExistingFolderPath(picked);
+    try {
+      const picked = await window.agentCoordinator.projects.pickFolder();
+      if (picked) setExistingFolderPath(picked);
+    } catch (caught) {
+      setError(String(caught));
+    }
   }
 
   async function handlePickParentFolder(): Promise<void> {
-    const picked = await window.agentCoordinator.projects.pickFolder();
-    if (picked) setParentPath(picked);
+    try {
+      const picked = await window.agentCoordinator.projects.pickFolder();
+      if (picked) setParentPath(picked);
+    } catch (caught) {
+      setError(String(caught));
+    }
   }
 
   async function resolveRootPath(): Promise<string> {
@@ -310,15 +319,19 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                       Repository folder <span className="req">*</span>
                     </label>
                     <div className="path-picker">
-                      <button type="button" onClick={() => void handlePickExistingFolder()}>
-                        Choose folder…
-                      </button>
-                      {existingFolderPath ? (
-                        <code className="path-chip">{existingFolderPath}</code>
-                      ) : (
-                        <span className="field-hint">Required — no folder chosen yet</span>
+                      {!remote && (
+                        <button type="button" onClick={() => void handlePickExistingFolder()}>
+                          Choose folder…
+                        </button>
                       )}
+                      <input
+                        aria-label="Repository folder path"
+                        placeholder={remote ? "/srv/projects/my-repo (path on runner)" : "No folder chosen yet"}
+                        value={existingFolderPath ?? ""}
+                        onChange={(event) => setExistingFolderPath(event.target.value || null)}
+                      />
                     </div>
+                    {remote && <span className="field-hint">Enter the absolute path on the remote runner.</span>}
                   </div>
                 )}
 
@@ -328,15 +341,19 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                       Parent folder <span className="req">*</span>
                     </label>
                     <div className="path-picker">
-                      <button type="button" onClick={() => void handlePickParentFolder()}>
-                        Choose folder…
-                      </button>
-                      {parentPath ? (
-                        <code className="path-chip">{parentPath}</code>
-                      ) : (
-                        <span className="field-hint">Required — no folder chosen yet</span>
+                      {!remote && (
+                        <button type="button" onClick={() => void handlePickParentFolder()}>
+                          Choose folder…
+                        </button>
                       )}
+                      <input
+                        aria-label="Parent folder path"
+                        placeholder={remote ? "/srv/projects (path on runner)" : "No folder chosen yet"}
+                        value={parentPath ?? ""}
+                        onChange={(event) => setParentPath(event.target.value || null)}
+                      />
                     </div>
+                    {remote && <span className="field-hint">Enter the absolute path on the remote runner.</span>}
                     <label className="field-label">
                       New folder name <span className="req">*</span>
                     </label>

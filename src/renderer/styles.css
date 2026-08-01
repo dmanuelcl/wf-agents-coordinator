@@ -200,6 +200,44 @@ button:disabled {
   margin: 0 0 0 4px;
 }
 
+.project-rail-remote {
+  color: #8fb8ff;
+  border: 1px solid rgba(143, 184, 255, 0.45);
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.remote-connect {
+  width: min(420px, calc(100vw - 48px));
+  margin: 14vh auto 0;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  display: grid;
+  gap: 10px;
+}
+.remote-connect h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.remote-connect p {
+  margin: 0 0 10px;
+  color: var(--muted-fg);
+}
+.remote-connect label {
+  color: var(--muted-fg);
+  font-size: 12px;
+}
+.remote-connect input {
+  width: 100%;
+}
+.remote-connect button {
+  margin-top: 10px;
+}
+
 .project-rail-add {
   width: 26px;
   height: 26px;
@@ -2897,6 +2935,10 @@ input[type="text"]:focus,
 }
 .path-picker button {
   flex-shrink: 0;
+}
+.path-picker input {
+  flex: 1;
+  min-width: 180px;
 }
 .path-chip {
   padding: 5px 9px;

@@ -23,8 +23,10 @@ export interface PtySessionManager {
   write(sessionId: string, data: string): void;
   resize(sessionId: string, cols: number, rows: number): void;
   kill(sessionId: string): void;
+  killByCwd(cwd: string): void;
   /** Kill every live PTY. Called on app quit so no agent process is orphaned. */
   killAll(): void;
+  has(sessionId: string): boolean;
   onData(sessionId: string, cb: (data: string) => void): void;
   onExit(sessionId: string, cb: (code: number) => void): void;
 }
@@ -32,6 +34,7 @@ export interface PtySessionManager {
 export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySessionManager {
   const { spawnPty } = params;
   const sessions = new Map<string, PtySpawn>();
+  const sessionCwds = new Map<string, string>();
   const exitCallbacks = new Map<string, Set<(code: number) => void>>();
   let nextId = 1;
 
@@ -48,9 +51,11 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
     const sessionId = String(nextId++);
     const session = spawnPty(createParams);
     sessions.set(sessionId, session);
+    sessionCwds.set(sessionId, createParams.cwd);
 
     session.onExit((e) => {
       sessions.delete(sessionId);
+      sessionCwds.delete(sessionId);
       const callbacks = exitCallbacks.get(sessionId);
       exitCallbacks.delete(sessionId);
       if (callbacks) {
@@ -76,6 +81,7 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
     if (!session) return;
     session.kill();
     sessions.delete(sessionId);
+    sessionCwds.delete(sessionId);
   }
 
   function killAll(): void {
@@ -83,6 +89,7 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
       session.kill();
     }
     sessions.clear();
+    sessionCwds.clear();
   }
 
   function onData(sessionId: string, cb: (data: string) => void): void {
@@ -98,5 +105,11 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
     callbacks.add(cb);
   }
 
-  return { create, write, resize, kill, killAll, onData, onExit };
+  function killByCwd(cwd: string): void {
+    for (const [sessionId, sessionCwd] of sessionCwds) {
+      if (sessionCwd === cwd) kill(sessionId);
+    }
+  }
+
+  return { create, write, resize, kill, killByCwd, killAll, has: (sessionId) => sessions.has(sessionId), onData, onExit };
 }

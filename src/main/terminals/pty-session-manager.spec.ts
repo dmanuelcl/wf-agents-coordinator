@@ -149,6 +149,19 @@ describe("createPtySessionManager", () => {
     warnSpy.mockRestore();
   });
 
+  it("kills only terminals belonging to a removed worktree", () => {
+    const ptys = [createFakePty(), createFakePty(), createFakePty()];
+    let next = 0;
+    const manager = createPtySessionManager({ spawnPty: () => ptys[next++]! });
+    manager.create({ cwd: "/repo/.worktrees/one", shell: SHELL, cols: 80, rows: 24 });
+    manager.create({ cwd: "/repo/.worktrees/two", shell: SHELL, cols: 80, rows: 24 });
+    manager.create({ cwd: "/repo/.worktrees/one", shell: SHELL, cols: 80, rows: 24 });
+
+    manager.killByCwd("/repo/.worktrees/one");
+
+    expect(ptys.map((pty) => pty.killCalled)).toEqual([true, false, true]);
+  });
+
   it("warns and does not throw when killing an unknown session id", () => {
     const manager = createPtySessionManager({ spawnPty: () => createFakePty() });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);

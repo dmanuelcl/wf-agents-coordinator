@@ -36,9 +36,11 @@ export function ProjectContextMenu(props: ProjectContextMenuProps): JSX.Element 
       <button type="button" onClick={onRename}>
         <span className="context-menu-icon">✎</span> Rename
       </button>
-      <button type="button" onClick={onOpenInFileManager}>
-        <span className="context-menu-icon">📁</span> Open in Finder
-      </button>
+      {window.agentCoordinator.connection.mode === "local" && (
+        <button type="button" onClick={onOpenInFileManager}>
+          <span className="context-menu-icon">📁</span> Open in Finder
+        </button>
+      )}
       <button type="button" onClick={onOpenSettings}>
         <span className="context-menu-icon">⚙</span> Project Settings
       </button>

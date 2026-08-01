@@ -5,7 +5,6 @@ import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import type {
   AgentLaunchMode,
   ProjectCreateInput,
@@ -76,6 +75,8 @@ import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-stor
 import { getWorktreeDiff } from "../projects/worktree-diff";
 import { addWorktreeExclude } from "../projects/worktree-exclude";
 import { buildWorktreeCreatePlan, createWorktree, detectWorktree, removeWorktree } from "../projects/worktree-manager";
+import type { IpcTransport } from "./ipc-transport";
+import { createHeadlessSystemIntegration, type SystemIntegration } from "../platform/system-integration";
 
 async function findProject(registry: ProjectRegistry, projectId: string): Promise<ProjectRecord> {
   const projects = await registry.listProjects();
@@ -104,6 +105,9 @@ export function registerIpcHandlers(params: {
   codexThreadAllocator: CodexThreadAllocator;
   workspaceLayoutStore: WorkspaceLayoutStore;
   vcsSecretStore: VcsSecretStore;
+  transport: IpcTransport;
+  systemIntegration?: SystemIntegration;
+  killTerminalsForWorktree?: (worktreePath: string) => void;
 }): void {
   const {
     projectRegistry,
@@ -114,7 +118,11 @@ export function registerIpcHandlers(params: {
     codexThreadAllocator,
     workspaceLayoutStore,
     vcsSecretStore,
+    transport,
+    systemIntegration = createHeadlessSystemIntegration(),
+    killTerminalsForWorktree,
   } = params;
+  const ipc = transport;
   const sessionSetupCoordinator = createSessionSetupCoordinator();
   const agentSessionLaneResolver = createAgentSessionLaneResolver({
     sessionAgentUuidStore,
@@ -265,63 +273,59 @@ export function registerIpcHandlers(params: {
     });
   }
 
-  ipcMain.handle(IPC_CHANNELS.projectsList, async () => {
+  ipc.handle(IPC_CHANNELS.projectsList, async () => {
     return projectRegistry.listProjects();
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsAdd, async (_event, input: ProjectCreateInput) => {
+  ipc.handle(IPC_CHANNELS.projectsAdd, async (_event, input: ProjectCreateInput) => {
     const project = await projectRegistry.addProject(input);
     await checkpointWatchManager.watchProject(project);
     return project;
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsUpdate, async (_event, id: string, input: ProjectUpdateInput) => {
+  ipc.handle(IPC_CHANNELS.projectsUpdate, async (_event, id: string, input: ProjectUpdateInput) => {
     return projectRegistry.updateProject(id, input);
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsRemove, async (_event, id: string) => {
+  ipc.handle(IPC_CHANNELS.projectsRemove, async (_event, id: string) => {
     await checkpointWatchManager.unwatchProject(id);
     await projectRegistry.removeProject(id);
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsPickFolder, async () => {
-    const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-    return result.filePaths[0];
+  ipc.handle(IPC_CHANNELS.projectsPickFolder, async () => {
+    return systemIntegration.pickFolder();
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsCreateEmptyRepo, async (_event, parentPath: string, name: string) => {
+  ipc.handle(IPC_CHANNELS.projectsCreateEmptyRepo, async (_event, parentPath: string, name: string) => {
     const { rootPath } = await createEmptyRepo({ parentPath, name });
     return rootPath;
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsCloneRepo, async (_event, url: string, parentPath: string, name: string) => {
+  ipc.handle(IPC_CHANNELS.projectsCloneRepo, async (_event, url: string, parentPath: string, name: string) => {
     const { rootPath } = await cloneRepo({ url, parentPath, name });
     return rootPath;
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsOpenInFileManager, async (_event, rootPath: string) => {
-    shell.showItemInFolder(rootPath);
+  ipc.handle(IPC_CHANNELS.projectsOpenInFileManager, async (_event, rootPath: string) => {
+    await systemIntegration.showInFileManager(rootPath);
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemOpenPath, async (_event, pathToken: string, cwd: string) => {
+  ipc.handle(IPC_CHANNELS.systemOpenPath, async (_event, pathToken: string, cwd: string) => {
     // openPath returns "" on success or an error string (e.g. no such file),
     // which we ignore — a false-positive path match should be a silent no-op.
-    await shell.openPath(resolveTokenPath(pathToken, cwd));
+    await systemIntegration.openPath(resolveTokenPath(pathToken, cwd));
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemCopyText, async (_event, text: string) => {
-    clipboard.writeText(text);
+  ipc.handle(IPC_CHANNELS.systemCopyText, async (_event, text: string) => {
+    await systemIntegration.copyText(text);
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemOpenExternal, async (_event, url: string) => {
+  ipc.handle(IPC_CHANNELS.systemOpenExternal, async (_event, url: string) => {
     // Only open http(s) links in the browser — never arbitrary schemes.
-    if (/^https?:\/\//.test(url)) await shell.openExternal(url);
+    if (/^https?:\/\//.test(url)) await systemIntegration.openExternal(url);
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemResolveFile, async (_event, pathToken: string, cwd: string) => {
+  ipc.handle(IPC_CHANNELS.systemResolveFile, async (_event, pathToken: string, cwd: string) => {
     const absPath = resolveTokenPath(pathToken, cwd);
     let exists = false;
     try {
@@ -332,19 +336,19 @@ export function registerIpcHandlers(params: {
     return { absPath, exists, isMarkdown: /\.mdx?$/i.test(absPath) };
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemReadFile, async (_event, absPath: string) => {
+  ipc.handle(IPC_CHANNELS.systemReadFile, async (_event, absPath: string) => {
     return readFile(absPath, "utf8");
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemWriteFile, async (_event, absPath: string, content: string) => {
+  ipc.handle(IPC_CHANNELS.systemWriteFile, async (_event, absPath: string, content: string) => {
     await writeFile(absPath, content, "utf8");
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemGitDiff, async (_event, worktreePath: string) => {
+  ipc.handle(IPC_CHANNELS.systemGitDiff, async (_event, worktreePath: string) => {
     return getWorktreeDiff(worktreePath);
   });
 
-  ipcMain.handle(IPC_CHANNELS.systemListDir, async (_event, dirPath: string) => {
+  ipc.handle(IPC_CHANNELS.systemListDir, async (_event, dirPath: string) => {
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
@@ -360,12 +364,12 @@ export function registerIpcHandlers(params: {
       });
   });
 
-  ipcMain.handle(IPC_CHANNELS.checkpointsList, async (_event, projectId: string) => {
+  ipc.handle(IPC_CHANNELS.checkpointsList, async (_event, projectId: string) => {
     const project = await findProject(projectRegistry, projectId);
     return scanProjectCheckpoints({ project });
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.launchBuild,
     async (_event, projectId: string, checkpointPath: string, role: LaunchRole) => {
       const project = await findProject(projectRegistry, projectId);
@@ -383,7 +387,7 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, projectId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsList, async (_event, projectId: string) => {
     const sessions = await sessionRegistry.listSessions({ projectId });
     // Keep every unfinished workflow watched, not only the currently visible
     // session. Hidden agent terminals continue running and may create the file.
@@ -391,7 +395,7 @@ export function registerIpcHandlers(params: {
     return sessions;
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsCreate, async (_event, projectId: string, input: SessionCreateInput) => {
+  ipc.handle(IPC_CHANNELS.sessionsCreate, async (_event, projectId: string, input: SessionCreateInput) => {
     const project = await findProject(projectRegistry, projectId);
     const session = await sessionRegistry.createSession({
       projectId,
@@ -407,7 +411,7 @@ export function registerIpcHandlers(params: {
     return session;
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.sessionsCreateReview,
     async (_event, projectId: string, input: ReviewSessionCreateInput) => {
       const project = await findProject(projectRegistry, projectId);
@@ -421,22 +425,22 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.gitListBranches, async (_event, projectId: string) => {
+  ipc.handle(IPC_CHANNELS.gitListBranches, async (_event, projectId: string) => {
     const project = await findProject(projectRegistry, projectId);
     return listGitBranches({ projectRoot: project.rootPath });
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {
+  ipc.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {
     // A blank token clears it.
     if (token.trim()) await vcsSecretStore.setToken(projectId, token.trim());
     else await vcsSecretStore.deleteToken(projectId);
   });
 
-  ipcMain.handle(IPC_CHANNELS.projectsHasVcsCreds, async (_event, projectId: string) => {
+  ipc.handle(IPC_CHANNELS.projectsHasVcsCreds, async (_event, projectId: string) => {
     return vcsSecretStore.hasToken(projectId);
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.gitTestVcs,
     async (_event, input: { config: VcsConfig; token: string | null; projectId: string | null }) => {
       const { config } = input;
@@ -453,7 +457,7 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.gitResolvePrUrl, async (_event, projectId: string, url: string) => {
+  ipc.handle(IPC_CHANNELS.gitResolvePrUrl, async (_event, projectId: string, url: string) => {
     const project = await findProject(projectRegistry, projectId);
     if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
     const ref = parsePrUrl(project.vcs.host, url);
@@ -461,7 +465,7 @@ export function registerIpcHandlers(params: {
     return getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsCreateReviewFromPr, async (_event, projectId: string, input: { url: string }) => {
+  ipc.handle(IPC_CHANNELS.sessionsCreateReviewFromPr, async (_event, projectId: string, input: { url: string }) => {
     const project = await findProject(projectRegistry, projectId);
     if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
     const ref = parsePrUrl(project.vcs.host, input.url);
@@ -487,7 +491,7 @@ export function registerIpcHandlers(params: {
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (_event, projectId: string, input: { url: string }) => {
+  ipc.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (_event, projectId: string, input: { url: string }) => {
     const project = await findProject(projectRegistry, projectId);
     if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
     const ref = parsePrUrl(project.vcs.host, input.url);
@@ -518,7 +522,7 @@ export function registerIpcHandlers(params: {
     return session;
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsPushFixBranch, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsPushFixBranch, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     if (!session) throw new Error("Session not found.");
     if (session.kind !== "pr-fix") throw new Error("Only a PR fix session can push.");
@@ -529,7 +533,7 @@ export function registerIpcHandlers(params: {
     return { output: `${res.stdout}${res.stderr}`.trim() || "Pushed." };
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsPostReview, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsPostReview, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     if (!session || !session.pr) throw new Error("This session has no PR to post to.");
     const project = await findProject(projectRegistry, session.projectId);
@@ -559,7 +563,7 @@ export function registerIpcHandlers(params: {
     return { commentUrl: posted.url };
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsReviewArtifactExists, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsReviewArtifactExists, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     if (!session) return false;
     try {
@@ -570,7 +574,7 @@ export function registerIpcHandlers(params: {
     }
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.sessionsClaimSetup,
     async (_event, sessionId: string): Promise<SessionSetupPlan> => {
       const session = await sessionRegistry.getSession({ sessionId });
@@ -589,11 +593,11 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.sessionsReleaseSetup, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsReleaseSetup, async (_event, sessionId: string) => {
     sessionSetupCoordinator.release(sessionId);
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsMarkSetupDone, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsMarkSetupDone, async (_event, sessionId: string) => {
     try {
       await sessionRegistry.markSetupDone({ sessionId });
     } finally {
@@ -601,7 +605,7 @@ export function registerIpcHandlers(params: {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsRemove, async (_event, sessionId: string) => {
     sessionSetupCoordinator.release(sessionId);
     let cleanupError: unknown = null;
     try {
@@ -613,6 +617,7 @@ export function registerIpcHandlers(params: {
     // Persist the deletion before the potentially slower Git cleanup. A session
     // list requested while cleanup runs must not be able to reintroduce it.
     const session = await sessionRegistry.getSession({ sessionId });
+    if (session) killTerminalsForWorktree?.(session.worktreePath);
     await sessionRegistry.removeSession({ sessionId });
 
     // User-confirmed delete (the renderer gates this). The session record stays
@@ -638,12 +643,12 @@ export function registerIpcHandlers(params: {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsReadCheckpoint, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsReadCheckpoint, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     return session ? readSessionCheckpoint(session) : null;
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsWatchCheckpoint, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsWatchCheckpoint, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     // Nothing to watch for once a checkpoint already exists (the gate has flipped).
     if (!session || session.checkpointPath) {
@@ -652,11 +657,11 @@ export function registerIpcHandlers(params: {
     await watchSessionCheckpoint(session);
   });
 
-  ipcMain.handle(IPC_CHANNELS.sessionsUnwatchCheckpoint, async (_event, sessionId: string) => {
+  ipc.handle(IPC_CHANNELS.sessionsUnwatchCheckpoint, async (_event, sessionId: string) => {
     await sessionCheckpointWatchManager.unwatchSession(sessionId);
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.sessionsRecordRoleAgentSession,
     async (
       _event,
@@ -686,7 +691,7 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.sessionsBuildRoleLaunch,
     async (_event, sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch> => {
       const session = await sessionRegistry.getSession({ sessionId });
@@ -746,7 +751,7 @@ export function registerIpcHandlers(params: {
   // using the project's current per-stage config. The lane decides whether the
   // provider conversation is created or resumed; switching provider replaces
   // only that lane's binding.
-  ipcMain.handle(
+  ipc.handle(
     IPC_CHANNELS.sessionsBuildRoleAutopilot,
     async (
       _event,
@@ -790,25 +795,25 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.workspaceGetLayout, async () => {
+  ipc.handle(IPC_CHANNELS.workspaceGetLayout, async () => {
     return workspaceLayoutStore.get();
   });
 
-  ipcMain.handle(IPC_CHANNELS.workspaceSetLayout, async (_event, layout: WorkspaceLayout) => {
+  ipc.handle(IPC_CHANNELS.workspaceSetLayout, async (_event, layout: WorkspaceLayout) => {
     await workspaceLayoutStore.set(layout);
   });
 
-  ipcMain.handle(IPC_CHANNELS.worktreeDetect, async (_event, projectId: string, slug: string) => {
+  ipc.handle(IPC_CHANNELS.worktreeDetect, async (_event, projectId: string, slug: string) => {
     const project = await findProject(projectRegistry, projectId);
     return detectWorktree({ projectRoot: project.rootPath, slug });
   });
 
-  ipcMain.handle(IPC_CHANNELS.worktreeBuildPlan, async (_event, projectId: string, slug: string, branch: string) => {
+  ipc.handle(IPC_CHANNELS.worktreeBuildPlan, async (_event, projectId: string, slug: string, branch: string) => {
     const project = await findProject(projectRegistry, projectId);
     return buildWorktreeCreatePlan({ projectRoot: project.rootPath, slug, branch });
   });
 
-  ipcMain.handle(IPC_CHANNELS.worktreeCreate, async (_event, projectId: string, slug: string, branch: string) => {
+  ipc.handle(IPC_CHANNELS.worktreeCreate, async (_event, projectId: string, slug: string, branch: string) => {
     const project = await findProject(projectRegistry, projectId);
     await createWorktree({ projectRoot: project.rootPath, slug, branch });
   });

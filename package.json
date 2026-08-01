@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "electron-rebuild -f -w node-pty,better-sqlite3 && electron-vite dev",
     "build": "electron-rebuild -f -w node-pty,better-sqlite3 && electron-vite build",
+    "remote:runner": "ELECTRON_RUN_AS_NODE=1 electron out/main/remote-runner.js",
     "typecheck": "tsc --noEmit",
     "pretest": "pnpm rebuild better-sqlite3",
     "test": "vitest run",
@@ -28,7 +29,8 @@
     "marked": "^18.0.6",
     "node-pty": "^1.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -36,6 +38,7 @@
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.3.1",
     "electron-builder": "^26.15.3",
