@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { missingAgentExecutableMessage, resolveAgentExecutable } from "./agent-executable-resolver";
 
 export interface CodexAppServerProcess {
   send(message: unknown): void;
@@ -16,8 +17,11 @@ export interface CodexThreadAllocator {
 }
 
 function createCodexAppServerProcess(): CodexAppServerProcess {
-  const child = spawn("codex", ["app-server"], {
+  const codex = resolveAgentExecutable("codex");
+  if (!codex) throw new Error(missingAgentExecutableMessage("codex"));
+  const child = spawn(codex.executable, ["app-server"], {
     stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PATH: codex.path },
   });
   const lines = createInterface({ input: child.stdout });
   let stderr = "";

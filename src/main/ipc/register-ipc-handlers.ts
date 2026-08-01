@@ -49,6 +49,7 @@ import {
   buildAgentLaunchCommand,
   buildAutopilotLaunchCommand,
 } from "../../shared/workflow/agent-runtime-config";
+import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
@@ -68,6 +69,7 @@ import type { SessionRegistry } from "../projects/session-registry";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
+import { missingAgentExecutableMessage, resolveAgentExecutable } from "../terminals/agent-executable-resolver";
 import { claudeConversationExists } from "../terminals/claude-session-store";
 import type { CodexThreadAllocator } from "../terminals/codex-thread-allocator";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
@@ -118,6 +120,12 @@ export function registerIpcHandlers(params: {
     sessionAgentUuidStore,
     codexThreadAllocator,
   });
+
+  function environmentForAgentLaunch(kind: AgentKind, environment: Readonly<Record<string, string>> | undefined): Record<string, string> {
+    const resolution = resolveAgentExecutable(kind);
+    if (!resolution) throw new Error(missingAgentExecutableMessage(kind));
+    return { ...environment, PATH: resolution.path };
+  }
 
   function assertSessionLaneRole(sessionLane: string, role: SessionAgentRole): void {
     // Normal manually-opened tabs retain the legacy role-sized binding.
@@ -725,7 +733,7 @@ export function registerIpcHandlers(params: {
       return {
         agentCommand: launch.command,
         agentKind: agentConfig.kind,
-        environment: { ...launch.environment },
+        environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
         wfCommand,
         cwd: session.worktreePath,
         sessionUuid: sessionDirective?.id ?? null,
@@ -772,7 +780,7 @@ export function registerIpcHandlers(params: {
       return {
         command: launch.command,
         agentKind: agentConfig.kind,
-        environment: { ...launch.environment },
+        environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
         cwd: session.worktreePath,
         sessionLane,
         sessionUuid: sessionDirective?.id ?? null,
