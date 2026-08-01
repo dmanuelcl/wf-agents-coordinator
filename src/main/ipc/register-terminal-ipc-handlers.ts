@@ -10,6 +10,11 @@ import type { IpcTransport } from "./ipc-transport";
 
 const INITIAL_INPUT_SETTLE_MS = 1_200;
 const INITIAL_INPUT_MAX_WAIT_MS = 10_000;
+const INITIAL_GEOMETRY_WINDOW_MS = 15_000;
+const MIN_TERMINAL_COLS = 80;
+const MAX_TERMINAL_COLS = 240;
+const MIN_TERMINAL_ROWS = 24;
+const MAX_TERMINAL_ROWS = 80;
 
 interface InitialInputDelivery {
   text: string;
@@ -75,6 +80,8 @@ export function registerTerminalIpcHandlers(params: {
   const terminalByPersistKey = new Map<string, string>();
   const terminalPersistKeyById = new Map<string, string>();
   const initialInputByTerminal = new Map<string, InitialInputDelivery>();
+  const terminalCreatedAt = new Map<string, number>();
+  const initialGeometryClaimed = new Set<string>();
 
   function clearInitialInputTimers(delivery: InitialInputDelivery): void {
     if (delivery.settledTimer) clearTimeout(delivery.settledTimer);
@@ -171,6 +178,30 @@ export function registerTerminalIpcHandlers(params: {
     };
   }
 
+  function safeGeometry(cols: number, rows: number): { cols: number; rows: number } {
+    const safeCols = Number.isFinite(cols) ? cols : MIN_TERMINAL_COLS;
+    const safeRows = Number.isFinite(rows) ? rows : MIN_TERMINAL_ROWS;
+    return {
+      cols: Math.max(MIN_TERMINAL_COLS, Math.min(MAX_TERMINAL_COLS, Math.round(safeCols))),
+      rows: Math.max(MIN_TERMINAL_ROWS, Math.min(MAX_TERMINAL_ROWS, Math.round(safeRows))),
+    };
+  }
+
+  async function claimInitialGeometry(sessionId: string, cols: number, rows: number): Promise<TerminalScreenSnapshot | null> {
+    const snapshot = await screenStore.snapshot(sessionId);
+    if (!snapshot || !ptySessionManager.has(sessionId)) return null;
+    const createdAt = terminalCreatedAt.get(sessionId) ?? 0;
+    // The first attached view gets one short, server-enforced initialization
+    // opportunity. F5, another client, and normal window resizing only read
+    // the existing shared grid.
+    if (initialGeometryClaimed.has(sessionId) || Date.now() - createdAt > INITIAL_GEOMETRY_WINDOW_MS) return snapshot;
+    const geometry = safeGeometry(cols, rows);
+    initialGeometryClaimed.add(sessionId);
+    ptySessionManager.resize(sessionId, geometry.cols, geometry.rows);
+    screenStore.resize(sessionId, geometry);
+    return screenStore.snapshot(sessionId);
+  }
+
   async function createTerminal(input: RunnerTerminalCreateInput): Promise<{ sessionId: string; reused: boolean }> {
     const persistKey = input.persistKey ?? null;
     const attached = persistKey ? await attachPersistentTerminal(persistKey) : null;
@@ -200,6 +231,7 @@ export function registerTerminalIpcHandlers(params: {
       terminalByPersistKey.set(persistKey, sessionId);
       terminalPersistKeyById.set(sessionId, persistKey);
     }
+    terminalCreatedAt.set(sessionId, Date.now());
     screenStore.create(sessionId, { cols: input.cols, rows: input.rows });
     queueInitialInput(sessionId, input.initialInput);
     ptySessionManager.onData(sessionId, (data) => {
@@ -216,6 +248,8 @@ export function registerTerminalIpcHandlers(params: {
     ptySessionManager.onExit(sessionId, (code) => {
       if (persistKey && terminalByPersistKey.get(persistKey) === sessionId) terminalByPersistKey.delete(persistKey);
       terminalPersistKeyById.delete(sessionId);
+      terminalCreatedAt.delete(sessionId);
+      initialGeometryClaimed.delete(sessionId);
       discardInitialInput(sessionId);
       if (input.setupSessionId && onSetupExit) {
         void onSetupExit({ sessionId: input.setupSessionId, code }).catch((error: unknown) => {
@@ -245,6 +279,10 @@ export function registerTerminalIpcHandlers(params: {
   ipc.handle(TERMINAL_IPC_CHANNELS.create, (_event, input: RunnerTerminalCreateInput) => createTerminal(input));
 
   ipc.handle(TERMINAL_IPC_CHANNELS.attach, (_event, persistKey: string) => attachPersistentTerminal(persistKey));
+
+  ipc.handle(TERMINAL_IPC_CHANNELS.claimInitialGeometry, (_event, sessionId: string, cols: number, rows: number) =>
+    claimInitialGeometry(sessionId, cols, rows),
+  );
 
   ipc.on(TERMINAL_IPC_CHANNELS.write, (_event, sessionId: string, data: string) => {
     ptySessionManager.write(sessionId, data);

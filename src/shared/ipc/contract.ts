@@ -163,6 +163,7 @@ export const IPC_CHANNELS = {
 export const TERMINAL_IPC_CHANNELS = {
   create: "terminal:create",
   attach: "terminal:attach",
+  claimInitialGeometry: "terminal:claim-initial-geometry",
   write: "terminal:write",
   resize: "terminal:resize",
   kill: "terminal:kill",
@@ -258,7 +259,12 @@ export interface TerminalApi {
   // Reattach to a persistent terminal without spawning anything. Returns null
   // when the runner no longer has a live PTY for this key.
   attach(persistKey: string): Promise<TerminalCreateResult | null>;
-  // Keyboard input is the only PTY mutation exposed to a view.
+  // The first view may describe its available drawing area. The runner accepts
+  // it only during a new PTY's short initialization window; refreshes and
+  // later viewers cannot resize an existing terminal.
+  claimInitialGeometry(sessionId: string, cols: number, rows: number): Promise<TerminalScreenSnapshot | null>;
+  // Keyboard input and the one-time initial display claim are the only PTY
+  // mutations exposed to a view; neither can launch or restart a process.
   write(sessionId: string, data: string): void;
   // Bounded scrollback restore for shell tabs (visual history only).
   readScrollback(persistKey: string): Promise<string>;

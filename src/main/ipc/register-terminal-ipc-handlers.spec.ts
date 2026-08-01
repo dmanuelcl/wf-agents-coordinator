@@ -168,6 +168,32 @@ describe("registerTerminalIpcHandlers", () => {
     expect(transport.hasHandler(IPC_CHANNELS.sessionStateGet)).toBe(true);
   });
 
+  it("accepts only the first viewer's initial geometry claim", async () => {
+    const resize = vi.fn();
+    const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write: vi.fn(), resize, kill: vi.fn() };
+    const transport = createIpcHandlerRegistry();
+    registerTerminalIpcHandlers({
+      transport,
+      ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
+      sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast: () => {},
+      screenStore: createTerminalScreenStore(),
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
+    });
+    const client = sender();
+    await transport.invoke(client, TERMINAL_IPC_CHANNELS.create, [{ cwd: process.cwd(), cols: 80, rows: 24, persistKey: "session::shell" }]);
+
+    const first = await transport.invoke(client, TERMINAL_IPC_CHANNELS.claimInitialGeometry, ["1", 166, 51]);
+    const second = await transport.invoke(client, TERMINAL_IPC_CHANNELS.claimInitialGeometry, ["1", 100, 30]);
+
+    expect(first).toMatchObject({ cols: 166, rows: 51 });
+    expect(second).toMatchObject({ cols: 166, rows: 51 });
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenCalledWith(166, 51);
+  });
+
   it("delivers a launch prompt in the runner even when its requesting browser is gone", async () => {
     vi.useFakeTimers();
     const write = vi.fn();

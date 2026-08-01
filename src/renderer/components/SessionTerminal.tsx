@@ -289,11 +289,22 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (attached) {
           ptyId = attached.sessionId;
           ptyIdRef.current = attached.sessionId;
-          if (attached.snapshot) {
+          const proposed = fitAddon.proposeDimensions();
+          let runnerSnapshot: TerminalScreenSnapshot | null = null;
+          if (proposed) {
+            // A runner from before this protocol can still be viewed; it just
+            // keeps its existing grid instead of failing the whole attach.
+            runnerSnapshot = await window.agentCoordinator.terminal
+              .claimInitialGeometry(attached.sessionId, proposed.cols, proposed.rows)
+              .catch(() => null);
+          }
+          if (disposed) return;
+          if (runnerSnapshot ?? attached.snapshot) {
             // The runner owns a headless terminal model of this PTY. Hydrate
-            // the new view from it; do not resize or otherwise poke the agent.
+            // the new view from it. The server may accept the *first* view's
+            // initial drawing bounds, but no later reload/view can resize it.
             runnerOwnedGeometry = true;
-            restoreRunnerScreen(term, attached.snapshot);
+            restoreRunnerScreen(term, runnerSnapshot ?? attached.snapshot!);
             scheduleFitAndResize();
           } else if (!attached.alternateScreen) {
             const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
