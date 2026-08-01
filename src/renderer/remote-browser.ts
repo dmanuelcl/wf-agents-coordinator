@@ -24,7 +24,7 @@ function promptForConnection(
     const error = params.error ? document.createElement("p") : null;
     if (error) {
       error.className = "remote-connect-error";
-      error.textContent = params.error;
+      error.textContent = params.error ?? "";
     }
     const endpointLabel = document.createElement("label");
     endpointLabel.textContent = "Runner WebSocket URL";

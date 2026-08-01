@@ -66,6 +66,17 @@ binario de Electron. `pnpm remote:build` fuerza la compilación nativa de
 `node-pty` y `better-sqlite3` para la versión de Node de esa máquina, y produce
 `out/main/remote-runner.js` junto a la interfaz web que éste sirve.
 
+No sustituyas ese paso por `pnpm rebuild`: después de una instalación con
+`--ignore-scripts`, pnpm puede omitir la reconstrucción aunque los binarios
+sigan siendo de Electron. El comando del proyecto ejecuta `node-gyp`
+directamente para ambos módulos. Si aparece `NODE_MODULE_VERSION` o
+`ERR_DLOPEN_FAILED`, ejecuta de nuevo `pnpm remote:build`.
+
+Este checkout queda preparado para el runner de Node. Si también desarrollas o
+empaquetas la app Electron en la misma máquina, usa un checkout separado o
+ejecuta `pnpm build` antes de volver a abrir Electron: ese comando vuelve a
+compilar los módulos nativos para Electron.
+
 Si ya hiciste un `pnpm install` que falló con un error de Electron, ejecuta en
 el checkout del runner:
 
