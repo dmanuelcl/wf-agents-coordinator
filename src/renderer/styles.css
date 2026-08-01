@@ -2480,7 +2480,10 @@ pre {
 .terminal-pane-surface {
   flex: 1;
   min-height: 0;
-  padding: 6px;
+  /* FitAddon sizes rows from this element's full height. Padding here makes
+     it allocate a final row into space that CSS reserves as padding, clipping
+     the bottom line on taller viewports. Keep the fit surface exact. */
+  padding: 0;
 }
 /* Drop hint overlay while dragging a file over the terminal. */
 .terminal-pane-drop {
