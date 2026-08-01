@@ -148,4 +148,33 @@ describe("createConductorController", () => {
     vi.advanceTimersByTime(4000);
     expect(actions).toHaveLength(1);
   });
+
+  it("resets the re-loop limit after a manual off/on cycle", async () => {
+    const actions: ConductorAction[] = [];
+    const c = createConductorController({
+      getConfig: () => ({ ...CONFIG, reloopLimit: 1 }),
+      onAction: async (action) => {
+        actions.push(action);
+      },
+    });
+    const actOn = async (checkpoint: ParsedCheckpoint): Promise<void> => {
+      c.notifyCheckpoint(checkpoint);
+      vi.advanceTimersByTime(CONFIG.settleDelayMs);
+      await vi.runAllTicks();
+    };
+
+    c.setEnabled(true);
+    await actOn(cp("reviewer", "P1"));
+    await actOn(cp("implementer", "P1"));
+    await actOn(cp("reviewer", "P1"));
+    await actOn(cp("implementer", "P1"));
+    expect(actions.at(-1)).toMatchObject({ kind: "pause", reason: "re-loop limit (1) reached for task" });
+
+    c.setEnabled(false);
+    c.setEnabled(true);
+    vi.advanceTimersByTime(CONFIG.settleDelayMs);
+    await vi.runAllTicks();
+
+    expect(actions.at(-1)).toMatchObject({ kind: "send", role: "implementer" });
+  });
 });

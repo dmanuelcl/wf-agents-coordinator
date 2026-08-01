@@ -25,6 +25,10 @@ export function createConductorController(deps: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight = false;
   let rerunAfterFlight = false;
+  // Incremented when a person turns auto-pilot off. An action already being
+  // launched may still settle afterwards; it must not restore the old guard
+  // state over the manual reset.
+  let resetGeneration = 0;
 
   function clearTimer(): void {
     if (timer !== null) {
@@ -48,9 +52,10 @@ export function createConductorController(deps: {
       return;
     }
     inFlight = true;
+    const actionGeneration = resetGeneration;
     void deps.onAction(action).then(
       () => {
-        state = next;
+        if (actionGeneration === resetGeneration) state = next;
         inFlight = false;
         if (enabled && rerunAfterFlight) {
           rerunAfterFlight = false;
@@ -88,6 +93,10 @@ export function createConductorController(deps: {
       if (!enabled) {
         clearTimer();
         rerunAfterFlight = false;
+        // A deliberate off/on cycle is the user's escape hatch after the
+        // re-loop cap. Start the next activation from a clean conductor state.
+        state = INITIAL_CONDUCTOR_STATE;
+        resetGeneration += 1;
       }
     },
     dispose() {
