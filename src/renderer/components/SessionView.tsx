@@ -7,16 +7,12 @@ import { MarkdownFileView } from "./MarkdownFileView";
 import { MarkdownContent } from "./MarkdownContent";
 import { SessionTerminal } from "./SessionTerminal";
 import type { SessionTerminalHandle } from "./SessionTerminal";
-import { continueAfterSetupRepair, SetupRecoveryBanner } from "./setup-recovery";
-import type { AgentLaunchMode, SessionRoleLaunch } from "../../shared/ipc/contract";
+import { SetupRecoveryBanner } from "./setup-recovery";
+import type { RunnerSessionRuntimeRecord } from "../../shared/ipc/contract";
 import { agentRolesForSessionKind, isSessionRoleUnlocked } from "../../shared/workflow/session-role-launch";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { LedgerRow, ParsedCheckpoint, WorkflowFollowUp, WorkflowNext, WorkflowStatus } from "../../shared/workflow/workflow-types";
-import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
-import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
-import type { ConductorAction } from "../../shared/workflow/conductor";
-import { useConductor } from "../hooks/useConductor";
 import { buildSlackPostCommand, buildSlackSummaryCommand } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
 import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
@@ -58,8 +54,6 @@ interface SessionViewProps {
   // Restored on startup: which agent + shell tabs to reopen, and which is active.
   initialLayout?: SessionLayout;
   onLayoutChange?: (sessionId: string, layout: SessionLayout) => void;
-  // The owning project's auto-pilot conductor settings. Unused in repoMode.
-  autoPilotConfig?: AutoPilotConfig;
   // The owning project's PR-review settings (Slack channel + kickoff).
   reviewConfig?: ReviewConfig;
 }
@@ -421,33 +415,32 @@ function LogPanel(props: {
   );
 }
 
-function initialRoleTabs(layout: SessionLayout | undefined): Map<SessionAgentRole, AgentLaunchMode> {
-  // Restored agent tabs resume their conversation (`--resume`); a brand-new
-  // session opens on Architect fresh. If the session was restored with only
-  // shell tabs, don't force Architect back open.
+function initialRoleTabs(layout: SessionLayout | undefined): Set<SessionAgentRole> {
+  // The layout only says which views were open. Resume/fresh is a runner-side
+  // decision; a restored layout with only shells does not force Architect open.
   const roles = layout?.openedRoleTabs ?? [];
   if (roles.length > 0 || (layout?.shellTabs.length ?? 0) > 0) {
-    return new Map(roles.map((role) => [role, "resume" as AgentLaunchMode]));
+    return new Set(roles);
   }
-  return new Map<SessionAgentRole, AgentLaunchMode>([["architect", "fresh"]]);
+  return new Set<SessionAgentRole>(["architect"]);
 }
 
 // A PR session starts only its primary agent. Additional roles (the PR-fix
-// reviewer) launch on demand and restored roles resume their conversations.
+// reviewer) launch on demand.
 function initialPrTabs(
   layout: SessionLayout | undefined,
   roles: readonly SessionAgentRole[],
   primaryRole: SessionAgentRole,
-): Map<SessionAgentRole, AgentLaunchMode> {
+): Set<SessionAgentRole> {
   const restoredRoles = (layout?.openedRoleTabs ?? []).filter((role) => roles.includes(role));
   if (restoredRoles.length > 0) {
-    return new Map(restoredRoles.map((role) => [role, "resume" as AgentLaunchMode]));
+    return new Set(restoredRoles);
   }
-  return new Map<SessionAgentRole, AgentLaunchMode>([[primaryRole, "fresh"]]);
+  return new Set<SessionAgentRole>([primaryRole]);
 }
 
 export function SessionView(props: SessionViewProps): JSX.Element {
-  const { session, initialLayout, onLayoutChange, repoMode = false, autoPilotConfig, reviewConfig } = props;
+  const { session, initialLayout, onLayoutChange, repoMode = false, reviewConfig } = props;
   const kind = session.kind;
   const reviewMode = kind === "review";
   const fixMode = kind === "pr-fix";
@@ -473,13 +466,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     if (fixMode && !hasCheckpoint && restoredActive === "reviewer") return "implementer";
     return restoredActive ?? seedRepoShell?.id ?? (prSession ? prPrimaryRole : "architect");
   });
-  // Agent tabs opened at least once, each with its launch mode; their terminals
-  // stay mounted (agents keep running) while another tab is shown. This
-  // component is keyed by session.id in the parent, so these initialisers run
-  // once per session and the restored layout is not clobbered on re-render.
-  const [openedRoleTabs, setOpenedRoleTabs] = useState<Map<SessionAgentRole, AgentLaunchMode>>(() =>
+  // Agent tabs opened at least once. Their runner-owned terminals stay mounted
+  // as views while another tab is shown. This component is keyed by session.id,
+  // so initial layout restoration is not clobbered on re-render.
+  const [openedRoleTabs, setOpenedRoleTabs] = useState<Set<SessionAgentRole>>(() =>
     repoMode
-      ? new Map()
+      ? new Set()
       : prSession
         ? initialPrTabs(
             initialLayout,
@@ -506,31 +498,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const [renameDraft, setRenameDraft] = useState("");
   // Auto-pilot conductor: per-session on/off and the last action line shown in
   // the feedback strip.
-  const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
-  // Auto-pilot launches for every role. Bumping the generation remounts the
-  // watchable process; its session lane determines whether the provider
-  // conversation is new or resumed.
-  const [roleAutopilot, setRoleAutopilot] = useState<
-    Partial<
-      Record<
-        SessionAgentRole,
-        {
-          command: string;
-          agentKind: SessionRoleLaunch["agentKind"];
-          environment: Record<string, string>;
-          cwd: string;
-          sessionLane: string;
-          typePrompt: string | null;
-          requestId: string;
-          gen: number;
-        }
-      >
-    >
-  >({});
-  const autopilotDispatches = useRef<
-    Map<string, { resolve: () => void; reject: (reason: Error) => void }>
-  >(new Map());
-  const [conductorLog, setConductorLog] = useState<string | null>(null);
+  const [runnerRuntime, setRunnerRuntime] = useState<RunnerSessionRuntimeRecord | null>(null);
+  const autoPilotEnabled = runnerRuntime?.autoPilot.enabled === true;
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
   // No role or shell PTY is mounted until the one dedicated setup PTY confirms
@@ -543,29 +512,61 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // file's composer can deliver text into the chosen one.
   const terminalHandles = useRef<Map<string, SessionTerminalHandle>>(new Map());
 
-  function handleSetupReady(): void {
+  useEffect(() => {
+    let cancelled = false;
+    void window.agentCoordinator.sessions.getRuntime(session.id).then((runtime) => {
+      if (!cancelled) setRunnerRuntime(runtime);
+    });
+    const unsubscribe = window.agentCoordinator.sessions.onRuntimeChanged((event) => {
+      if (event.sessionId !== session.id) return;
+      setRunnerRuntime(event.runtime);
+      const roles = event.runtime.terminals
+        .filter((terminal) => terminal.kind === "agent" && terminal.role)
+        .map((terminal) => terminal.role!);
+      if (roles.length > 0) {
+        setOpenedRoleTabs((current) => {
+          const next = new Set(current);
+          for (const role of roles) next.add(role);
+          return next;
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [session.id]);
+
+  // Setup completion is emitted by the runner. A browser reload or second view
+  // never owns this transition; it only redraws the server's durable result.
+  useEffect(() => {
+    if (!session.setupDone) return;
     setSetupFailure(null);
     setSetupCompletionError(null);
     setSetupCompleting(false);
     setSetupReady(true);
     setActiveTab((current) => (current === "setup" ? (prSession ? prPrimaryRole : "architect") : current));
-  }
+  }, [session.setupDone, prPrimaryRole, prSession]);
 
-  function handleSetupFailed(reason: string): void {
-    setSetupFailure(reason);
-    setSetupCompletionError(null);
-    setSetupCompleting(false);
-  }
+  useEffect(() => {
+    if (runnerRuntime?.phase === "failed") {
+      setSetupFailure(runnerRuntime.error ?? "Setup failed on the runner.");
+      setSetupCompleting(false);
+      return;
+    }
+    if (runnerRuntime?.phase === "ready") {
+      setSetupFailure(null);
+      setSetupCompletionError(null);
+      setSetupCompleting(false);
+      setSetupReady(true);
+    }
+  }, [runnerRuntime]);
 
   function handleContinueAfterSetupRepair(): void {
     if (!setupFailure || setupCompleting) return;
     setSetupCompleting(true);
     setSetupCompletionError(null);
-    void continueAfterSetupRepair({
-      sessionId: session.id,
-      markSetupDone: window.agentCoordinator.sessions.markSetupDone,
-      onReady: handleSetupReady,
-    }).catch((error: unknown) => {
+    void window.agentCoordinator.sessions.skipFailedSetup(session.id).catch((error: unknown) => {
       setSetupCompleting(false);
       setSetupCompletionError(String(error));
     });
@@ -574,7 +575,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // Report layout changes up so the workspace can be persisted for restore.
   useEffect(() => {
     onLayoutChange?.(session.id, {
-      openedRoleTabs: Array.from(openedRoleTabs.keys()),
+      openedRoleTabs: Array.from(openedRoleTabs),
       shellTabs,
       activeTab,
     });
@@ -639,19 +640,29 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
   function selectRole(role: SessionAgentRole): void {
     if (!setupReady || isRoleDisabled(role)) return;
-    setActiveTab(role);
-    setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
+    void window.agentCoordinator.sessions.openRole(session.id, role).then(
+      () => {
+        setActiveTab(role);
+        setOpenedRoleTabs((current) => (current.has(role) ? current : new Set(current).add(role)));
+      },
+      (error: unknown) => setReviewPostMsg(`Could not open ${roleLabel(role, kind)} — ${String(error)}`),
+    );
   }
 
   function addShellTab(root: boolean): void {
-    const id = crypto.randomUUID();
-    setShellTabs((current) => [...current, { id, title: `Shell ${current.length + 1}`, root }]);
-    setActiveTab(id);
+    void window.agentCoordinator.sessions.openShell(session.id, root).then(
+      (terminal) => {
+        const tab: ShellTab = { id: terminal.key, title: terminal.title ?? "Shell", root: terminal.root === true };
+        setShellTabs((current) => (current.some((candidate) => candidate.id === tab.id) ? current : [...current, tab]));
+        setActiveTab(tab.id);
+      },
+      (error: unknown) => setReviewPostMsg(`Could not open shell — ${String(error)}`),
+    );
   }
 
   function closeShellTab(id: string): void {
     const remaining = [
-      ...Array.from(openedRoleTabs.keys()),
+      ...Array.from(openedRoleTabs),
       ...shellTabs.filter((tab) => tab.id !== id).map((tab) => tab.id),
       ...fileTabs.map((tab) => tab.id),
       ...(diffOpen ? ["diff"] : []),
@@ -661,8 +672,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     // state prompts to open one).
     setActiveTab((current) => (current === id ? (remaining[0] ?? (repoMode ? "" : "log")) : current));
     if (renamingId === id) setRenamingId(null);
-    // Closing a shell tab discards its saved scrollback (no restore needed).
-    void window.agentCoordinator.terminal.clearScrollback(`${session.id}::${id}`);
+    void window.agentCoordinator.sessions.closeTerminal(session.id, id);
   }
 
   // Open a file in an in-app editor tab (markdown gets preview+edit, others are
@@ -707,7 +717,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
   function actuallyCloseFile(id: string): void {
     const remaining = [
-      ...Array.from(openedRoleTabs.keys()),
+      ...Array.from(openedRoleTabs),
       ...shellTabs.map((tab) => tab.id),
       ...fileTabs.filter((tab) => tab.id !== id).map((tab) => tab.id),
       ...(diffOpen ? ["diff"] : []),
@@ -755,7 +765,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
   // Non-file terminal tabs (opened agent roles + shells): a composer's targets.
   const sendTargets: SendTarget[] = [
-    ...Array.from(openedRoleTabs.keys()).map((role) => ({ key: role, label: roleLabel(role, kind) })),
+    ...Array.from(openedRoleTabs).map((role) => ({ key: role, label: roleLabel(role, kind) })),
     ...shellTabs.map((tab) => ({ key: tab.id, label: tab.title })),
   ];
 
@@ -816,96 +826,19 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const hasSeparateRoot = repoRoot !== session.worktreePath;
   const filesRootPath = filesScope === "repo" && hasSeparateRoot ? repoRoot : session.worktreePath;
 
-  // Launch a watchable workflow step. The promise resolves only when
-  // SessionTerminal confirms that the PTY exists and the prompt is embedded or
-  // delivered, so the conductor cannot consume an action that never launched.
-  async function launchAutopilotStep(
-    role: SessionAgentRole,
-    sessionLane: string,
-    wfPrompt: string,
-  ): Promise<void> {
-    try {
-      const launch = await window.agentCoordinator.sessions.buildRoleAutopilot(
-        session.id,
-        role,
-        sessionLane,
-        wfPrompt,
-      );
-      const requestId = crypto.randomUUID();
-      const started = new Promise<void>((resolve, reject) => {
-        autopilotDispatches.current.set(requestId, { resolve, reject });
-      });
-      setRoleAutopilot((current) => ({
-        ...current,
-        [role]: {
-          command: launch.command,
-          agentKind: launch.agentKind,
-          environment: launch.environment,
-          cwd: launch.cwd,
-          sessionLane: launch.sessionLane,
-          typePrompt: launch.typePrompt,
-          requestId,
-          gen: (current[role]?.gen ?? 0) + 1,
-        },
-      }));
-      setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
-      setActiveTab(role);
-      if (launch.warnings.length > 0) {
-        setConductorLog(`⚠ ${roleLabel(role, kind)}: ${launch.warnings[0]}`);
-      }
-      await started;
-    } catch (error) {
-      setConductorLog(`✖ ${roleLabel(role, kind)}: no se pudo lanzar (${String(error)})`);
-      throw error;
-    }
-  }
-
-  function settleAutopilot(requestId: string, error?: string): void {
-    const pending = autopilotDispatches.current.get(requestId);
-    if (!pending) return;
-    autopilotDispatches.current.delete(requestId);
-    if (error) pending.reject(new Error(error));
-    else pending.resolve();
-  }
-
-  // The global "Discuss follow-ups" action launches an architect-tier `wf followups`
-  // triage session (turn-independent — it does not need to be the architect's turn).
-  // Reopen the durable architect lane with the command. This preserves provider
-  // context without relying on an imperative write racing PTY creation.
   function handleDiscussFollowUps(): void {
     if (!session.checkpointPath) return;
-    const command = `wf followups ${session.checkpointPath}`;
-    void launchAutopilotStep("architect", "architect", command).catch(() => {});
+    void window.agentCoordinator.sessions
+      .runCommand(session.id, "architect", "architect", `wf followups ${session.checkpointPath}`)
+      .then(
+        () => {
+          setOpenedRoleTabs((current) => (current.has("architect") ? current : new Set(current).add("architect")));
+          setActiveTab("architect");
+        },
+        (error: unknown) => setReviewPostMsg(`Could not start follow-ups — ${String(error)}`),
+      );
   }
 
-  // Turn a conductor decision into an action on the tabs.
-  // - send: remount a watchable process attached to the action's durable lane.
-  // - pause: pre-type the command (no Enter) so the human runs it.
-  async function performConductorAction(action: ConductorAction): Promise<void> {
-    if (action.kind === "noop") return;
-    if (action.kind === "send") {
-      const role = action.role;
-      setConductorLog(`→ ${action.command} · ${roleLabel(role, kind)}`);
-      await launchAutopilotStep(role, action.lane, action.command);
-      return;
-    }
-    // pause
-    if (action.role && openedRoleTabs.has(action.role) && action.command) {
-      terminalHandles.current.get(action.role)?.sendText(action.command, false);
-      setActiveTab(action.role);
-    } else if (action.role) {
-      selectRole(action.role);
-    }
-    setConductorLog(`paused · ${action.reason}`);
-  }
-
-  useConductor({
-    session,
-    repoRoot,
-    enabled: !repoMode && autoPilotEnabled && hasCheckpoint,
-    getConfig: () => autoPilotConfig ?? createDefaultAutoPilotConfig(),
-    onAction: performConductorAction,
-  });
   // In repo mode there are no agent/Log tabs; if the active tab isn't a shell,
   // file, or the diff, nothing is open (show an empty state instead of a blank).
   const repoActiveTabExists =
@@ -997,7 +930,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   : "Auto-pilot activates once a checkpoint exists"
               }
               aria-pressed={autoPilotEnabled}
-              onClick={() => setAutoPilotEnabled((value) => !value)}
+              onClick={() => void window.agentCoordinator.sessions.setAutopilot(session.id, !autoPilotEnabled)}
             >
               <span className="session-topbar-autopilot-dot" />
               Auto-pilot
@@ -1076,9 +1009,9 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         </div>
       </header>
 
-      {!repoMode && !prSession && autoPilotEnabled && conductorLog && (
-        <SessionNotice tone={conductorLog.startsWith("paused") ? "warning" : "info"}>
-          {conductorLog}
+      {!repoMode && !prSession && autoPilotEnabled && runnerRuntime?.autoPilot.message && (
+        <SessionNotice tone={runnerRuntime.autoPilot.message.startsWith("paused") ? "warning" : "info"}>
+          {runnerRuntime.autoPilot.message}
         </SessionNotice>
       )}
 
@@ -1277,10 +1210,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
             <SessionTerminal
               session={session}
               role="setup"
-              mode="fresh"
               persistKey={`${session.id}::setup`}
-              onSetupReady={handleSetupReady}
-              onSetupFailed={handleSetupFailed}
             />
           </div>
         )}
@@ -1308,13 +1238,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         )}
         {setupReady &&
           !repoMode &&
-          Array.from(openedRoleTabs.entries()).map(([role, mode]) => {
-            const autopilot = roleAutopilot[role] ?? null;
+          Array.from(openedRoleTabs).map((role) => {
+            const runnerGeneration = runnerRuntime?.terminals.find(
+              (terminal) => terminal.kind === "agent" && terminal.role === role,
+            )?.generation ?? 0;
             return (
-              // The generation in the key remounts the tab for each auto-pilot
-              // step, running a fresh agent (and replacing the previous one).
               <div
-                key={`${role}:${autopilot?.gen ?? 0}`}
+                key={`${role}:${runnerGeneration}`}
                 className="session-terminal-host"
                 hidden={activeTab !== role}
               >
@@ -1322,33 +1252,9 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   ref={(handle) => registerTerminalHandle(role, handle)}
                   session={session}
                   role={role}
-                  mode={mode}
-                  persistKey={autopilot ? undefined : `${session.id}::role::${role}`}
+                  persistKey={`${session.id}::role::${role}`}
                   onOpenPath={handleOpenPath}
                   hint={roleHint(role, kind, hasCheckpoint)}
-                  autoSubmitWf={
-                    reviewMode || (fixMode && role === "implementer") || autopilot !== null
-                  }
-                  autopilotLaunch={
-                    autopilot
-                      ? {
-                          command: autopilot.command,
-                          agentKind: autopilot.agentKind,
-                          environment: autopilot.environment,
-                          cwd: autopilot.cwd,
-                          sessionLane: autopilot.sessionLane,
-                          typePrompt: autopilot.typePrompt,
-                        }
-                      : null
-                  }
-                  onAutopilotStarted={
-                    autopilot ? () => settleAutopilot(autopilot.requestId) : undefined
-                  }
-                  onAutopilotFailed={
-                    autopilot
-                      ? (reason) => settleAutopilot(autopilot.requestId, reason)
-                      : undefined
-                  }
                 />
               </div>
             );
@@ -1359,8 +1265,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               ref={(handle) => registerTerminalHandle(tab.id, handle)}
               session={session}
               role="shell"
-              mode="fresh"
-              persistKey={`${session.id}::${tab.id}`}
+              persistKey={tab.id.includes("::") ? tab.id : `${session.id}::${tab.id}`}
               onOpenPath={handleOpenPath}
               cwdOverride={tab.root ? repoRoot : undefined}
               hint={repoMode ? SHELL_HINT_REPO : tab.root ? SHELL_HINT_ROOT : SHELL_HINT}

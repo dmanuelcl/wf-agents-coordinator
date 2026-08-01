@@ -24,7 +24,7 @@ un requisito. Para la primera prueba, usa tu Mac más potente.
 Mac/servidor que ejecuta el runner
   ├─ repositorios y worktrees
   ├─ agentes y sus OAuth (Codex, Claude, etc.)
-  ├─ estado de Coordinator y scrollback
+  ├─ estado de Coordinator, intentos de terminal y scrollback
   └─ Tailscale Serve → URL privada HTTPS
 
 Tu laptop/iPad/navegador
@@ -148,9 +148,10 @@ Debe aparecer `Agent Coordinator runner listening on 4765.`. Abre
 Los proyectos que añadas deben ser rutas de la máquina runner. En macOS pueden
 ser `/Users/TU_USUARIO/Projects/...`; en Linux `/srv/projects/...`.
 
-Para probar continuidad, inicia un terminal/agente, cierra sólo la pestaña del
-navegador y vuelve a abrir la URL. No cierres la terminal donde corre el
-runner: detener el runner todavía detiene sus PTYs.
+Para probar continuidad, inicia un terminal/agente, recarga con F5 o cierra
+sólo la pestaña del navegador y vuelve a abrir la URL. El cliente se limita a
+mostrar la PTY y enviar tu teclado: ni F5, ni una segunda computadora, ni
+cerrar una pestaña reinician setup, agentes, tabs o Auto Pilot.
 
 ## Paso 4: darle una URL privada con Tailscale
 
@@ -246,10 +247,16 @@ runner a la vez.
 ## Actualizaciones y límites actuales
 
 - Actualizar el navegador o la app desktop no toca los agentes del runner.
-- Cerrar o recargar un cliente vuelve a adjuntarse a las terminales persistidas.
-- Actualizar o reiniciar el **runner** sí termina sus PTYs por ahora. Hazlo sólo
-  cuando no haya agentes importantes trabajando. Un broker de PTYs persistente
-  será la siguiente mejora para actualizaciones sin interrupción.
+- Cerrar o recargar un cliente vuelve a adjuntarse a las terminales persistidas;
+  no vuelve a ejecutar worktree setup ni reenvía prompts.
+- Actualizar o reiniciar el **runner** sí termina los procesos PTY —un proceso
+  no puede sobrevivir a que su host se reinicie—, pero antes de eso el runner
+  guarda la intención de cada tab. Al volver a arrancar, reconstruye setup si
+  hacía falta, todos los agentes/shells abiertos y el estado de Auto Pilot. Un
+  agente cuya conversación ya recibió un prompt se relanza en modo resume; un
+  prompt que nunca llegó a enviarse se relanza limpio para no ejecutar un
+  `codex resume` contra un id inexistente. Ningún navegador participa en esa
+  recuperación.
 - La web no sube archivos locales arrastrados al runner y no puede abrir el
   Finder del runner. Sube/copia esos archivos al host antes de enviarlos al
   agente.

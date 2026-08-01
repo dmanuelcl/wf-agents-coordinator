@@ -96,6 +96,16 @@ function resolveTokenPath(pathToken: string, cwd: string): string {
   return target;
 }
 
+export interface RegisteredIpcServices {
+  buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
+  buildRoleAutopilot(
+    sessionId: string,
+    role: SessionAgentRole,
+    sessionLane: string,
+    wfPrompt: string,
+  ): Promise<SessionRoleAutopilot>;
+}
+
 export function registerIpcHandlers(params: {
   projectRegistry: ProjectRegistry;
   checkpointWatchManager: CheckpointWatchManager;
@@ -108,7 +118,9 @@ export function registerIpcHandlers(params: {
   systemIntegration?: SystemIntegration;
   killTerminalsForWorktree?: (worktreePath: string) => void;
   sessionSetupCoordinator?: SessionSetupCoordinator;
-}): void {
+  onSessionCreated?: (session: WorkSession) => Promise<void>;
+  onSessionRemoved?: (sessionId: string) => Promise<void>;
+}): RegisteredIpcServices {
   const {
     projectRegistry,
     checkpointWatchManager,
@@ -121,6 +133,8 @@ export function registerIpcHandlers(params: {
     systemIntegration = createHeadlessSystemIntegration(),
     killTerminalsForWorktree,
     sessionSetupCoordinator: providedSessionSetupCoordinator,
+    onSessionCreated,
+    onSessionRemoved,
   } = params;
   const ipc = transport;
   const sessionSetupCoordinator = providedSessionSetupCoordinator ?? createSessionSetupCoordinator();
@@ -407,6 +421,7 @@ export function registerIpcHandlers(params: {
     // Establish both watchers before the renderer can launch an architect.
     await watchSessionCheckpoint(session);
     await refreshCheckpointWatch(project);
+    await onSessionCreated?.(session);
     return session;
   });
 
@@ -414,13 +429,15 @@ export function registerIpcHandlers(params: {
     IPC_CHANNELS.sessionsCreateReview,
     async (_event, projectId: string, input: ReviewSessionCreateInput) => {
       const project = await findProject(projectRegistry, projectId);
-      return sessionRegistry.createReviewSession({
+      const session = await sessionRegistry.createReviewSession({
         projectId,
         projectRoot: project.rootPath,
         name: input.name,
         reviewBranch: input.reviewBranch,
         baseBranch: input.baseBranch,
       });
+      await onSessionCreated?.(session);
+      return session;
     },
   );
 
@@ -471,7 +488,7 @@ export function registerIpcHandlers(params: {
     if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
     const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
     // Review the PR's pushed state: origin/<source> against origin/<target>.
-    return sessionRegistry.createReviewSession({
+    const session = await sessionRegistry.createReviewSession({
       projectId,
       projectRoot: project.rootPath,
       name: truncateSessionName(`PR #${resolved.prId}: ${resolved.title}`),
@@ -488,6 +505,8 @@ export function registerIpcHandlers(params: {
       fetchFirst: true,
       expectedHeadSha: resolved.headSha,
     });
+    await onSessionCreated?.(session);
+    return session;
   });
 
   ipc.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (_event, projectId: string, input: { url: string }) => {
@@ -518,6 +537,7 @@ export function registerIpcHandlers(params: {
     // exact handoff checkpoint.
     await watchSessionCheckpoint(session);
     await refreshCheckpointWatch(project);
+    await onSessionCreated?.(session);
     return session;
   });
 
@@ -618,6 +638,7 @@ export function registerIpcHandlers(params: {
     const session = await sessionRegistry.getSession({ sessionId });
     if (session) killTerminalsForWorktree?.(session.worktreePath);
     await sessionRegistry.removeSession({ sessionId });
+    await onSessionRemoved?.(sessionId);
 
     // User-confirmed delete (the renderer gates this). The session record stays
     // removed even if Git cleanup fails; otherwise the optimistic sidebar
@@ -690,9 +711,11 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipc.handle(
-    IPC_CHANNELS.sessionsBuildRoleLaunch,
-    async (_event, sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch> => {
+  async function buildRoleLaunchForRunner(
+    sessionId: string,
+    role: SessionAgentRole,
+    mode: AgentLaunchMode,
+  ): Promise<SessionRoleLaunch> {
       const session = await sessionRegistry.getSession({ sessionId });
       if (!session) {
         throw new Error(`Session not found: ${sessionId}`);
@@ -734,31 +757,31 @@ export function registerIpcHandlers(params: {
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
         ? await buildReviewOrWfCommand(session, project, role)
         : null;
-      return {
-        agentCommand: launch.command,
-        agentKind: agentConfig.kind,
-        environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
-        wfCommand,
-        cwd: session.worktreePath,
-        sessionUuid: sessionDirective?.id ?? null,
-        warnings: launch.warnings,
-      };
-    },
+    return {
+      agentCommand: launch.command,
+      agentKind: agentConfig.kind,
+      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      wfCommand,
+      cwd: session.worktreePath,
+      sessionUuid: sessionDirective?.id ?? null,
+      warnings: launch.warnings,
+    };
+  }
+
+  ipc.handle(IPC_CHANNELS.sessionsBuildRoleLaunch, (_event, sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode) =>
+    buildRoleLaunchForRunner(sessionId, role, mode),
   );
 
   // Auto-pilot: build the INTERACTIVE launch that runs `wfPrompt` for a role,
   // using the project's current per-stage config. The lane decides whether the
   // provider conversation is created or resumed; switching provider replaces
   // only that lane's binding.
-  ipc.handle(
-    IPC_CHANNELS.sessionsBuildRoleAutopilot,
-    async (
-      _event,
-      sessionId: string,
-      role: SessionAgentRole,
-      sessionLane: string,
-      wfPrompt: string,
-    ): Promise<SessionRoleAutopilot> => {
+  async function buildRoleAutopilotForRunner(
+    sessionId: string,
+    role: SessionAgentRole,
+    sessionLane: string,
+    wfPrompt: string,
+  ): Promise<SessionRoleAutopilot> {
       assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
       if (!session) {
@@ -781,17 +804,22 @@ export function registerIpcHandlers(params: {
         sessionDirective = { ...sessionDirective, mode: "fresh" };
       }
       const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt, sessionDirective);
-      return {
-        command: launch.command,
-        agentKind: agentConfig.kind,
-        environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
-        cwd: session.worktreePath,
-        sessionLane,
-        sessionUuid: sessionDirective?.id ?? null,
-        typePrompt: launch.typePrompt,
-        warnings: launch.warnings,
-      };
-    },
+    return {
+      command: launch.command,
+      agentKind: agentConfig.kind,
+      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      cwd: session.worktreePath,
+      sessionLane,
+      sessionUuid: sessionDirective?.id ?? null,
+      typePrompt: launch.typePrompt,
+      warnings: launch.warnings,
+    };
+  }
+
+  ipc.handle(
+    IPC_CHANNELS.sessionsBuildRoleAutopilot,
+    (_event, sessionId: string, role: SessionAgentRole, sessionLane: string, wfPrompt: string) =>
+      buildRoleAutopilotForRunner(sessionId, role, sessionLane, wfPrompt),
   );
 
   ipc.handle(IPC_CHANNELS.workspaceGetLayout, async () => {
@@ -816,4 +844,9 @@ export function registerIpcHandlers(params: {
     const project = await findProject(projectRegistry, projectId);
     await createWorktree({ projectRoot: project.rootPath, slug, branch });
   });
+
+  return {
+    buildRoleLaunch: buildRoleLaunchForRunner,
+    buildRoleAutopilot: buildRoleAutopilotForRunner,
+  };
 }

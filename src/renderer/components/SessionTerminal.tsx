@@ -5,33 +5,17 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import type { DragEvent as ReactDragEvent } from "react";
 import "@xterm/xterm/css/xterm.css";
 import type {
-  AgentLaunchMode,
   SessionAgentRole,
-  SessionRoleLaunch,
   TerminalDataEvent,
   TerminalExitEvent,
-  TerminalInitialInputEvent,
   TerminalScreenSnapshot,
   WorkSession,
 } from "../../shared/ipc/contract";
-import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
 
 // File-path-ish tokens in terminal output: optional dir prefix, a filename with
 // an extension, and an optional :line[:col] suffix. A token that isn't a real
 // file just no-ops on click, so occasional false positives are harmless.
 const FILE_PATH_RE = /(?:[~.]{0,2}\/)?(?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z][\w]{0,7}(?::\d+(?::\d+)?)?/g;
-
-function visibleTerminalText(term: Terminal): string {
-  const buffer = term.buffer.active;
-  const start = Math.max(0, buffer.viewportY);
-  const end = Math.min(buffer.length, start + term.rows);
-  const lines: string[] = [];
-  for (let index = start; index < end; index += 1) {
-    const line = buffer.getLine(index);
-    if (line) lines.push(line.translateToString(true));
-  }
-  return lines.join("\n");
-}
 
 function restoreRunnerScreen(term: Terminal, snapshot: TerminalScreenSnapshot): void {
   term.resize(snapshot.cols, snapshot.rows);
@@ -45,7 +29,6 @@ function restoreRunnerScreen(term: Terminal, snapshot: TerminalScreenSnapshot): 
 export interface SessionTerminalProps {
   session: WorkSession;
   role: SessionAgentRole | "shell" | "setup";
-  mode: AgentLaunchMode;
   // When set, the terminal restores + persists bounded scrollback (shell tabs).
   persistKey?: string;
   // Called when a file path in the output is clicked (host decides how to open).
@@ -56,32 +39,6 @@ export interface SessionTerminalProps {
   // Shell tabs only: run in this directory instead of the session worktree
   // (e.g. the main repo root).
   cwdOverride?: string;
-  // When true, a fresh agent launch AUTO-SUBMITS its wf command (conductor-driven)
-  // instead of only pre-typing it for the user to press Enter.
-  autoSubmitWf?: boolean;
-  // Auto-pilot: launch this INTERACTIVE command seeded with a wf step instead
-  // of the normal role launch. The tab is remounted per step by its React key,
-  // so each step gets a clean, watchable process attached to its session lane. `command`
-  // usually embeds the wf; when it can't, `typePrompt` is typed + submitted after
-  // the agent is ready (via the follow-up gate, autoSubmitWf).
-  autopilotLaunch?: {
-    command: string;
-    agentKind: SessionRoleLaunch["agentKind"];
-    environment: Record<string, string>;
-    cwd: string;
-    sessionLane: string;
-    typePrompt: string | null;
-  } | null;
-  // Auto-pilot acknowledgement: the conductor consumes a checkpoint action
-  // only after the PTY exists and its workflow prompt was embedded or delivered.
-  onAutopilotStarted?: () => void;
-  onAutopilotFailed?: (reason: string) => void;
-  // Setup terminal only: called after there is no setup to run, or after the
-  // single setup owner exits 0 and setupDone has been persisted.
-  onSetupReady?: () => void;
-  // Setup terminal only: called after a non-zero exit (or persistence failure)
-  // has released the setup claim and this pane is becoming a repair shell.
-  onSetupFailed?: (reason: string) => void;
 }
 
 // Bounded so the renderer's memory stays in check even for a busy session.
@@ -100,11 +57,9 @@ const TUI_MODE_RESET =
   "\x1b[0m"; // reset text attributes
 
 /**
- * One agent (or plain shell) terminal for a session tab. For an agent role it
- * asks the main process how to launch the configured CLI plus the `wf <verb>
- * <checkpoint>` message, spawns the agent as the PTY process, and then
- * PRE-TYPES the wf command WITHOUT a trailing newline so the user presses
- * Enter. The `shell` role is just a plain terminal in the worktree, no agent.
+ * Display/input surface for one runner-owned terminal. It attaches to a PTY,
+ * renders its stream and forwards keyboard input; it never creates, replaces,
+ * resizes, or decides how an agent starts.
  */
 export interface SessionTerminalHandle {
   // Insert text into the terminal's input as a bracketed paste (multi-line safe).
@@ -119,17 +74,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   const {
     session,
     role,
-    mode,
     persistKey,
     onOpenPath,
     hint,
     cwdOverride,
-    autoSubmitWf,
-    autopilotLaunch,
-    onAutopilotStarted,
-    onAutopilotFailed,
-    onSetupReady,
-    onSetupFailed,
   } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hintDismissed, setHintDismissed] = useState(false);
@@ -187,16 +135,8 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   // capture a stale onOpenPath (and stale open-tabs). Route through a ref that
   // always points at the latest handler.
   const onOpenPathRef = useRef(onOpenPath);
-  const onAutopilotStartedRef = useRef(onAutopilotStarted);
-  const onAutopilotFailedRef = useRef(onAutopilotFailed);
-  const onSetupReadyRef = useRef(onSetupReady);
-  const onSetupFailedRef = useRef(onSetupFailed);
   useEffect(() => {
     onOpenPathRef.current = onOpenPath;
-    onAutopilotStartedRef.current = onAutopilotStarted;
-    onAutopilotFailedRef.current = onAutopilotFailed;
-    onSetupReadyRef.current = onSetupReady;
-    onSetupFailedRef.current = onSetupFailed;
   });
 
   useEffect(() => {
@@ -223,15 +163,24 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     let ptyId: string | null = null;
     let disposed = false;
-    let autopilotAcknowledged = false;
-    let fellBackToShell = false;
-    let ownsSetupClaim = false;
     let shellCwd = cwdOverride ?? session.worktreePath;
-    const isSetupTab = role === "setup";
-    const isAgentTab = role !== "shell" && !isSetupTab;
     const disposables: Array<() => void> = [];
     let runnerOwnedGeometry = false;
     let resizeAnimationFrame: number | null = null;
+
+    function fitRunnerDisplay(): void {
+      // Keep the terminal's logical grid equal to the runner PTY, but scale
+      // the local glyphs to the available pane. This is presentation only:
+      // it cannot make a second browser (or an F5) resize a full-screen TUI.
+      const proposed = fitAddon.proposeDimensions();
+      if (!proposed || term.cols === 0 || term.rows === 0) return;
+      const currentFontSize = term.options.fontSize ?? 12;
+      const scale = Math.min(proposed.cols / term.cols, proposed.rows / term.rows);
+      const nextFontSize = Math.max(8, Math.min(32, currentFontSize * scale));
+      if (Math.abs(nextFontSize - currentFontSize) >= 0.1) {
+        term.options.fontSize = nextFontSize;
+      }
+    }
 
     function fitAndResizeLiveTerminal(): void {
       // Do not let a hidden keep-alive tab report its zero-size box to the
@@ -240,11 +189,11 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
       // A remote PTY has one runner-owned geometry. Fitting a fresh browser
       // view must never resize that PTY (or a full-screen agent inside it).
-      if (window.agentCoordinator.connection.mode === "remote" && runnerOwnedGeometry) return;
+      if (runnerOwnedGeometry) {
+        fitRunnerDisplay();
+        return;
+      }
       fitAddon.fit();
-      if (!ptyId) return;
-      if (window.agentCoordinator.connection.mode === "remote") return;
-      window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
     }
 
     function scheduleFitAndResize(): void {
@@ -291,72 +240,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     });
     disposables.push(() => linkProvider.dispose());
 
-    // An agent runs AS the PTY process, so quitting it closes the PTY. Instead of
-    // leaving a dead terminal, drop to a usable shell in the same worktree. The
-    // existing onData/onExit/write handlers all target the current `ptyId`, so
-    // reassigning it is enough to rewire them to the new shell.
-    async function fallBackToShell(): Promise<void> {
-      const created = await window.agentCoordinator.terminal.create({
-        cwd: shellCwd,
-        cols: term.cols,
-        rows: term.rows,
-        // An agent that exits is deliberately replaced with a shell. Keep that
-        // replacement under the same key so a browser reload reattaches to the
-        // shell instead of launching the agent a second time. Setup repair
-        // shells stay ephemeral: their setup state is handled separately.
-        persistKey: isSetupTab ? null : persistKey ?? null,
-      });
-      const id = created.sessionId;
-      if (disposed) {
-        window.agentCoordinator.terminal.kill(id);
-        return;
-      }
-      ptyId = id;
-      ptyIdRef.current = id;
-    }
-
     async function start(): Promise<void> {
-      let agentCommand: string | null = null;
-      let agentKind: SessionRoleLaunch["agentKind"] | null = null;
-      let agentEnvironment: Record<string, string> = {};
-      let wfPreType: string | null = null;
-      let setupCommand: string | null = null;
-
-      // The dedicated setup terminal is the only component allowed into the
-      // setup phase. Role/shell terminals are not mounted until it persists
-      // setupDone, so they always start directly in their normal phase.
-      let phase: "setup" | "finishing-setup" | "agent" = "agent";
-
-      // Subscribe BEFORE creating the PTY. A fast agent can render its startup
-      // screen before the create IPC promise resolves; subscribing afterwards
-      // loses the output that schedules the kickoff.
       const pendingData: TerminalDataEvent[] = [];
       const pendingExits: TerminalExitEvent[] = [];
-      const pendingInitialInputDeliveries: TerminalInitialInputEvent[] = [];
-      let recordedKimiSessionId: string | null = null;
-
-      function acknowledgeAutopilotStart(): void {
-        if (!autopilotLaunch || autopilotAcknowledged) return;
-        autopilotAcknowledged = true;
-        onAutopilotStartedRef.current?.();
-      }
-
-      const captureKimiSessionId = (): void => {
-        if (disposed || agentKind !== "kimi" || role === "shell" || role === "setup") return;
-        const kimiSessionId = findKimiSessionId(visibleTerminalText(term));
-        if (!kimiSessionId || kimiSessionId === recordedKimiSessionId) return;
-        recordedKimiSessionId = kimiSessionId;
-        void window.agentCoordinator.sessions
-          .recordRoleAgentSession(
-            session.id,
-            role,
-            autopilotLaunch?.sessionLane ?? role,
-            kimiSessionId,
-          )
-          .catch((error: unknown) => {
-            if (!disposed) setWarnings((current) => [...current, `Could not persist Kimi session: ${String(error)}`]);
-          });
-      };
 
       const handleData = (event: TerminalDataEvent): void => {
         if (!ptyId) {
@@ -364,41 +250,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           return;
         }
         if (event.sessionId !== ptyId) return;
-        term.write(event.data, captureKimiSessionId);
-      };
-
-      async function releaseSetupClaim(): Promise<void> {
-        if (!ownsSetupClaim) return;
-        ownsSetupClaim = false;
-        await window.agentCoordinator.sessions.releaseSetup(session.id).catch(() => {});
-      }
-
-      async function failSetup(message: string): Promise<void> {
-        await releaseSetupClaim();
-        if (disposed) return;
-        phase = "agent";
-        fellBackToShell = true;
-        term.write(`\r\n\x1b[2m—— ${message} · dropped to shell ——\x1b[0m\r\n\r\n`);
-        onSetupFailedRef.current?.(message);
-        await fallBackToShell();
-      }
-
-      async function completeSetup(): Promise<void> {
-        term.write("\r\n\x1b[2m—— setup done · finalizing session ——\x1b[0m\r\n");
-        try {
-          // This must finish before SessionView mounts any other terminal;
-          // otherwise their launch plans can still observe setupDone=false.
-          await window.agentCoordinator.sessions.markSetupDone(session.id);
-          ownsSetupClaim = false; // the main handler releases it atomically
-        } catch (error) {
-          await failSetup(`setup succeeded but could not be persisted: ${String(error)}`);
-          return;
-        }
-        if (disposed) return;
-        ptyId = null;
-        ptyIdRef.current = null;
-        term.write("\x1b[2m—— session ready ——\x1b[0m\r\n");
-        onSetupReadyRef.current?.();
+        term.write(event.data);
       }
 
       const handleExit = (event: TerminalExitEvent): void => {
@@ -407,40 +259,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           return;
         }
         if (event.sessionId !== ptyId) return;
-        if (phase === "setup") {
-          phase = "finishing-setup";
-          if (event.code === 0) {
-            void completeSetup();
-          } else {
-            // Setup failed: keep every role/shell terminal gated. This lone pane
-            // becomes a shell for inspection; reopening the session can retry.
-            void failSetup(`setup failed (exit ${event.code})`);
-          }
-          return;
-        }
-        if (phase === "finishing-setup") return;
-        if (isAgentTab && !fellBackToShell) {
-          // Agent quit → become a usable shell instead of a dead pane.
-          fellBackToShell = true;
-          term.write("\r\n\x1b[2m—— agent exited · dropped to shell ——\x1b[0m\r\n\r\n");
-          void fallBackToShell();
-        } else {
-          setExitCode(event.code);
-        }
-      };
-
-      const handleInitialInputDelivered = (event: TerminalInitialInputEvent): void => {
-        if (!ptyId) {
-          pendingInitialInputDeliveries.push(event);
-          return;
-        }
-        if (event.sessionId === ptyId) acknowledgeAutopilotStart();
+        setExitCode(event.code);
       };
 
       const unsubscribeData = window.agentCoordinator.terminal.onData(handleData);
       const unsubscribeExit = window.agentCoordinator.terminal.onExit(handleExit);
-      const unsubscribeInitialInput = window.agentCoordinator.terminal.onInitialInputDelivered(handleInitialInputDelivered);
-      disposables.push(unsubscribeData, unsubscribeExit, unsubscribeInitialInput);
+      disposables.push(unsubscribeData, unsubscribeExit);
 
       // Register input before any reconnect early-return. An attached terminal
       // is live, so the reloaded view must be able to type into it immediately.
@@ -458,7 +282,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           : null;
         if (disposed) return;
         if (attached) {
-          phase = isSetupTab ? "setup" : "agent";
           ptyId = attached.sessionId;
           ptyIdRef.current = attached.sessionId;
           if (attached.snapshot) {
@@ -466,6 +289,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
             // the new view from it; do not resize or otherwise poke the agent.
             runnerOwnedGeometry = true;
             restoreRunnerScreen(term, attached.snapshot);
+            scheduleFitAndResize();
           } else if (!attached.alternateScreen) {
             const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
             if (disposed) return;
@@ -473,7 +297,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           }
           for (const event of pendingData.splice(0)) handleData(event);
           for (const event of pendingExits.splice(0)) handleExit(event);
-          for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
           return;
         }
 
@@ -489,91 +312,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
       }
 
-      if (isSetupTab) {
-        // No live setup PTY exists, so this renderer is allowed to claim the
-        // one-time setup command now.
-        let waitingMessageShown = false;
-        while (!disposed) {
-          const plan = await window.agentCoordinator.sessions.claimSetup(session.id);
-          if (disposed) {
-            if (plan.state === "run") void window.agentCoordinator.sessions.releaseSetup(session.id);
-            return;
-          }
-          shellCwd = plan.cwd;
-          if (plan.state === "ready") {
-            onSetupReadyRef.current?.();
-            return;
-          }
-          if (plan.state === "run" && plan.command) {
-            ownsSetupClaim = true;
-            setupCommand = plan.command;
-            phase = "setup";
-            break;
-          }
-          if (!waitingMessageShown) {
-            waitingMessageShown = true;
-            term.write("\x1b[2m—— waiting for this session's setup ——\x1b[0m\r\n");
-          }
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
-        if (disposed) return;
-      } else if (autopilotLaunch) {
-        // Auto-pilot step: interactive launch seeded with the wf. When the wf
-        // is embedded in the command, typePrompt is null (nothing to type);
-        // otherwise the follow-up gate types + submits it once the agent is
-        // ready.
-        agentCommand = autopilotLaunch.command;
-        agentKind = autopilotLaunch.agentKind;
-        agentEnvironment = autopilotLaunch.environment;
-        shellCwd = autopilotLaunch.cwd;
-        wfPreType = autopilotLaunch.typePrompt;
-      } else if (role !== "shell") {
-        const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
-        if (disposed) return;
-        agentCommand = launch.agentCommand;
-        agentKind = launch.agentKind;
-        agentEnvironment = launch.environment;
-        shellCwd = launch.cwd;
-        wfPreType = launch.wfCommand;
-        if (launch.warnings.length > 0) setWarnings(launch.warnings);
-      }
-
-      if (setupCommand) {
-        term.write(`\x1b[2m—— setup: ${setupCommand} ——\x1b[0m\r\n`);
-      }
-      const created = await window.agentCoordinator.terminal.create({
-        cwd: shellCwd,
-        cols: term.cols,
-        rows: term.rows,
-        launchCommand: setupCommand ?? agentCommand,
-        environment: setupCommand ? undefined : agentEnvironment,
-        persistKey: persistKey ?? null,
-        setupSessionId: isSetupTab ? session.id : null,
-        initialInput: wfPreType === null ? null : { text: wfPreType, submit: autoSubmitWf === true },
-      });
-      const id = created.sessionId;
-      if (disposed) {
-        if (window.agentCoordinator.connection.mode === "local") window.agentCoordinator.terminal.kill(id);
-        return;
-      }
-      ptyId = id;
-      ptyIdRef.current = id;
-      // A remote runner survives a closed/reloaded client. Its output was
-      // replayed from scrollback above and we are subscribed again, so never
-      // re-send the role kickoff into an already-running agent.
-      if (created.reused) {
-        for (const event of pendingData.splice(0)) handleData(event);
-        for (const event of pendingExits.splice(0)) handleExit(event);
-        for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
-        return;
-      }
-      if (autopilotLaunch && wfPreType === null && !autopilotAcknowledged) {
-        acknowledgeAutopilotStart();
-      }
-
-      for (const event of pendingData.splice(0)) handleData(event);
-      for (const event of pendingExits.splice(0)) handleExit(event);
-      for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
+      // The runner is the only component allowed to create/restart a PTY or
+      // choose an agent command. A view that cannot attach has nothing to
+      // launch; it merely reports the runner state to the user.
+      setWarnings((current) =>
+        current.includes("This terminal is not currently running on the runner.")
+          ? current
+          : [...current, "This terminal is not currently running on the runner."],
+      );
 
     }
 
@@ -583,17 +329,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     fitAndResizeLiveTerminal();
 
     void start().catch((error: unknown) => {
-      if (ownsSetupClaim) {
-        ownsSetupClaim = false;
-        void window.agentCoordinator.sessions.releaseSetup(session.id);
-      }
       if (!disposed) {
         const reason = String(error);
         setWarnings((current) => [...current, reason]);
-        if (autopilotLaunch && !autopilotAcknowledged) {
-          autopilotAcknowledged = true;
-          onAutopilotFailedRef.current?.(reason);
-        }
       }
     });
 
@@ -608,17 +346,10 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (resizeAnimationFrame !== null) cancelAnimationFrame(resizeAnimationFrame);
       resizeObserver.disconnect();
       disposables.forEach((dispose) => dispose());
-      if (ptyId && window.agentCoordinator.connection.mode === "local") window.agentCoordinator.terminal.kill(ptyId);
       ptyIdRef.current = null;
       term.dispose();
-      // Send kill before releasing ownership so another window cannot claim
-      // setup while this terminal's command is still alive.
-      if (ownsSetupClaim) {
-        ownsSetupClaim = false;
-        void window.agentCoordinator.sessions.releaseSetup(session.id);
-      }
     };
-  }, [session.id, session.worktreePath, role, mode, cwdOverride]);
+  }, [session.id, session.worktreePath, role, cwdOverride]);
 
   return (
     <div

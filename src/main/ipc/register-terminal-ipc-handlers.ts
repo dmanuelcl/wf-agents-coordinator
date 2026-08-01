@@ -20,6 +20,31 @@ interface InitialInputDelivery {
   delivered: boolean;
 }
 
+export interface RunnerTerminalCreateInput {
+  cwd: string;
+  cols: number;
+  rows: number;
+  launchCommand?: string | null;
+  environment?: Record<string, string>;
+  persistKey?: string | null;
+  setupSessionId?: string | null;
+  initialInput?: { text: string; submit: boolean } | null;
+}
+
+/** Programmatic terminal surface used by the runner's session orchestrator. */
+export interface RunnerTerminalController {
+  create(input: RunnerTerminalCreateInput): Promise<{ sessionId: string; reused: boolean }>;
+  replace(input: RunnerTerminalCreateInput): Promise<{ sessionId: string; reused: boolean }>;
+  attach(persistKey: string): Promise<{
+    sessionId: string;
+    reused: true;
+    alternateScreen?: true;
+    snapshot?: TerminalScreenSnapshot;
+  } | null>;
+  kill(sessionId: string): void;
+  write(sessionId: string, data: string): void;
+}
+
 export function registerTerminalIpcHandlers(params: {
   ptySessionManager: PtySessionManager;
   sessionStateStore: SessionStateStore;
@@ -28,10 +53,27 @@ export function registerTerminalIpcHandlers(params: {
   transport: IpcTransport;
   broadcast(channel: string, payload: unknown): void;
   onSetupExit?: (params: { sessionId: string; code: number }) => Promise<void>;
-}): void {
-  const { ptySessionManager, sessionStateStore, scrollbackStore, screenStore, transport, broadcast, onSetupExit } = params;
+  onTerminalExit?: (params: { terminalId: string; persistKey: string | null; code: number }) => void;
+  onTerminalData?: (params: { terminalId: string; persistKey: string | null; data: string }) => void;
+  onInitialInputDelivered?: (params: { terminalId: string; persistKey: string | null; submit: boolean }) => void;
+  onTerminalInput?: (params: { terminalId: string; persistKey: string | null; data: string }) => void;
+}): RunnerTerminalController {
+  const {
+    ptySessionManager,
+    sessionStateStore,
+    scrollbackStore,
+    screenStore,
+    transport,
+    broadcast,
+    onSetupExit,
+    onTerminalExit,
+    onTerminalData,
+    onInitialInputDelivered,
+    onTerminalInput,
+  } = params;
   const ipc = transport;
   const terminalByPersistKey = new Map<string, string>();
+  const terminalPersistKeyById = new Map<string, string>();
   const initialInputByTerminal = new Map<string, InitialInputDelivery>();
 
   function clearInitialInputTimers(delivery: InitialInputDelivery): void {
@@ -67,6 +109,11 @@ export function registerTerminalIpcHandlers(params: {
     initialInputByTerminal.delete(sessionId);
     const paste = `\x1b[200~${delivery.text}\x1b[201~`;
     ptySessionManager.write(sessionId, delivery.submit ? `${paste}\r` : paste);
+    onInitialInputDelivered?.({
+      terminalId: sessionId,
+      persistKey: terminalPersistKeyById.get(sessionId) ?? null,
+      submit: delivery.submit,
+    });
     broadcast(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId });
   }
 
@@ -124,21 +171,7 @@ export function registerTerminalIpcHandlers(params: {
     };
   }
 
-  ipc.handle(
-    TERMINAL_IPC_CHANNELS.create,
-    async (
-      _event,
-      input: {
-        cwd: string;
-        cols: number;
-        rows: number;
-        launchCommand?: string | null;
-        environment?: Record<string, string>;
-        persistKey?: string | null;
-        setupSessionId?: string | null;
-        initialInput?: { text: string; submit: boolean } | null;
-      },
-    ) => {
+  async function createTerminal(input: RunnerTerminalCreateInput): Promise<{ sessionId: string; reused: boolean }> {
     const persistKey = input.persistKey ?? null;
     const attached = persistKey ? await attachPersistentTerminal(persistKey) : null;
     if (attached) {
@@ -163,7 +196,10 @@ export function registerTerminalIpcHandlers(params: {
       environment: input.environment,
     });
 
-    if (persistKey) terminalByPersistKey.set(persistKey, sessionId);
+    if (persistKey) {
+      terminalByPersistKey.set(persistKey, sessionId);
+      terminalPersistKeyById.set(sessionId, persistKey);
+    }
     screenStore.create(sessionId, { cols: input.cols, rows: input.rows });
     queueInitialInput(sessionId, input.initialInput);
     ptySessionManager.onData(sessionId, (data) => {
@@ -171,6 +207,7 @@ export function registerTerminalIpcHandlers(params: {
       if (persistKey) scrollbackStore.record(persistKey, data);
       screenStore.write(sessionId, data);
       scheduleInitialInputAfterSettle(sessionId);
+      onTerminalData?.({ terminalId: sessionId, persistKey, data });
       // PTY ownership belongs to the runner, not to the browser that created
       // it. Broadcast to all currently authenticated views so reconnecting or
       // second clients immediately receive the live stream.
@@ -178,6 +215,7 @@ export function registerTerminalIpcHandlers(params: {
     });
     ptySessionManager.onExit(sessionId, (code) => {
       if (persistKey && terminalByPersistKey.get(persistKey) === sessionId) terminalByPersistKey.delete(persistKey);
+      terminalPersistKeyById.delete(sessionId);
       discardInitialInput(sessionId);
       if (input.setupSessionId && onSetupExit) {
         void onSetupExit({ sessionId: input.setupSessionId, code }).catch((error: unknown) => {
@@ -185,16 +223,32 @@ export function registerTerminalIpcHandlers(params: {
         });
       }
       screenStore.remove(sessionId);
+      onTerminalExit?.({ terminalId: sessionId, persistKey, code });
       broadcast(TERMINAL_IPC_CHANNELS.exit, { sessionId, code });
     });
 
     return { sessionId, reused: false };
-  });
+  }
+
+  async function replaceTerminal(input: RunnerTerminalCreateInput): Promise<{ sessionId: string; reused: boolean }> {
+    const persistKey = input.persistKey ?? null;
+    if (persistKey) {
+      const attached = await attachPersistentTerminal(persistKey);
+      if (attached) {
+        discardInitialInput(attached.sessionId);
+        ptySessionManager.kill(attached.sessionId);
+      }
+    }
+    return createTerminal(input);
+  }
+
+  ipc.handle(TERMINAL_IPC_CHANNELS.create, (_event, input: RunnerTerminalCreateInput) => createTerminal(input));
 
   ipc.handle(TERMINAL_IPC_CHANNELS.attach, (_event, persistKey: string) => attachPersistentTerminal(persistKey));
 
   ipc.on(TERMINAL_IPC_CHANNELS.write, (_event, sessionId: string, data: string) => {
     ptySessionManager.write(sessionId, data);
+    onTerminalInput?.({ terminalId: sessionId, persistKey: terminalPersistKeyById.get(sessionId) ?? null, data });
     // A user may have just answered a trust/permissions confirmation. Recheck
     // the runner-owned screen after its response settles.
     scheduleInitialInputAfterSettle(sessionId);
@@ -225,4 +279,17 @@ export function registerTerminalIpcHandlers(params: {
   ipc.handle(IPC_CHANNELS.sessionStateSet, async (_event, projectId: string, state: ProjectSessionState) => {
     await sessionStateStore.set(projectId, state);
   });
+
+  return {
+    create: createTerminal,
+    replace: replaceTerminal,
+    attach: attachPersistentTerminal,
+    kill(sessionId) {
+      discardInitialInput(sessionId);
+      ptySessionManager.kill(sessionId);
+    },
+    write(sessionId, data) {
+      ptySessionManager.write(sessionId, data);
+    },
+  };
 }

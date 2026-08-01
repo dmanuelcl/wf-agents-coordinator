@@ -1,5 +1,7 @@
 import { join } from "node:path";
-import { CHECKPOINT_IPC_CHANNELS, SESSION_IPC_CHANNELS } from "../../shared/ipc/contract";
+import { readFile } from "node:fs/promises";
+import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS, SESSION_IPC_CHANNELS } from "../../shared/ipc/contract";
+import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { prFixCompletionCheckpointPath } from "../../shared/workflow/pr-fix-kickoff";
 import { registerIpcHandlers } from "../ipc/register-ipc-handlers";
 import { registerTerminalIpcHandlers } from "../ipc/register-terminal-ipc-handlers";
@@ -9,6 +11,8 @@ import { createChokidarWatcher } from "../projects/chokidar-watcher-adapter";
 import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manager";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import { createSessionRegistry } from "../projects/session-registry";
+import { createSessionOrchestrator } from "../projects/session-orchestrator";
+import { createSessionRuntimeStore } from "../projects/session-runtime-store";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import { createSqliteProjectRegistry } from "../projects/sqlite-project-registry";
 import { createWorkspaceLayoutStore } from "../projects/workspace-layout-store";
@@ -42,6 +46,7 @@ export async function createCoordinatorRuntime(
   options: CreateCoordinatorRuntimeOptions,
 ): Promise<CoordinatorRuntime> {
   const { stateDir, transport, systemIntegration, vcsSecretCipher, broadcast } = options;
+  let sessionOrchestrator: ReturnType<typeof createSessionOrchestrator> | null = null;
   const projectRegistry = createSqliteProjectRegistry({
     sqliteFilePath: join(stateDir, "app.db"),
     legacyJsonFilePath: join(stateDir, "projects.json"),
@@ -57,10 +62,31 @@ export async function createCoordinatorRuntime(
     storeFilePath: join(stateDir, "vcs-secrets.json"),
     cipher: vcsSecretCipher,
   });
+  async function readSessionCheckpointForRunner(sessionId: string) {
+    const session = await sessionRegistry.getSession({ sessionId });
+    if (!session?.checkpointPath) return null;
+    try {
+      const markdown = await readFile(join(session.worktreePath, session.checkpointPath), "utf8");
+      return parseCheckpointMarkdown({ checkpointPath: session.checkpointPath, markdown });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
   const checkpointWatchManager = createCheckpointWatchManager({
     createWatcher: createChokidarWatcher,
-    onCheckpointChanged: (projectId, checkpoint) =>
-      broadcast(CHECKPOINT_IPC_CHANNELS.changed, { projectId, checkpoint }),
+    onCheckpointChanged: (projectId, checkpoint) => {
+      broadcast(CHECKPOINT_IPC_CHANNELS.changed, { projectId, checkpoint });
+      void sessionRegistry.listSessions({ projectId }).then((sessions) => {
+        for (const session of sessions) {
+          if (session.checkpointPath === checkpoint.checkpointPath) {
+            sessionOrchestrator?.onCheckpoint(session.id, checkpoint);
+          }
+        }
+      }).catch((error: unknown) => {
+        console.error(`Could not route checkpoint ${checkpoint.checkpointPath} to auto-pilot:`, error);
+      });
+    },
     onCheckpointRemoved: (projectId, checkpointPath) =>
       broadcast(CHECKPOINT_IPC_CHANNELS.removed, { projectId, checkpointPath }),
   });
@@ -71,7 +97,11 @@ export async function createCoordinatorRuntime(
       // a fully updated session record.
       void sessionRegistry
         .updateSessionCheckpoint({ sessionId, checkpointPath })
-        .then(() => broadcast(SESSION_IPC_CHANNELS.checkpointDetected, { sessionId, checkpointPath }))
+        .then(async () => {
+          broadcast(SESSION_IPC_CHANNELS.checkpointDetected, { sessionId, checkpointPath });
+          const checkpoint = await readSessionCheckpointForRunner(sessionId);
+          if (checkpoint) sessionOrchestrator?.onCheckpoint(sessionId, checkpoint);
+        })
         .catch((error: unknown) => {
           console.error(`Could not persist checkpoint for session ${sessionId}:`, error);
         });
@@ -83,7 +113,45 @@ export async function createCoordinatorRuntime(
   const screenStore = createTerminalScreenStore();
   const sessionSetupCoordinator = createSessionSetupCoordinator();
 
-  registerIpcHandlers({
+  const terminalController = registerTerminalIpcHandlers({
+    ptySessionManager,
+    sessionStateStore: createSessionStateStore({ storeFilePath: join(stateDir, "session-state.json") }),
+    scrollbackStore,
+    screenStore,
+    transport,
+    broadcast,
+    onSetupExit: async ({ sessionId, code }) => {
+      try {
+        if (sessionOrchestrator) {
+          await sessionOrchestrator.onSetupExit({ sessionId, code });
+        } else if (code === 0) {
+          await sessionRegistry.markSetupDone({ sessionId });
+        }
+      } finally {
+        // The setup process, not a particular browser connection, owns this
+        // lifecycle. Always unlock it after exit so a failed setup can be
+        // repaired/retried even if the client disconnected meanwhile.
+        sessionSetupCoordinator.release(sessionId);
+      }
+    },
+    onTerminalExit: ({ terminalId, code }) => sessionOrchestrator?.onTerminalExit({ terminalId, code }),
+    onTerminalData: ({ terminalId, data }) => sessionOrchestrator?.onTerminalData({ terminalId, data }),
+    onInitialInputDelivered: ({ terminalId, submit }) =>
+      sessionOrchestrator?.onTerminalInitialInputDelivered({ terminalId, submit }),
+    onTerminalInput: ({ terminalId, data }) => sessionOrchestrator?.onTerminalInput({ terminalId, data }),
+  });
+
+  sessionOrchestrator = createSessionOrchestrator({
+    projectRegistry,
+    sessionRegistry,
+    runtimeStore: createSessionRuntimeStore({ storeFilePath: join(stateDir, "session-runtime.json") }),
+    terminals: terminalController,
+    sessionAgentUuidStore,
+    readCheckpoint: readSessionCheckpointForRunner,
+    broadcast,
+  });
+
+  const ipcServices = registerIpcHandlers({
     projectRegistry,
     checkpointWatchManager,
     sessionRegistry,
@@ -95,31 +163,43 @@ export async function createCoordinatorRuntime(
     systemIntegration,
     killTerminalsForWorktree: (worktreePath) => ptySessionManager.killByCwd(worktreePath),
     sessionSetupCoordinator,
+    onSessionCreated: (session) => sessionOrchestrator!.ensure(session.id).then(() => {}),
+    onSessionRemoved: (sessionId) => sessionOrchestrator!.remove(sessionId),
   });
+  sessionOrchestrator.setRoleLaunchBuilder(ipcServices.buildRoleLaunch);
+  sessionOrchestrator.setAutopilotLaunchBuilder(ipcServices.buildRoleAutopilot);
 
-  registerTerminalIpcHandlers({
-    ptySessionManager,
-    sessionStateStore: createSessionStateStore({ storeFilePath: join(stateDir, "session-state.json") }),
-    scrollbackStore,
-    screenStore,
-    transport,
-    broadcast,
-    onSetupExit: async ({ sessionId, code }) => {
-      try {
-        if (code === 0) await sessionRegistry.markSetupDone({ sessionId });
-      } finally {
-        // The setup process, not a particular browser connection, owns this
-        // lifecycle. Always unlock it after exit so a failed setup can be
-        // repaired/retried even if the client disconnected meanwhile.
-        sessionSetupCoordinator.release(sessionId);
-      }
-    },
-  });
+  transport.handle(IPC_CHANNELS.sessionsEnsureRuntime, (_event, sessionId: string) => sessionOrchestrator!.ensure(sessionId));
+  transport.handle(IPC_CHANNELS.sessionsGetRuntime, (_event, sessionId: string) => sessionOrchestrator!.runtime(sessionId));
+  transport.handle(IPC_CHANNELS.sessionsOpenRole, (_event, sessionId: string, role) =>
+    sessionOrchestrator!.openRole(sessionId, role),
+  );
+  transport.handle(IPC_CHANNELS.sessionsOpenShell, (_event, sessionId: string, root: boolean) =>
+    sessionOrchestrator!.openShell({ sessionId, root }),
+  );
+  transport.handle(IPC_CHANNELS.sessionsCloseTerminal, (_event, sessionId: string, key: string) =>
+    sessionOrchestrator!.closeTerminal(sessionId, key),
+  );
+  transport.handle(IPC_CHANNELS.sessionsSkipFailedSetup, (_event, sessionId: string) =>
+    sessionOrchestrator!.skipFailedSetup(sessionId),
+  );
+  transport.handle(IPC_CHANNELS.sessionsSetAutopilot, (_event, sessionId: string, enabled: boolean) =>
+    sessionOrchestrator!.setAutopilot(sessionId, enabled),
+  );
+  transport.handle(
+    IPC_CHANNELS.sessionsRunCommand,
+    (_event, sessionId: string, role, lane: string, command: string) =>
+      sessionOrchestrator!.runCommand(sessionId, role, lane, command),
+  );
+  transport.handle(IPC_CHANNELS.sessionsRestoreView, (_event, sessionId: string, intent) =>
+    sessionOrchestrator!.restoreView(sessionId, intent),
+  );
 
   // Build session watches before the broad project watcher. Chokidar can miss
   // children of a directory that did not exist when its parent began watching.
   void (async () => {
     try {
+      await sessionOrchestrator?.resume();
       const projects = await projectRegistry.listProjects();
       for (const project of projects) {
         const sessions = await sessionRegistry.listSessions({ projectId: project.id });

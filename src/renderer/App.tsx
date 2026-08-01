@@ -88,15 +88,13 @@ export function App(): JSX.Element {
   const selectedSession = selectedSessionId
     ? (allSessions.find((session) => session.id === selectedSessionId) ?? null)
     : null;
-  const selectedSessionCheckpoint = selectedSession?.checkpointPath ?? null;
-  const selectedSessionKind = selectedSession?.kind ?? null;
   const openedSessions = openedSessionIds
     .map((id) => allSessions.find((session) => session.id === id))
     .filter((session): session is WorkSession => session !== undefined);
 
   // Startup: load projects + every project's sessions, then restore the saved
-  // workspace (which sessions/tabs were open, what was selected). Agent
-  // conversations resume via each tab's stored --resume id inside SessionView.
+  // workspace (which sessions/tabs were open, what was selected). The runner
+  // restores conversations before React mounts a view for them.
   useEffect(() => {
     let cancelled = false;
     async function restoreWorkspace(): Promise<void> {
@@ -129,6 +127,24 @@ export function App(): JSX.Element {
         for (const entry of validOpened) {
           restored[entry.sessionId] = sanitizeSessionLayout(entry);
         }
+        // The runner restores durable terminal intent itself. For layouts from
+        // before that registry existed, it imports the user-opened tabs as a
+        // declarative preference before React mounts a viewer. The runner still
+        // validates roles and owns every PTY it decides to recreate.
+        await Promise.all(
+          validOpened
+            .filter((entry) => !isRepoSessionId(entry.sessionId))
+            .map(async (entry) => {
+              await window.agentCoordinator.sessions.ensureRuntime(entry.sessionId);
+              const restoredLayout = restored[entry.sessionId] ?? sanitizeSessionLayout(entry);
+              await window.agentCoordinator.sessions.restoreView(entry.sessionId, {
+                roles: restoredLayout.openedRoleTabs,
+                shells: restoredLayout.shellTabs,
+              });
+            }),
+        );
+        if (cancelled) return;
+
         restoredLayoutsRef.current = restored;
         setSessionLayouts(restored);
         setOpenedSessionIds(validOpened.map((entry) => entry.sessionId));
@@ -183,6 +199,25 @@ export function App(): JSX.Element {
     });
   }, []);
 
+  // A runner lifecycle change is data for the UI, not an instruction from it.
+  // In particular this flips setupDone after a background setup process exits.
+  useEffect(() => {
+    return window.agentCoordinator.sessions.onRuntimeChanged((event) => {
+      setSessionsByProject((current) => {
+        let changed = false;
+        const next: Record<string, WorkSession[]> = {};
+        for (const [projectId, sessions] of Object.entries(current)) {
+          next[projectId] = sessions.map((session) => {
+            if (session.id !== event.sessionId || session.setupDone === event.setupDone) return session;
+            changed = true;
+            return { ...session, setupDone: event.setupDone };
+          });
+        }
+        return changed ? next : current;
+      });
+    });
+  }, []);
+
   // A session's first checkpoint appearing flips it from Architect-only to fully
   // enabled. Patch the cached record so the derived selectedSession re-renders.
   useEffect(() => {
@@ -203,15 +238,6 @@ export function App(): JSX.Element {
       });
     });
   }, []);
-
-  // Ensure the selected workflow is watched. The main process keeps that watch
-  // alive across selection changes because hidden agent terminals keep running
-  // and may create their checkpoint while another session is visible.
-  useEffect(() => {
-    if (!selectedSessionId || isRepoSessionId(selectedSessionId) || selectedSessionCheckpoint !== null) return;
-    if (selectedSessionKind === "review") return;
-    void window.agentCoordinator.sessions.watchCheckpoint(selectedSessionId);
-  }, [selectedSessionId, selectedSessionCheckpoint, selectedSessionKind]);
 
   async function refreshProjects(): Promise<void> {
     try {
@@ -236,7 +262,10 @@ export function App(): JSX.Element {
   }
 
   function handleSelectSession(session: WorkSession): void {
-    setSelectedSessionId(session.id);
+    void window.agentCoordinator.sessions.ensureRuntime(session.id).then(
+      () => setSelectedSessionId(session.id),
+      (caught: unknown) => setError(String(caught)),
+    );
   }
 
   // Open a project's synthetic repo-root workspace.
@@ -304,7 +333,6 @@ export function App(): JSX.Element {
               repoMode={isRepoSessionId(session.id)}
               initialLayout={restoredLayoutsRef.current[session.id]}
               onLayoutChange={handleSessionLayoutChange}
-              autoPilotConfig={projects.find((project) => project.id === session.projectId)?.autoPilot}
               reviewConfig={projects.find((project) => project.id === session.projectId)?.review}
             />
           </div>

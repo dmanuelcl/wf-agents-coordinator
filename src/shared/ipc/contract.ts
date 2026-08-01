@@ -2,6 +2,7 @@ import type { ProjectRecord, ProjectUpdateInput } from "../../main/projects/proj
 import type { WorktreeCreatePlan, WorktreeDetection } from "../../main/projects/worktree-manager";
 import type { ProjectSessionState } from "../../main/terminals/session-state-store";
 import type { WorkspaceLayout } from "../../main/projects/workspace-layout-store";
+import type { RunnerSessionRuntimeRecord, RunnerTerminalRecord } from "../../main/projects/session-runtime-store";
 import type { AgentKind, ProjectRuntimeConfig } from "../workflow/agent-runtime-config";
 import type { AutoPilotConfig } from "../workflow/auto-pilot-config";
 import type { ReviewConfig } from "../workflow/review-config";
@@ -16,6 +17,7 @@ import type { ParsedCheckpoint } from "../workflow/workflow-types";
 export type { ProjectRecord, ProjectUpdateInput } from "../../main/projects/project-registry";
 export type { WorktreeCreatePlan, WorktreeDetection } from "../../main/projects/worktree-manager";
 export type { ProjectSessionState } from "../../main/terminals/session-state-store";
+export type { RunnerSessionRuntimeRecord, RunnerTerminalRecord } from "../../main/projects/session-runtime-store";
 export type {
   WorkspaceLayout,
   PersistedSessionLayout,
@@ -140,6 +142,15 @@ export const IPC_CHANNELS = {
   sessionsBuildRoleLaunch: "sessions:build-role-launch",
   sessionsBuildRoleAutopilot: "sessions:build-role-autopilot",
   sessionsRecordRoleAgentSession: "sessions:record-role-agent-session",
+  sessionsEnsureRuntime: "sessions:ensure-runtime",
+  sessionsGetRuntime: "sessions:get-runtime",
+  sessionsOpenRole: "sessions:open-role",
+  sessionsOpenShell: "sessions:open-shell",
+  sessionsCloseTerminal: "sessions:close-terminal",
+  sessionsSkipFailedSetup: "sessions:skip-failed-setup",
+  sessionsSetAutopilot: "sessions:set-autopilot",
+  sessionsRunCommand: "sessions:run-command",
+  sessionsRestoreView: "sessions:restore-view",
   sessionStateGet: "session-state:get",
   sessionStateSet: "session-state:set",
   workspaceGetLayout: "workspace:get-layout",
@@ -169,6 +180,7 @@ export const CHECKPOINT_IPC_CHANNELS = {
 
 export const SESSION_IPC_CHANNELS = {
   checkpointDetected: "session:checkpoint-detected",
+  runtimeChanged: "session:runtime-changed",
 } as const;
 
 export interface CheckpointChangedEvent {
@@ -186,6 +198,22 @@ export interface CheckpointRemovedEvent {
 export interface SessionCheckpointDetectedEvent {
   sessionId: string;
   checkpointPath: string;
+}
+
+/** Runner-owned lifecycle update. The browser uses it only to redraw. */
+export interface SessionRuntimeChangedEvent {
+  sessionId: string;
+  setupDone: boolean;
+  runtime: RunnerSessionRuntimeRecord;
+}
+
+/**
+ * A persisted browser layout is only a declaration of tabs the user had open.
+ * The runner validates it and decides which terminal intents to restore.
+ */
+export interface SessionViewRestoreIntent {
+  roles: SessionAgentRole[];
+  shells: Array<{ id: string; title?: string; root?: boolean }>;
 }
 
 export interface TerminalDataEvent {
@@ -227,35 +255,15 @@ export interface TerminalCreateResult {
 }
 
 export interface TerminalApi {
-  // When `launchCommand` is set the PTY runs that command as its process (the
-  // agent CLI); otherwise it opens a plain interactive shell (the `+` tab).
-  // `persistKey` opts this terminal into bounded scrollback persistence.
-  create(input: {
-    cwd: string;
-    cols: number;
-    rows: number;
-    launchCommand?: string | null;
-    environment?: Record<string, string>;
-    persistKey?: string | null;
-    // Setup lifecycle is finalized by the runner on PTY exit, so a dropped
-    // browser connection cannot leave a successfully prepared session stuck.
-    setupSessionId?: string | null;
-    // This input belongs to the terminal launch. The runner, rather than the
-    // requesting browser, waits for the agent and submits it exactly once.
-    initialInput?: { text: string; submit: boolean } | null;
-  }): Promise<TerminalCreateResult>;
   // Reattach to a persistent terminal without spawning anything. Returns null
   // when the runner no longer has a live PTY for this key.
   attach(persistKey: string): Promise<TerminalCreateResult | null>;
+  // Keyboard input is the only PTY mutation exposed to a view.
   write(sessionId: string, data: string): void;
-  resize(sessionId: string, cols: number, rows: number): void;
-  kill(sessionId: string): void;
   // Bounded scrollback restore for shell tabs (visual history only).
   readScrollback(persistKey: string): Promise<string>;
-  clearScrollback(persistKey: string): Promise<void>;
   onData(cb: (e: TerminalDataEvent) => void): () => void;
   onExit(cb: (e: TerminalExitEvent) => void): () => void;
-  onInitialInputDelivered(cb: (e: TerminalInitialInputEvent) => void): () => void;
 }
 
 export interface SystemFileInfo {
@@ -316,27 +324,19 @@ export interface AgentCoordinatorApi {
     pushFixBranch(sessionId: string): Promise<{ output: string }>;
     postReview(sessionId: string): Promise<{ commentUrl: string }>;
     reviewArtifactExists(sessionId: string): Promise<boolean>;
-    claimSetup(sessionId: string): Promise<SessionSetupPlan>;
-    releaseSetup(sessionId: string): Promise<void>;
-    markSetupDone(sessionId: string): Promise<void>;
     remove(sessionId: string): Promise<void>;
     readCheckpoint(sessionId: string): Promise<ParsedCheckpoint | null>;
-    watchCheckpoint(sessionId: string): Promise<void>;
-    unwatchCheckpoint(sessionId: string): Promise<void>;
     onCheckpointDetected(cb: (e: SessionCheckpointDetectedEvent) => void): () => void;
-    buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
-    buildRoleAutopilot(
-      sessionId: string,
-      role: SessionAgentRole,
-      sessionLane: string,
-      wfPrompt: string,
-    ): Promise<SessionRoleAutopilot>;
-    recordRoleAgentSession(
-      sessionId: string,
-      role: SessionAgentRole,
-      sessionLane: string,
-      agentSessionId: string,
-    ): Promise<void>;
+    ensureRuntime(sessionId: string): Promise<RunnerSessionRuntimeRecord>;
+    getRuntime(sessionId: string): Promise<RunnerSessionRuntimeRecord | null>;
+    openRole(sessionId: string, role: SessionAgentRole): Promise<RunnerTerminalRecord>;
+    openShell(sessionId: string, root: boolean): Promise<RunnerTerminalRecord>;
+    closeTerminal(sessionId: string, key: string): Promise<void>;
+    skipFailedSetup(sessionId: string): Promise<void>;
+    setAutopilot(sessionId: string, enabled: boolean): Promise<RunnerSessionRuntimeRecord>;
+    runCommand(sessionId: string, role: SessionAgentRole, lane: string, command: string): Promise<void>;
+    restoreView(sessionId: string, intent: SessionViewRestoreIntent): Promise<RunnerSessionRuntimeRecord>;
+    onRuntimeChanged(cb: (e: SessionRuntimeChangedEvent) => void): () => void;
   };
   terminal: TerminalApi;
   sessionState: {
