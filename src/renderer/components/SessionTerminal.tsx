@@ -10,6 +10,7 @@ import type {
   SessionRoleLaunch,
   TerminalDataEvent,
   TerminalExitEvent,
+  TerminalScreenSnapshot,
   WorkSession,
 } from "../../shared/ipc/contract";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
@@ -38,6 +39,15 @@ function visibleTerminalText(term: Terminal): string {
     if (line) lines.push(line.translateToString(true));
   }
   return lines.join("\n");
+}
+
+function restoreRunnerScreen(term: Terminal, snapshot: TerminalScreenSnapshot): void {
+  term.resize(snapshot.cols, snapshot.rows);
+  const mode = snapshot.alternateScreen ? "\x1b[?1049h" : "\x1b[?1049l";
+  const rows = snapshot.lines
+    .map((line, index) => `\x1b[${index + 1};1H${line}`)
+    .join("");
+  term.write(`${mode}\x1b[2J\x1b[H${rows}\x1b[${snapshot.cursorY + 1};${snapshot.cursorX + 1}H`);
 }
 
 export interface SessionTerminalProps {
@@ -229,7 +239,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     const isSetupTab = role === "setup";
     const isAgentTab = role !== "shell" && !isSetupTab;
     const disposables: Array<() => void> = [];
-    let alternateScreenRedrawPtyId: string | null = null;
+    let runnerOwnedGeometry = false;
     let resizeAnimationFrame: number | null = null;
 
     function fitAndResizeLiveTerminal(): void {
@@ -237,17 +247,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // remote PTY. It would make a full-screen TUI permanently adopt a tiny
       // geometry until the next real resize.
       if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
+      // A remote PTY has one runner-owned geometry. Fitting a fresh browser
+      // view must never resize that PTY (or a full-screen agent inside it).
+      if (window.agentCoordinator.connection.mode === "remote" && runnerOwnedGeometry) return;
       fitAddon.fit();
       if (!ptyId) return;
-
-      if (alternateScreenRedrawPtyId === ptyId) {
-        alternateScreenRedrawPtyId = null;
-        // A real size transition is required to make every PTY send SIGWINCH.
-        const redrawCols = term.cols > 2 ? term.cols - 1 : term.cols + 1;
-        window.agentCoordinator.terminal.resize(ptyId, redrawCols, term.rows);
-        window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
-        return;
-      }
+      if (window.agentCoordinator.connection.mode === "remote") return;
       window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
     }
 
@@ -472,21 +477,16 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           phase = isSetupTab ? "setup" : "agent";
           ptyId = attached.sessionId;
           ptyIdRef.current = attached.sessionId;
-          if (attached.alternateScreen) {
-            // Claude/vim are displaying an alternate screen, which the runner
-            // correctly omits from scrollback. A SIGWINCH prompts the still
-            // live TUI to paint its current screen into this new browser view
-            // without executing or injecting anything into the agent. Wait
-            // until the visible terminal has been measured before resizing it.
-            alternateScreenRedrawPtyId = attached.sessionId;
-          } else {
+          if (attached.snapshot) {
+            // The runner owns a headless terminal model of this PTY. Hydrate
+            // the new view from it; do not resize or otherwise poke the agent.
+            runnerOwnedGeometry = true;
+            restoreRunnerScreen(term, attached.snapshot);
+          } else if (!attached.alternateScreen) {
             const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
             if (disposed) return;
             if (saved) term.write(saved);
           }
-          // The new client may have different dimensions from the one that
-          // created the PTY. Resize only after its own visible box is stable.
-          scheduleFitAndResize();
           for (const event of pendingData.splice(0)) handleData(event);
           for (const event of pendingExits.splice(0)) handleExit(event);
           return;
@@ -573,6 +573,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         launchCommand: setupCommand ?? agentCommand,
         environment: setupCommand ? undefined : agentEnvironment,
         persistKey: persistKey ?? null,
+        setupSessionId: isSetupTab ? session.id : null,
       });
       const id = created.sessionId;
       if (disposed) {

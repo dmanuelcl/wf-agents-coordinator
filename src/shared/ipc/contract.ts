@@ -197,15 +197,27 @@ export interface TerminalExitEvent {
   code: number;
 }
 
+/** A runner-owned rendering of a live PTY, used to hydrate a new viewer. */
+export interface TerminalScreenSnapshot {
+  cols: number;
+  rows: number;
+  alternateScreen: boolean;
+  lines: string[];
+  cursorX: number;
+  cursorY: number;
+}
+
 export interface TerminalCreateResult {
   sessionId: string;
   // True when a remote client reattached to a still-running terminal rather
   // than spawning another agent process after a reconnect.
   reused: boolean;
   // A full-screen TUI (Claude, vim, etc.) owns the alternate screen. Its raw
-  // output cannot be replayed as normal scrollback; reconnect by resizing so
-  // the live TUI redraws itself instead.
+  // output cannot be replayed as normal scrollback; use the runner snapshot.
   alternateScreen?: true;
+  // Present for a live persistent terminal. This is an observation of the
+  // runner's screen, not a request that can change the PTY.
+  snapshot?: TerminalScreenSnapshot;
 }
 
 export interface TerminalApi {
@@ -219,6 +231,9 @@ export interface TerminalApi {
     launchCommand?: string | null;
     environment?: Record<string, string>;
     persistKey?: string | null;
+    // Setup lifecycle is finalized by the runner on PTY exit, so a dropped
+    // browser connection cannot leave a successfully prepared session stuck.
+    setupSessionId?: string | null;
   }): Promise<TerminalCreateResult>;
   // Reattach to a persistent terminal without spawning anything. Returns null
   // when the runner no longer has a live PTY for this key.

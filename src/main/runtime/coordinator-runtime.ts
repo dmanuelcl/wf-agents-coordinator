@@ -9,6 +9,7 @@ import { createChokidarWatcher } from "../projects/chokidar-watcher-adapter";
 import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manager";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import { createSessionRegistry } from "../projects/session-registry";
+import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import { createSqliteProjectRegistry } from "../projects/sqlite-project-registry";
 import { createWorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { createPtySessionManager } from "../terminals/pty-session-manager";
@@ -16,6 +17,7 @@ import { spawnRealPty } from "../terminals/node-pty-adapter";
 import { createSessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { createSessionStateStore } from "../terminals/session-state-store";
 import { createTerminalScrollbackStore } from "../terminals/terminal-scrollback-store";
+import { createTerminalScreenStore } from "../terminals/terminal-screen-store";
 import { createVcsSecretStore } from "../vcs/vcs-secret-store";
 import type { SecretCipher } from "../vcs/vcs-secret-store";
 
@@ -78,6 +80,8 @@ export async function createCoordinatorRuntime(
 
   const ptySessionManager = createPtySessionManager({ spawnPty: spawnRealPty });
   const scrollbackStore = createTerminalScrollbackStore({ dir: join(stateDir, "terminal-scrollback") });
+  const screenStore = createTerminalScreenStore();
+  const sessionSetupCoordinator = createSessionSetupCoordinator();
 
   registerIpcHandlers({
     projectRegistry,
@@ -90,13 +94,26 @@ export async function createCoordinatorRuntime(
     transport,
     systemIntegration,
     killTerminalsForWorktree: (worktreePath) => ptySessionManager.killByCwd(worktreePath),
+    sessionSetupCoordinator,
   });
 
   registerTerminalIpcHandlers({
     ptySessionManager,
     sessionStateStore: createSessionStateStore({ storeFilePath: join(stateDir, "session-state.json") }),
     scrollbackStore,
+    screenStore,
     transport,
+    broadcast,
+    onSetupExit: async ({ sessionId, code }) => {
+      try {
+        if (code === 0) await sessionRegistry.markSetupDone({ sessionId });
+      } finally {
+        // The setup process, not a particular browser connection, owns this
+        // lifecycle. Always unlock it after exit so a failed setup can be
+        // repaired/retried even if the client disconnected meanwhile.
+        sessionSetupCoordinator.release(sessionId);
+      }
+    },
   });
 
   // Build session watches before the broad project watcher. Chokidar can miss

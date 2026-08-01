@@ -3,6 +3,7 @@ import { IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from "../../shared/ipc/contract";
 import { createIpcHandlerRegistry, type IpcMessageSender } from "./ipc-transport";
 import { registerTerminalIpcHandlers } from "./register-terminal-ipc-handlers";
 import { createPtySessionManager, type PtySpawn } from "../terminals/pty-session-manager";
+import { createTerminalScreenStore } from "../terminals/terminal-screen-store";
 
 function sender(destroyed = false): IpcMessageSender {
   return { isDestroyed: () => destroyed, send: vi.fn() };
@@ -21,11 +22,14 @@ describe("registerTerminalIpcHandlers", () => {
       kill: vi.fn(),
     };
     const spawnPty = vi.fn(() => fakePty);
+    const broadcast = vi.fn();
     const transport = createIpcHandlerRegistry();
     registerTerminalIpcHandlers({
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast,
+      screenStore: createTerminalScreenStore(),
       scrollbackStore: {
         record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
       },
@@ -38,15 +42,18 @@ describe("registerTerminalIpcHandlers", () => {
     const second = await transport.invoke(reconnected, TERMINAL_IPC_CHANNELS.create, [input]);
 
     expect(first).toEqual({ sessionId: "1", reused: false });
-    expect(second).toEqual({ sessionId: "1", reused: true });
+    expect(second).toMatchObject({
+      sessionId: "1",
+      reused: true,
+      snapshot: { cols: 80, rows: 24, alternateScreen: false },
+    });
     expect(spawnPty).toHaveBeenCalledTimes(1);
 
     dataCallback?.("still running");
-    expect(reconnected.send).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
+    expect(broadcast).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
       sessionId: "1",
       data: "still running",
     });
-    expect(disconnected.send).not.toHaveBeenCalled();
   });
 
   it("can attach to a live persistent setup terminal without creating a setup command", async () => {
@@ -62,11 +69,14 @@ describe("registerTerminalIpcHandlers", () => {
     };
     const spawnPty = vi.fn(() => fakePty);
     const transport = createIpcHandlerRegistry();
+    const broadcast = vi.fn();
     const resetAlternateScreen = vi.fn();
     registerTerminalIpcHandlers({
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast,
+      screenStore: createTerminalScreenStore(),
       scrollbackStore: {
         record: () => {}, read: async () => "", isInAlternateScreen: () => true, resetAlternateScreen, clear: async () => {}, flush: async () => {},
       },
@@ -79,15 +89,57 @@ describe("registerTerminalIpcHandlers", () => {
     await transport.invoke(firstClient, TERMINAL_IPC_CHANNELS.create, [setup]);
     const attached = await transport.invoke(reloadedClient, TERMINAL_IPC_CHANNELS.attach, [setup.persistKey]);
 
-    expect(attached).toEqual({ sessionId: "1", reused: true, alternateScreen: true });
+    expect(attached).toMatchObject({
+      sessionId: "1",
+      reused: true,
+      alternateScreen: true,
+      snapshot: { cols: 80, rows: 24 },
+    });
     expect(spawnPty).toHaveBeenCalledTimes(1);
     expect(resetAlternateScreen).toHaveBeenCalledWith(setup.persistKey);
 
     dataCallback?.("setup still running");
-    expect(reloadedClient.send).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
+    expect(broadcast).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
       sessionId: "1",
       data: "setup still running",
     });
+  });
+
+  it("finalizes setup in the runner when its PTY exits after the browser disconnects", async () => {
+    let exitCallback: ((event: { exitCode: number }) => void) | undefined;
+    const fakePty: PtySpawn = {
+      onData: () => {},
+      onExit: (callback) => {
+        exitCallback = callback;
+      },
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+    };
+    const onSetupExit = vi.fn(async () => {});
+    const transport = createIpcHandlerRegistry();
+    registerTerminalIpcHandlers({
+      transport,
+      ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
+      sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast: () => {},
+      screenStore: createTerminalScreenStore(),
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
+      onSetupExit,
+    });
+
+    await transport.invoke(sender(true), TERMINAL_IPC_CHANNELS.create, [{
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+      persistKey: "session::setup",
+      setupSessionId: "session",
+    }]);
+    exitCallback?.({ exitCode: 0 });
+
+    expect(onSetupExit).toHaveBeenCalledWith({ sessionId: "session", code: 0 });
   });
 
   it("continues routing terminal input through the transport", () => {
@@ -98,6 +150,8 @@ describe("registerTerminalIpcHandlers", () => {
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast: () => {},
+      screenStore: createTerminalScreenStore(),
       scrollbackStore: {
         record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
       },

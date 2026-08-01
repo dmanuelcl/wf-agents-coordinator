@@ -1,47 +1,50 @@
 import { IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from "../../shared/ipc/contract";
+import type { TerminalScreenSnapshot } from "../../shared/ipc/contract";
 import { resolveShell, resolveShellForCommand } from "../terminals/shell-resolver";
 import type { PtySessionManager } from "../terminals/pty-session-manager";
 import type { ProjectSessionState, SessionStateStore } from "../terminals/session-state-store";
 import type { TerminalScrollbackStore } from "../terminals/terminal-scrollback-store";
-import type { IpcRequestEvent, IpcTransport } from "./ipc-transport";
+import type { TerminalScreenStore } from "../terminals/terminal-screen-store";
+import type { IpcTransport } from "./ipc-transport";
 
 export function registerTerminalIpcHandlers(params: {
   ptySessionManager: PtySessionManager;
   sessionStateStore: SessionStateStore;
   scrollbackStore: TerminalScrollbackStore;
+  screenStore: TerminalScreenStore;
   transport: IpcTransport;
+  broadcast(channel: string, payload: unknown): void;
+  onSetupExit?: (params: { sessionId: string; code: number }) => Promise<void>;
 }): void {
-  const { ptySessionManager, sessionStateStore, scrollbackStore, transport } = params;
+  const { ptySessionManager, sessionStateStore, scrollbackStore, screenStore, transport, broadcast, onSetupExit } = params;
   const ipc = transport;
   const terminalByPersistKey = new Map<string, string>();
 
-  function attachPersistentTerminal(
-    event: IpcRequestEvent,
-    persistKey: string,
-  ): { sessionId: string; reused: true; alternateScreen?: true } | null {
+  async function attachPersistentTerminal(persistKey: string): Promise<{
+    sessionId: string;
+    reused: true;
+    alternateScreen?: true;
+    snapshot?: TerminalScreenSnapshot;
+  } | null> {
     const existingSessionId = terminalByPersistKey.get(persistKey);
     if (!existingSessionId) return null;
     if (!ptySessionManager.has(existingSessionId)) {
       terminalByPersistKey.delete(persistKey);
       return null;
     }
-    ptySessionManager.onData(existingSessionId, (data) => {
-      if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.data, { sessionId: existingSessionId, data });
-    });
-    ptySessionManager.onExit(existingSessionId, (code) => {
-      if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.exit, { sessionId: existingSessionId, code });
-    });
+    const snapshot = await screenStore.snapshot(existingSessionId);
     return {
       sessionId: existingSessionId,
       reused: true,
       ...(scrollbackStore.isInAlternateScreen(persistKey) ? { alternateScreen: true as const } : {}),
+      ...(snapshot ? { snapshot } : {}),
     };
   }
 
   ipc.handle(
     TERMINAL_IPC_CHANNELS.create,
-    (
-      event,
+    async (
+      _event,
       input: {
         cwd: string;
         cols: number;
@@ -49,14 +52,15 @@ export function registerTerminalIpcHandlers(params: {
         launchCommand?: string | null;
         environment?: Record<string, string>;
         persistKey?: string | null;
+        setupSessionId?: string | null;
       },
     ) => {
     const persistKey = input.persistKey ?? null;
-    const attached = persistKey ? attachPersistentTerminal(event, persistKey) : null;
+    const attached = persistKey ? await attachPersistentTerminal(persistKey) : null;
     if (attached) {
-      // The browser/desktop client was recreated, but the runner (and its PTY)
-      // survived. Attach this sender to the live stream instead of launching a
-      // second agent for the same persisted tab.
+      // This is a read-only lookup. The runner broadcasts the PTY stream to
+      // every authenticated client; no browser owns or mutates the terminal
+      // merely by opening/reloading a view.
       return attached;
     }
 
@@ -76,24 +80,31 @@ export function registerTerminalIpcHandlers(params: {
     });
 
     if (persistKey) terminalByPersistKey.set(persistKey, sessionId);
+    screenStore.create(sessionId, { cols: input.cols, rows: input.rows });
     ptySessionManager.onData(sessionId, (data) => {
       // Bounded scrollback capture (opt-in per terminal) before forwarding.
       if (persistKey) scrollbackStore.record(persistKey, data);
-      // A PTY can emit during shutdown, after the window's webContents is gone
-      // ("Object has been destroyed"). Guard every send.
-      if (event.sender.isDestroyed()) return;
-      event.sender.send(TERMINAL_IPC_CHANNELS.data, { sessionId, data });
+      screenStore.write(sessionId, data);
+      // PTY ownership belongs to the runner, not to the browser that created
+      // it. Broadcast to all currently authenticated views so reconnecting or
+      // second clients immediately receive the live stream.
+      broadcast(TERMINAL_IPC_CHANNELS.data, { sessionId, data });
     });
     ptySessionManager.onExit(sessionId, (code) => {
       if (persistKey && terminalByPersistKey.get(persistKey) === sessionId) terminalByPersistKey.delete(persistKey);
-      if (event.sender.isDestroyed()) return;
-      event.sender.send(TERMINAL_IPC_CHANNELS.exit, { sessionId, code });
+      if (input.setupSessionId && onSetupExit) {
+        void onSetupExit({ sessionId: input.setupSessionId, code }).catch((error: unknown) => {
+          console.error(`Could not finalize setup for session ${input.setupSessionId}:`, error);
+        });
+      }
+      screenStore.remove(sessionId);
+      broadcast(TERMINAL_IPC_CHANNELS.exit, { sessionId, code });
     });
 
     return { sessionId, reused: false };
   });
 
-  ipc.handle(TERMINAL_IPC_CHANNELS.attach, (event, persistKey: string) => attachPersistentTerminal(event, persistKey));
+  ipc.handle(TERMINAL_IPC_CHANNELS.attach, (_event, persistKey: string) => attachPersistentTerminal(persistKey));
 
   ipc.on(TERMINAL_IPC_CHANNELS.write, (_event, sessionId: string, data: string) => {
     ptySessionManager.write(sessionId, data);
@@ -101,6 +112,7 @@ export function registerTerminalIpcHandlers(params: {
 
   ipc.on(TERMINAL_IPC_CHANNELS.resize, (_event, sessionId: string, cols: number, rows: number) => {
     ptySessionManager.resize(sessionId, cols, rows);
+    screenStore.resize(sessionId, { cols, rows });
   });
 
   ipc.on(TERMINAL_IPC_CHANNELS.kill, (_event, sessionId: string) => {

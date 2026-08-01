@@ -66,6 +66,7 @@ import { cloneRepo, createEmptyRepo } from "../projects/project-source";
 import type { SessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import type { SessionRegistry } from "../projects/session-registry";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
+import type { SessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
 import { missingAgentExecutableMessage, resolveAgentExecutable } from "../terminals/agent-executable-resolver";
@@ -106,6 +107,7 @@ export function registerIpcHandlers(params: {
   transport: IpcTransport;
   systemIntegration?: SystemIntegration;
   killTerminalsForWorktree?: (worktreePath: string) => void;
+  sessionSetupCoordinator?: SessionSetupCoordinator;
 }): void {
   const {
     projectRegistry,
@@ -118,9 +120,10 @@ export function registerIpcHandlers(params: {
     transport,
     systemIntegration = createHeadlessSystemIntegration(),
     killTerminalsForWorktree,
+    sessionSetupCoordinator: providedSessionSetupCoordinator,
   } = params;
   const ipc = transport;
-  const sessionSetupCoordinator = createSessionSetupCoordinator();
+  const sessionSetupCoordinator = providedSessionSetupCoordinator ?? createSessionSetupCoordinator();
   const agentSessionLaneResolver = createAgentSessionLaneResolver({
     sessionAgentUuidStore,
   });

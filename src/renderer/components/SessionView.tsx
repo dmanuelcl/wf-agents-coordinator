@@ -467,7 +467,9 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   );
 
   const [activeTab, setActiveTab] = useState<string>(() => {
+    if (!repoMode && !session.setupDone) return "setup";
     const restoredActive = initialLayout?.activeTab;
+    if (restoredActive === "setup") return prSession ? prPrimaryRole : "architect";
     if (fixMode && !hasCheckpoint && restoredActive === "reviewer") return "implementer";
     return restoredActive ?? seedRepoShell?.id ?? (prSession ? prPrimaryRole : "architect");
   });
@@ -546,6 +548,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     setSetupCompletionError(null);
     setSetupCompleting(false);
     setSetupReady(true);
+    setActiveTab((current) => (current === "setup" ? (prSession ? prPrimaryRole : "architect") : current));
   }
 
   function handleSetupFailed(reason: string): void {
@@ -635,7 +638,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     : "Finish in Architect first — the checkpoint isn't created yet.";
 
   function selectRole(role: SessionAgentRole): void {
-    if (isRoleDisabled(role)) return;
+    if (!setupReady || isRoleDisabled(role)) return;
     setActiveTab(role);
     setOpenedRoleTabs((current) => (current.has(role) ? current : new Map(current).set(role, "fresh")));
   }
@@ -1086,9 +1089,22 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       <div className="session-split">
       <div className="session-main">
       <div className="session-view-tabs" role="tablist" aria-label="Session tabs">
+        {!repoMode && !setupReady && (
+          <div className={`session-view-tab-wrap${activeTab === "setup" ? " active" : ""}`}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "setup"}
+              className={`session-view-tab${activeTab === "setup" ? " active" : ""}`}
+              onClick={() => setActiveTab("setup")}
+            >
+              Setup
+            </button>
+          </div>
+        )}
         {!repoMode &&
           sessionAgentRoles.map((role) => {
-            const disabled = isRoleDisabled(role);
+            const disabled = !setupReady || isRoleDisabled(role);
             const active = activeTab === role;
             return (
               <div key={role} className={`session-view-tab-wrap${active ? " active" : ""}`}>
@@ -1098,7 +1114,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   aria-selected={active}
                   className={`session-view-tab${active ? " active" : ""}`}
                   disabled={disabled}
-                  title={disabled ? disabledHint : undefined}
+                  title={disabled ? (!setupReady ? "Waiting for worktree setup to finish." : disabledHint) : undefined}
                   onClick={() => selectRole(role)}
                 >
                   {roleLabel(role, kind)}
@@ -1114,6 +1130,8 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               role="tab"
               aria-selected={activeTab === "log"}
               className={`session-view-tab${activeTab === "log" ? " active" : ""}`}
+              disabled={!setupReady}
+              title={!setupReady ? "Waiting for worktree setup to finish." : undefined}
               onClick={() => setActiveTab("log")}
             >
               Log
@@ -1247,7 +1265,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
       <div className="session-view-body">
         {!repoMode && !setupReady && (
-          <div className="session-terminal-host session-setup-host">
+          <div className="session-terminal-host session-setup-host" hidden={activeTab !== "setup"}>
             {setupFailure && (
               <SetupRecoveryBanner
                 reason={setupFailure}
@@ -1335,7 +1353,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               </div>
             );
           })}
-        {setupReady && shellTabs.map((tab) => (
+        {shellTabs.map((tab) => (
           <div key={tab.id} className="session-terminal-host" hidden={activeTab !== tab.id}>
             <SessionTerminal
               ref={(handle) => registerTerminalHandle(tab.id, handle)}
