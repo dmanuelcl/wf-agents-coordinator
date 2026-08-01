@@ -26,7 +26,9 @@ describe("registerTerminalIpcHandlers", () => {
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
-      scrollbackStore: { record: () => {}, read: async () => "", clear: async () => {}, flush: async () => {} },
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
     });
     const disconnected = sender(true);
     const reconnected = sender();
@@ -60,11 +62,14 @@ describe("registerTerminalIpcHandlers", () => {
     };
     const spawnPty = vi.fn(() => fakePty);
     const transport = createIpcHandlerRegistry();
+    const resetAlternateScreen = vi.fn();
     registerTerminalIpcHandlers({
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
-      scrollbackStore: { record: () => {}, read: async () => "", clear: async () => {}, flush: async () => {} },
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => true, resetAlternateScreen, clear: async () => {}, flush: async () => {},
+      },
     });
 
     const firstClient = sender(true);
@@ -74,8 +79,9 @@ describe("registerTerminalIpcHandlers", () => {
     await transport.invoke(firstClient, TERMINAL_IPC_CHANNELS.create, [setup]);
     const attached = await transport.invoke(reloadedClient, TERMINAL_IPC_CHANNELS.attach, [setup.persistKey]);
 
-    expect(attached).toEqual({ sessionId: "1", reused: true });
+    expect(attached).toEqual({ sessionId: "1", reused: true, alternateScreen: true });
     expect(spawnPty).toHaveBeenCalledTimes(1);
+    expect(resetAlternateScreen).toHaveBeenCalledWith(setup.persistKey);
 
     dataCallback?.("setup still running");
     expect(reloadedClient.send).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
@@ -92,7 +98,9 @@ describe("registerTerminalIpcHandlers", () => {
       transport,
       ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
       sessionStateStore: { get: async () => null, set: async () => {} },
-      scrollbackStore: { record: () => {}, read: async () => "", clear: async () => {}, flush: async () => {} },
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
     });
     const client = sender();
     void transport.invoke(client, TERMINAL_IPC_CHANNELS.create, [{ cwd: process.cwd(), cols: 80, rows: 24 }]);

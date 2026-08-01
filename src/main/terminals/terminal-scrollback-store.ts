@@ -9,6 +9,10 @@ const FLUSH_DELAY_MS = 3000;
 export interface TerminalScrollbackStore {
   record(key: string, chunk: string): void;
   read(key: string): Promise<string>;
+  /** Whether a live PTY for this key is currently using the alternate screen. */
+  isInAlternateScreen(key: string): boolean;
+  /** A new PTY reusing a key starts on its normal screen. */
+  resetAlternateScreen(key: string): void;
   clear(key: string): Promise<void>;
   flush(): Promise<void>;
 }
@@ -110,6 +114,14 @@ export function createTerminalScrollbackStore(params: { dir: string }): Terminal
       } catch {
         return "";
       }
+    },
+
+    isInAlternateScreen(key) {
+      return altState.get(key) ?? false;
+    },
+
+    resetAlternateScreen(key) {
+      altState.delete(key);
     },
 
     async clear(key) {

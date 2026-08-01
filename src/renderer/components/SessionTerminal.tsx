@@ -440,14 +440,24 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           : null;
         if (disposed) return;
         if (attached) {
-          const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
-          if (disposed) return;
-          // This PTY is still live. Replaying its recording preserves the TUI
-          // state the other view had; do not reset terminal modes here.
-          if (saved) term.write(saved);
           phase = isSetupTab ? "setup" : "agent";
           ptyId = attached.sessionId;
           ptyIdRef.current = attached.sessionId;
+          if (attached.alternateScreen) {
+            // Claude/vim are displaying an alternate screen, which the runner
+            // correctly omits from scrollback. A SIGWINCH prompts the still
+            // live TUI to paint its current screen into this new browser view
+            // without executing or injecting anything into the agent. Toggle
+            // a column first because setting the existing size need not emit a
+            // SIGWINCH on every PTY implementation.
+            const redrawCols = term.cols > 2 ? term.cols - 1 : term.cols + 1;
+            window.agentCoordinator.terminal.resize(attached.sessionId, redrawCols, term.rows);
+            window.agentCoordinator.terminal.resize(attached.sessionId, term.cols, term.rows);
+          } else {
+            const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
+            if (disposed) return;
+            if (saved) term.write(saved);
+          }
           for (const event of pendingData.splice(0)) handleData(event);
           for (const event of pendingExits.splice(0)) handleExit(event);
           return;

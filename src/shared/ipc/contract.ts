@@ -202,6 +202,10 @@ export interface TerminalCreateResult {
   // True when a remote client reattached to a still-running terminal rather
   // than spawning another agent process after a reconnect.
   reused: boolean;
+  // A full-screen TUI (Claude, vim, etc.) owns the alternate screen. Its raw
+  // output cannot be replayed as normal scrollback; reconnect by resizing so
+  // the live TUI redraws itself instead.
+  alternateScreen?: true;
 }
 
 export interface TerminalApi {

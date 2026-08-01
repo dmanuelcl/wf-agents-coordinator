@@ -15,7 +15,10 @@ export function registerTerminalIpcHandlers(params: {
   const ipc = transport;
   const terminalByPersistKey = new Map<string, string>();
 
-  function attachPersistentTerminal(event: IpcRequestEvent, persistKey: string): { sessionId: string; reused: true } | null {
+  function attachPersistentTerminal(
+    event: IpcRequestEvent,
+    persistKey: string,
+  ): { sessionId: string; reused: true; alternateScreen?: true } | null {
     const existingSessionId = terminalByPersistKey.get(persistKey);
     if (!existingSessionId) return null;
     if (!ptySessionManager.has(existingSessionId)) {
@@ -28,7 +31,11 @@ export function registerTerminalIpcHandlers(params: {
     ptySessionManager.onExit(existingSessionId, (code) => {
       if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.exit, { sessionId: existingSessionId, code });
     });
-    return { sessionId: existingSessionId, reused: true };
+    return {
+      sessionId: existingSessionId,
+      reused: true,
+      ...(scrollbackStore.isInAlternateScreen(persistKey) ? { alternateScreen: true as const } : {}),
+    };
   }
 
   ipc.handle(
@@ -56,6 +63,10 @@ export function registerTerminalIpcHandlers(params: {
     const shell = input.launchCommand
       ? resolveShellForCommand({ platform: process.platform, env: process.env, command: input.launchCommand })
       : resolveShell({ platform: process.platform, env: process.env });
+    // A previous PTY may have died while a full-screen TUI was active. Its
+    // replacement (agent fallback shell, fresh run) starts in the normal
+    // screen, so do not carry that stale state across processes.
+    if (persistKey) scrollbackStore.resetAlternateScreen(persistKey);
     const sessionId = ptySessionManager.create({
       cwd: input.cwd,
       shell,

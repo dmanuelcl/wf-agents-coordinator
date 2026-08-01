@@ -59,6 +59,15 @@ describe("createTerminalScrollbackStore", () => {
     expect(await store.read("s1::t1")).toBe("$ ls\nfile.txt\n$ echo done\ndone\n");
   });
 
+  it("tracks a live alternate-screen TUI separately from normal scrollback", () => {
+    const store = createTerminalScrollbackStore({ dir });
+    store.record("s1::t1", "\x1b[?1049hClaude screen");
+    expect(store.isInAlternateScreen("s1::t1")).toBe(true);
+
+    store.resetAlternateScreen("s1::t1");
+    expect(store.isInAlternateScreen("s1::t1")).toBe(false);
+  });
+
   it("clears a key from memory and disk", async () => {
     const store = createTerminalScrollbackStore({ dir });
     store.record("s1::t1", "data\n");
