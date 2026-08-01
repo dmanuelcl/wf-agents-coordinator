@@ -55,12 +55,23 @@ En la máquina runner:
 ```sh
 cd /ruta/a/AGENTS
 git switch feature/remote-coordinator
-pnpm install
-pnpm build
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
+pnpm remote:build
 ```
 
-`pnpm build` produce tanto la app desktop como `out/main/remote-runner.js` y la
-interfaz web que el runner sirve.
+El runner remoto usa Node directamente: no descarga, no arranca ni necesita el
+binario de Electron. `pnpm remote:build` compila los módulos nativos para la
+versión de Node de esa máquina y produce `out/main/remote-runner.js` junto a la
+interfaz web que éste sirve.
+
+Si ya hiciste un `pnpm install` que falló con un error de Electron, ejecuta en
+el checkout del runner:
+
+```sh
+rm -rf node_modules
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
+pnpm remote:build
+```
 
 ## Paso 2: crear la configuración privada
 
@@ -187,8 +198,9 @@ Logs: `journalctl --user -u agent-coordinator-runner -f`.
 ## Desktop remoto (opcional)
 
 La vía más simple es la web. Si prefieres la app desktop, arráncala indicando
-la URL y token remotos. Cuando ambas variables existen, la app desktop no
-inicia runner, base de datos ni PTYs locales:
+la URL y token remotos. Esa app desktop se compila/instala normalmente en el
+equipo cliente; cuando ambas variables existen, no inicia runner, base de datos
+ni PTYs locales:
 
 ```sh
 AGENT_COORDINATOR_REMOTE_URL="wss://nombre-maquina.tu-tailnet.ts.net/rpc" \
