@@ -148,6 +148,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       convertEol: true,
       scrollback: XTERM_SCROLLBACK,
       fontSize: 12,
+      // A little leading prevents glyph ascenders/descenders from being
+      // raster-clipped when a fixed runner grid is scaled for a large display.
+      lineHeight: 1.1,
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Monaco, monospace',
       theme: {
         background: "#151110",

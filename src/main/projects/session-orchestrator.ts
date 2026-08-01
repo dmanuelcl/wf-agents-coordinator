@@ -21,8 +21,11 @@ import type {
 import type { SessionRegistry } from "./session-registry";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 
-const RUNNER_COLS = 120;
-const RUNNER_ROWS = 40;
+// One server-owned grid is shared by every viewer. A moderately wide baseline
+// keeps large displays from showing a huge font and premature line wrapping,
+// without letting a browser resize an agent running on another device.
+const RUNNER_COLS = 160;
+const RUNNER_ROWS = 44;
 
 export interface SessionRuntimeChangedEvent {
   sessionId: string;
