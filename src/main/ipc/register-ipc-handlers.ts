@@ -70,7 +70,6 @@ import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspac
 import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
 import { missingAgentExecutableMessage, resolveAgentExecutable } from "../terminals/agent-executable-resolver";
 import { claudeConversationExists } from "../terminals/claude-session-store";
-import type { CodexThreadAllocator } from "../terminals/codex-thread-allocator";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { getWorktreeDiff } from "../projects/worktree-diff";
 import { addWorktreeExclude } from "../projects/worktree-exclude";
@@ -102,7 +101,6 @@ export function registerIpcHandlers(params: {
   sessionRegistry: SessionRegistry;
   sessionCheckpointWatchManager: SessionCheckpointWatchManager;
   sessionAgentUuidStore: SessionAgentUuidStore;
-  codexThreadAllocator: CodexThreadAllocator;
   workspaceLayoutStore: WorkspaceLayoutStore;
   vcsSecretStore: VcsSecretStore;
   transport: IpcTransport;
@@ -115,7 +113,6 @@ export function registerIpcHandlers(params: {
     sessionRegistry,
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
-    codexThreadAllocator,
     workspaceLayoutStore,
     vcsSecretStore,
     transport,
@@ -126,7 +123,6 @@ export function registerIpcHandlers(params: {
   const sessionSetupCoordinator = createSessionSetupCoordinator();
   const agentSessionLaneResolver = createAgentSessionLaneResolver({
     sessionAgentUuidStore,
-    codexThreadAllocator,
   });
 
   function environmentForAgentLaunch(kind: AgentKind, environment: Readonly<Record<string, string>> | undefined): Record<string, string> {

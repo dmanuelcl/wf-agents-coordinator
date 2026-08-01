@@ -51,9 +51,10 @@ The lane is the logical context boundary. The coordinator stores its provider
 conversation binding in app data: the first action for a lane creates a
 conversation, later actions in that same lane resume it, and another plan/scope
 starts clean because it has another lane. Switching provider replaces only that
-lane's binding. Codex conversations are preallocated with App Server
-`thread/start`, then attached in the watchable TUI with
-`codex resume <thread-id> <wf-prompt>`.
+lane's binding. Codex is the exception: its watchable TUI starts directly
+instead of resuming a blank App Server thread, because some CLI versions do not
+recognize those preallocated IDs as saved interactive sessions. Its active PTY
+still survives browser reconnects while the runner stays alive.
 
 All roles, including Architect, are launched through this path. A `send` action
 is committed to conductor state only after the terminal acknowledges that its

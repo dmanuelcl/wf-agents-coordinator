@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import { createAgentSessionLaneResolver } from "./agent-session-lane-resolver";
-import type { CodexThreadAllocator } from "./codex-thread-allocator";
 import type {
   AgentSessionBinding,
   SessionAgentUuidStore,
@@ -29,7 +28,6 @@ const KIMI: AgentRuntimeConfig = {
 function harness(initial: AgentSessionBinding | null = null): {
   resolve: ReturnType<typeof createAgentSessionLaneResolver>["resolve"];
   getStored: () => AgentSessionBinding | null;
-  allocateCodex: ReturnType<typeof vi.fn>;
 } {
   let stored = initial;
   const store: SessionAgentUuidStore = {
@@ -38,17 +36,13 @@ function harness(initial: AgentSessionBinding | null = null): {
       stored = binding;
     }),
   };
-  const allocateCodex = vi.fn(async () => "codex-thread-1");
-  const allocator: CodexThreadAllocator = { create: allocateCodex };
   const resolver = createAgentSessionLaneResolver({
     sessionAgentUuidStore: store,
-    codexThreadAllocator: allocator,
     createUuid: () => "claude-session-1",
   });
   return {
     resolve: resolver.resolve,
     getStored: () => stored,
-    allocateCodex,
   };
 }
 
@@ -85,41 +79,27 @@ describe("createAgentSessionLaneResolver", () => {
     });
   });
 
-  it("preallocates and stores an exact Codex thread, then attaches by resume", async () => {
+  it("starts Codex directly instead of resuming an app-server-preallocated thread", async () => {
     const h = harness();
 
-    await expect(h.resolve(input(CODEX))).resolves.toEqual({
-      id: "codex-thread-1",
-      mode: "resume",
-    });
-    expect(h.allocateCodex).toHaveBeenCalledWith({
-      cwd: "/repo/.worktrees/feature",
-      model: "gpt-5.5",
-    });
-    expect(h.getStored()).toEqual({
-      agentKind: "codex",
-      sessionUuid: "codex-thread-1",
-    });
+    await expect(h.resolve(input(CODEX))).resolves.toBeUndefined();
+    expect(h.getStored()).toBeNull();
   });
 
   it("replaces a lane binding when its configured provider changes", async () => {
     const h = harness({ agentKind: "claude", sessionUuid: "old-claude" });
 
-    await h.resolve(input(CODEX));
+    await expect(h.resolve(input(CODEX))).resolves.toBeUndefined();
     expect(h.getStored()).toEqual({
-      agentKind: "codex",
-      sessionUuid: "codex-thread-1",
+      agentKind: "claude",
+      sessionUuid: "old-claude",
     });
   });
 
-  it("does not treat a provider-less legacy UUID as a resumable Codex thread", async () => {
+  it("ignores a provider-less legacy UUID for Codex", async () => {
     const h = harness({ agentKind: null, sessionUuid: "legacy-random-uuid" });
 
-    await expect(h.resolve(input(CODEX))).resolves.toEqual({
-      id: "codex-thread-1",
-      mode: "resume",
-    });
-    expect(h.allocateCodex).toHaveBeenCalledOnce();
+    await expect(h.resolve(input(CODEX))).resolves.toBeUndefined();
   });
 
   it("resumes a self-identifying legacy Kimi session", async () => {

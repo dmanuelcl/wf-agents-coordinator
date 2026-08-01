@@ -12,7 +12,6 @@ import { createSessionRegistry } from "../projects/session-registry";
 import { createSqliteProjectRegistry } from "../projects/sqlite-project-registry";
 import { createWorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { createPtySessionManager } from "../terminals/pty-session-manager";
-import { createCodexThreadAllocator } from "../terminals/codex-thread-allocator";
 import { spawnRealPty } from "../terminals/node-pty-adapter";
 import { createSessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { createSessionStateStore } from "../terminals/session-state-store";
@@ -86,7 +85,6 @@ export async function createCoordinatorRuntime(
     sessionRegistry,
     sessionCheckpointWatchManager,
     sessionAgentUuidStore,
-    codexThreadAllocator: createCodexThreadAllocator(),
     workspaceLayoutStore,
     vcsSecretStore,
     transport,

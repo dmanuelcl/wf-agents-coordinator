@@ -58,9 +58,10 @@ export interface AgentLaunchCommandResult {
 
 /**
  * A deterministic session directive for an agent launch. Claude accepts an
- * app-minted id for both modes. Codex receives an app-server-preallocated id
- * and opens it through `codex resume`. Kimi mints its own id on a fresh launch,
- * which the renderer captures, and accepts it here on resume.
+ * app-minted id for both modes. Codex can resume a known interactive session
+ * id, but the coordinator does not preallocate blank Codex threads because the
+ * TUI may not recognize them as saved sessions. Kimi mints its own id on a
+ * fresh launch, which the renderer captures, and accepts it here on resume.
  */
 export interface AgentSessionLaunch {
   id: string;
