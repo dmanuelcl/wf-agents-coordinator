@@ -125,6 +125,15 @@ export async function createRemoteRunnerServer(
     httpServer.listen(options.port ?? 4765, options.host ?? "127.0.0.1");
   });
 
+  // Keep an otherwise idle WebSocket alive through reverse proxies such as
+  // Cloudflare Tunnel. Browser WebSockets answer protocol pings automatically;
+  // this is transport liveness only and never changes Coordinator state.
+  const heartbeat = setInterval(() => {
+    for (const socket of clients) {
+      if (socket.readyState === WebSocket.OPEN) socket.ping();
+    }
+  }, 25_000);
+
   function send(socket: WebSocket, frame: RemoteServerFrame): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     socket.send(serialize(frame));
@@ -202,6 +211,7 @@ export async function createRemoteRunnerServer(
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
+        clearInterval(heartbeat);
         for (const socket of clients) socket.close(1001, "Runner stopping");
         server.close((error) => {
           if (error) {

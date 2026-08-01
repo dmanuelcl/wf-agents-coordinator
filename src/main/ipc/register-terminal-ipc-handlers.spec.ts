@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from "../../shared/ipc/contract";
 import { createIpcHandlerRegistry, type IpcMessageSender } from "./ipc-transport";
 import { registerTerminalIpcHandlers } from "./register-terminal-ipc-handlers";
@@ -8,6 +8,10 @@ import { createTerminalScreenStore } from "../terminals/terminal-screen-store";
 function sender(destroyed = false): IpcMessageSender {
   return { isDestroyed: () => destroyed, send: vi.fn() };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("registerTerminalIpcHandlers", () => {
   it("reattaches a reconnecting client to a persistent terminal instead of spawning a second PTY", async () => {
@@ -162,5 +166,35 @@ describe("registerTerminalIpcHandlers", () => {
     transport.emit(client, TERMINAL_IPC_CHANNELS.write, ["1", "hello"]);
     expect(write).toHaveBeenCalledWith("hello");
     expect(transport.hasHandler(IPC_CHANNELS.sessionStateGet)).toBe(true);
+  });
+
+  it("delivers a launch prompt in the runner even when its requesting browser is gone", async () => {
+    vi.useFakeTimers();
+    const write = vi.fn();
+    const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };
+    const broadcast = vi.fn();
+    const transport = createIpcHandlerRegistry();
+    registerTerminalIpcHandlers({
+      transport,
+      ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
+      sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast,
+      screenStore: createTerminalScreenStore(),
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
+    });
+
+    await transport.invoke(sender(true), TERMINAL_IPC_CHANNELS.create, [{
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+      initialInput: { text: "review this PR", submit: true },
+    }]);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(write).toHaveBeenCalledWith("\x1b[200~review this PR\x1b[201~\r");
+    expect(broadcast).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId: "1" });
   });
 });

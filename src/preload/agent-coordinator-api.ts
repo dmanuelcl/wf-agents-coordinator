@@ -11,6 +11,7 @@ import type {
   SessionCheckpointDetectedEvent,
   TerminalDataEvent,
   TerminalExitEvent,
+  TerminalInitialInputEvent,
 } from "../shared/ipc/contract";
 
 export interface CoordinatorClientTransport {
@@ -97,6 +98,8 @@ export function createAgentCoordinatorApi(
       clearScrollback: (persistKey) => invoke(TERMINAL_IPC_CHANNELS.clearScrollback, persistKey) as ReturnType<AgentCoordinatorApi["terminal"]["clearScrollback"]>,
       onData: (callback) => on<TerminalDataEvent>(TERMINAL_IPC_CHANNELS.data, callback),
       onExit: (callback) => on<TerminalExitEvent>(TERMINAL_IPC_CHANNELS.exit, callback),
+      onInitialInputDelivered: (callback) =>
+        on<TerminalInitialInputEvent>(TERMINAL_IPC_CHANNELS.initialInputDelivered, callback),
     },
     sessionState: {
       get: (projectId) => invoke(IPC_CHANNELS.sessionStateGet, projectId) as ReturnType<AgentCoordinatorApi["sessionState"]["get"]>,

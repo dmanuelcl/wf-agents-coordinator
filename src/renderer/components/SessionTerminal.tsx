@@ -10,24 +10,16 @@ import type {
   SessionRoleLaunch,
   TerminalDataEvent,
   TerminalExitEvent,
+  TerminalInitialInputEvent,
   TerminalScreenSnapshot,
   WorkSession,
 } from "../../shared/ipc/contract";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
-import { createTerminalFollowUpGate } from "./terminal-follow-up-gate";
-import { hasBlockingStartupConfirmation } from "./terminal-startup-readiness";
 
 // File-path-ish tokens in terminal output: optional dir prefix, a filename with
 // an extension, and an optional :line[:col] suffix. A token that isn't a real
 // file just no-ops on click, so occasional false positives are harmless.
 const FILE_PATH_RE = /(?:[~.]{0,2}\/)?(?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z][\w]{0,7}(?::\d+(?::\d+)?)?/g;
-
-// How long the agent's output must stay QUIET before we send the follow-up —
-// long enough that a fresh TUI (claude etc.) has rendered its input box and will
-// accept a paste. A hard deadline handles CLIs that repaint continuously, but
-// never bypasses a confirmation that the user must answer.
-const SETTLE_MS = 1_200;
-const MAX_FOLLOW_UP_WAIT_MS = 10_000;
 
 function visibleTerminalText(term: Terminal): string {
   const buffer = term.buffer.active;
@@ -231,7 +223,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     let ptyId: string | null = null;
     let disposed = false;
-    let followUpSent = false;
     let autopilotAcknowledged = false;
     let fellBackToShell = false;
     let ownsSetupClaim = false;
@@ -300,21 +291,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     });
     disposables.push(() => linkProvider.dispose());
 
-    function sendFollowUp(wfPreType: string): void {
-      if (disposed || !ptyId || followUpSent) return;
-      followUpSent = true;
-      // Bracketed paste (like sendText) so the command lands in the agent's
-      // input box as one unit — robust for multi-word/long text (e.g. a review
-      // kickoff). Conductor/review launches submit it (append CR); a manual
-      // open only pre-types it (the user presses Enter).
-      const paste = `\x1b[200~${wfPreType}\x1b[201~`;
-      window.agentCoordinator.terminal.write(ptyId, autoSubmitWf ? `${paste}\r` : paste);
-      if (autopilotLaunch && !autopilotAcknowledged) {
-        autopilotAcknowledged = true;
-        onAutopilotStartedRef.current?.();
-      }
-    }
-
     // An agent runs AS the PTY process, so quitting it closes the PTY. Instead of
     // leaving a dead terminal, drop to a usable shell in the same worktree. The
     // existing onData/onExit/write handlers all target the current `ptyId`, so
@@ -346,8 +322,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
-      let followUpGate: ReturnType<typeof createTerminalFollowUpGate> | null = null;
-
       // The dedicated setup terminal is the only component allowed into the
       // setup phase. Role/shell terminals are not mounted until it persists
       // setupDone, so they always start directly in their normal phase.
@@ -358,7 +332,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // loses the output that schedules the kickoff.
       const pendingData: TerminalDataEvent[] = [];
       const pendingExits: TerminalExitEvent[] = [];
+      const pendingInitialInputDeliveries: TerminalInitialInputEvent[] = [];
       let recordedKimiSessionId: string | null = null;
+
+      function acknowledgeAutopilotStart(): void {
+        if (!autopilotLaunch || autopilotAcknowledged) return;
+        autopilotAcknowledged = true;
+        onAutopilotStartedRef.current?.();
+      }
 
       const captureKimiSessionId = (): void => {
         if (disposed || agentKind !== "kimi" || role === "shell" || role === "setup") return;
@@ -384,7 +365,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
         if (event.sessionId !== ptyId) return;
         term.write(event.data, captureKimiSessionId);
-        if (phase === "agent") followUpGate?.onOutput();
       };
 
       async function releaseSetupClaim(): Promise<void> {
@@ -398,8 +378,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (disposed) return;
         phase = "agent";
         fellBackToShell = true;
-        followUpSent = true;
-        followUpGate?.cancel();
         term.write(`\r\n\x1b[2m—— ${message} · dropped to shell ——\x1b[0m\r\n\r\n`);
         onSetupFailedRef.current?.(message);
         await fallBackToShell();
@@ -444,8 +422,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (isAgentTab && !fellBackToShell) {
           // Agent quit → become a usable shell instead of a dead pane.
           fellBackToShell = true;
-          followUpSent = true; // never pre-type the wf command into the shell
-          followUpGate?.cancel();
           term.write("\r\n\x1b[2m—— agent exited · dropped to shell ——\x1b[0m\r\n\r\n");
           void fallBackToShell();
         } else {
@@ -453,14 +429,22 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
       };
 
+      const handleInitialInputDelivered = (event: TerminalInitialInputEvent): void => {
+        if (!ptyId) {
+          pendingInitialInputDeliveries.push(event);
+          return;
+        }
+        if (event.sessionId === ptyId) acknowledgeAutopilotStart();
+      };
+
       const unsubscribeData = window.agentCoordinator.terminal.onData(handleData);
       const unsubscribeExit = window.agentCoordinator.terminal.onExit(handleExit);
-      disposables.push(unsubscribeData, unsubscribeExit, () => followUpGate?.cancel());
+      const unsubscribeInitialInput = window.agentCoordinator.terminal.onInitialInputDelivered(handleInitialInputDelivered);
+      disposables.push(unsubscribeData, unsubscribeExit, unsubscribeInitialInput);
 
       // Register input before any reconnect early-return. An attached terminal
       // is live, so the reloaded view must be able to type into it immediately.
       const onDataDisposable = term.onData((data) => {
-        if (phase === "agent") followUpGate?.onUserInput();
         if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);
       });
       disposables.push(() => onDataDisposable.dispose());
@@ -489,6 +473,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           }
           for (const event of pendingData.splice(0)) handleData(event);
           for (const event of pendingExits.splice(0)) handleExit(event);
+          for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
           return;
         }
 
@@ -553,16 +538,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (launch.warnings.length > 0) setWarnings(launch.warnings);
       }
 
-      if (wfPreType !== null) {
-        const prompt = wfPreType;
-        followUpGate = createTerminalFollowUpGate({
-          settleMs: SETTLE_MS,
-          maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
-          canDeliver: () => !hasBlockingStartupConfirmation(visibleTerminalText(term)),
-          deliver: () => sendFollowUp(prompt),
-        });
-      }
-
       if (setupCommand) {
         term.write(`\x1b[2m—— setup: ${setupCommand} ——\x1b[0m\r\n`);
       }
@@ -574,6 +549,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         environment: setupCommand ? undefined : agentEnvironment,
         persistKey: persistKey ?? null,
         setupSessionId: isSetupTab ? session.id : null,
+        initialInput: wfPreType === null ? null : { text: wfPreType, submit: autoSubmitWf === true },
       });
       const id = created.sessionId;
       if (disposed) {
@@ -588,17 +564,16 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (created.reused) {
         for (const event of pendingData.splice(0)) handleData(event);
         for (const event of pendingExits.splice(0)) handleExit(event);
+        for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
         return;
       }
       if (autopilotLaunch && wfPreType === null && !autopilotAcknowledged) {
-        autopilotAcknowledged = true;
-        onAutopilotStartedRef.current?.();
+        acknowledgeAutopilotStart();
       }
 
-      // Arm the follow-up gate only when we start directly in the agent phase.
-      if (phase === "agent") followUpGate?.start();
       for (const event of pendingData.splice(0)) handleData(event);
       for (const event of pendingExits.splice(0)) handleExit(event);
+      for (const event of pendingInitialInputDeliveries.splice(0)) handleInitialInputDelivered(event);
 
     }
 

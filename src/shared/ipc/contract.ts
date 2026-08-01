@@ -157,6 +157,7 @@ export const TERMINAL_IPC_CHANNELS = {
   kill: "terminal:kill",
   data: "terminal:data",
   exit: "terminal:exit",
+  initialInputDelivered: "terminal:initial-input-delivered",
   readScrollback: "terminal:read-scrollback",
   clearScrollback: "terminal:clear-scrollback",
 } as const;
@@ -197,6 +198,11 @@ export interface TerminalExitEvent {
   code: number;
 }
 
+/** Emitted by the runner after it safely submits a deferred initial prompt. */
+export interface TerminalInitialInputEvent {
+  sessionId: string;
+}
+
 /** A runner-owned rendering of a live PTY, used to hydrate a new viewer. */
 export interface TerminalScreenSnapshot {
   cols: number;
@@ -234,6 +240,9 @@ export interface TerminalApi {
     // Setup lifecycle is finalized by the runner on PTY exit, so a dropped
     // browser connection cannot leave a successfully prepared session stuck.
     setupSessionId?: string | null;
+    // This input belongs to the terminal launch. The runner, rather than the
+    // requesting browser, waits for the agent and submits it exactly once.
+    initialInput?: { text: string; submit: boolean } | null;
   }): Promise<TerminalCreateResult>;
   // Reattach to a persistent terminal without spawning anything. Returns null
   // when the runner no longer has a live PTY for this key.
@@ -246,6 +255,7 @@ export interface TerminalApi {
   clearScrollback(persistKey: string): Promise<void>;
   onData(cb: (e: TerminalDataEvent) => void): () => void;
   onExit(cb: (e: TerminalExitEvent) => void): () => void;
+  onInitialInputDelivered(cb: (e: TerminalInitialInputEvent) => void): () => void;
 }
 
 export interface SystemFileInfo {

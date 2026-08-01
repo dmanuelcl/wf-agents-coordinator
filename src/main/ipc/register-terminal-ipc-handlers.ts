@@ -1,11 +1,24 @@
 import { IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from "../../shared/ipc/contract";
 import type { TerminalScreenSnapshot } from "../../shared/ipc/contract";
+import { hasBlockingStartupConfirmation } from "../../shared/terminals/startup-readiness";
 import { resolveShell, resolveShellForCommand } from "../terminals/shell-resolver";
 import type { PtySessionManager } from "../terminals/pty-session-manager";
 import type { ProjectSessionState, SessionStateStore } from "../terminals/session-state-store";
 import type { TerminalScrollbackStore } from "../terminals/terminal-scrollback-store";
 import type { TerminalScreenStore } from "../terminals/terminal-screen-store";
 import type { IpcTransport } from "./ipc-transport";
+
+const INITIAL_INPUT_SETTLE_MS = 1_200;
+const INITIAL_INPUT_MAX_WAIT_MS = 10_000;
+
+interface InitialInputDelivery {
+  text: string;
+  submit: boolean;
+  settledTimer: ReturnType<typeof setTimeout> | null;
+  deadlineTimer: ReturnType<typeof setTimeout> | null;
+  generation: number;
+  delivered: boolean;
+}
 
 export function registerTerminalIpcHandlers(params: {
   ptySessionManager: PtySessionManager;
@@ -19,6 +32,76 @@ export function registerTerminalIpcHandlers(params: {
   const { ptySessionManager, sessionStateStore, scrollbackStore, screenStore, transport, broadcast, onSetupExit } = params;
   const ipc = transport;
   const terminalByPersistKey = new Map<string, string>();
+  const initialInputByTerminal = new Map<string, InitialInputDelivery>();
+
+  function clearInitialInputTimers(delivery: InitialInputDelivery): void {
+    if (delivery.settledTimer) clearTimeout(delivery.settledTimer);
+    if (delivery.deadlineTimer) clearTimeout(delivery.deadlineTimer);
+    delivery.settledTimer = null;
+    delivery.deadlineTimer = null;
+  }
+
+  function discardInitialInput(sessionId: string): void {
+    const delivery = initialInputByTerminal.get(sessionId);
+    if (!delivery) return;
+    clearInitialInputTimers(delivery);
+    initialInputByTerminal.delete(sessionId);
+  }
+
+  async function tryDeliverInitialInput(sessionId: string, expectedGeneration?: number): Promise<void> {
+    const delivery = initialInputByTerminal.get(sessionId);
+    if (!delivery || delivery.delivered || !ptySessionManager.has(sessionId)) {
+      discardInitialInput(sessionId);
+      return;
+    }
+    if (expectedGeneration !== undefined && delivery.generation !== expectedGeneration) return;
+
+    const snapshot = await screenStore.snapshot(sessionId);
+    // New data arrived while the snapshot was being rendered. Wait for that
+    // output to settle instead of submitting into a changing startup screen.
+    if (expectedGeneration !== undefined && delivery.generation !== expectedGeneration) return;
+    if (hasBlockingStartupConfirmation(snapshot?.lines.join("\n") ?? "")) return;
+
+    delivery.delivered = true;
+    clearInitialInputTimers(delivery);
+    initialInputByTerminal.delete(sessionId);
+    const paste = `\x1b[200~${delivery.text}\x1b[201~`;
+    ptySessionManager.write(sessionId, delivery.submit ? `${paste}\r` : paste);
+    broadcast(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId });
+  }
+
+  function scheduleInitialInputAfterSettle(sessionId: string): void {
+    const delivery = initialInputByTerminal.get(sessionId);
+    if (!delivery || delivery.delivered) return;
+    delivery.generation += 1;
+    if (delivery.settledTimer) clearTimeout(delivery.settledTimer);
+    const generation = delivery.generation;
+    delivery.settledTimer = setTimeout(() => {
+      delivery.settledTimer = null;
+      void tryDeliverInitialInput(sessionId, generation).catch((error: unknown) => {
+        console.error(`Could not deliver initial terminal input for ${sessionId}:`, error);
+      });
+    }, INITIAL_INPUT_SETTLE_MS);
+  }
+
+  function queueInitialInput(sessionId: string, input: { text: string; submit: boolean } | null | undefined): void {
+    if (!input?.text) return;
+    const delivery: InitialInputDelivery = {
+      text: input.text,
+      submit: input.submit,
+      settledTimer: null,
+      deadlineTimer: null,
+      generation: 0,
+      delivered: false,
+    };
+    initialInputByTerminal.set(sessionId, delivery);
+    delivery.deadlineTimer = setTimeout(() => {
+      delivery.deadlineTimer = null;
+      void tryDeliverInitialInput(sessionId).catch((error: unknown) => {
+        console.error(`Could not deliver initial terminal input for ${sessionId}:`, error);
+      });
+    }, INITIAL_INPUT_MAX_WAIT_MS);
+  }
 
   async function attachPersistentTerminal(persistKey: string): Promise<{
     sessionId: string;
@@ -53,6 +136,7 @@ export function registerTerminalIpcHandlers(params: {
         environment?: Record<string, string>;
         persistKey?: string | null;
         setupSessionId?: string | null;
+        initialInput?: { text: string; submit: boolean } | null;
       },
     ) => {
     const persistKey = input.persistKey ?? null;
@@ -81,10 +165,12 @@ export function registerTerminalIpcHandlers(params: {
 
     if (persistKey) terminalByPersistKey.set(persistKey, sessionId);
     screenStore.create(sessionId, { cols: input.cols, rows: input.rows });
+    queueInitialInput(sessionId, input.initialInput);
     ptySessionManager.onData(sessionId, (data) => {
       // Bounded scrollback capture (opt-in per terminal) before forwarding.
       if (persistKey) scrollbackStore.record(persistKey, data);
       screenStore.write(sessionId, data);
+      scheduleInitialInputAfterSettle(sessionId);
       // PTY ownership belongs to the runner, not to the browser that created
       // it. Broadcast to all currently authenticated views so reconnecting or
       // second clients immediately receive the live stream.
@@ -92,6 +178,7 @@ export function registerTerminalIpcHandlers(params: {
     });
     ptySessionManager.onExit(sessionId, (code) => {
       if (persistKey && terminalByPersistKey.get(persistKey) === sessionId) terminalByPersistKey.delete(persistKey);
+      discardInitialInput(sessionId);
       if (input.setupSessionId && onSetupExit) {
         void onSetupExit({ sessionId: input.setupSessionId, code }).catch((error: unknown) => {
           console.error(`Could not finalize setup for session ${input.setupSessionId}:`, error);
@@ -108,6 +195,9 @@ export function registerTerminalIpcHandlers(params: {
 
   ipc.on(TERMINAL_IPC_CHANNELS.write, (_event, sessionId: string, data: string) => {
     ptySessionManager.write(sessionId, data);
+    // A user may have just answered a trust/permissions confirmation. Recheck
+    // the runner-owned screen after its response settles.
+    scheduleInitialInputAfterSettle(sessionId);
   });
 
   ipc.on(TERMINAL_IPC_CHANNELS.resize, (_event, sessionId: string, cols: number, rows: number) => {
@@ -116,6 +206,7 @@ export function registerTerminalIpcHandlers(params: {
   });
 
   ipc.on(TERMINAL_IPC_CHANNELS.kill, (_event, sessionId: string) => {
+    discardInitialInput(sessionId);
     ptySessionManager.kill(sessionId);
   });
 
