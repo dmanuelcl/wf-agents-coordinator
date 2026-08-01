@@ -3,7 +3,7 @@ import { resolveShell, resolveShellForCommand } from "../terminals/shell-resolve
 import type { PtySessionManager } from "../terminals/pty-session-manager";
 import type { ProjectSessionState, SessionStateStore } from "../terminals/session-state-store";
 import type { TerminalScrollbackStore } from "../terminals/terminal-scrollback-store";
-import type { IpcTransport } from "./ipc-transport";
+import type { IpcRequestEvent, IpcTransport } from "./ipc-transport";
 
 export function registerTerminalIpcHandlers(params: {
   ptySessionManager: PtySessionManager;
@@ -14,6 +14,22 @@ export function registerTerminalIpcHandlers(params: {
   const { ptySessionManager, sessionStateStore, scrollbackStore, transport } = params;
   const ipc = transport;
   const terminalByPersistKey = new Map<string, string>();
+
+  function attachPersistentTerminal(event: IpcRequestEvent, persistKey: string): { sessionId: string; reused: true } | null {
+    const existingSessionId = terminalByPersistKey.get(persistKey);
+    if (!existingSessionId) return null;
+    if (!ptySessionManager.has(existingSessionId)) {
+      terminalByPersistKey.delete(persistKey);
+      return null;
+    }
+    ptySessionManager.onData(existingSessionId, (data) => {
+      if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.data, { sessionId: existingSessionId, data });
+    });
+    ptySessionManager.onExit(existingSessionId, (code) => {
+      if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.exit, { sessionId: existingSessionId, code });
+    });
+    return { sessionId: existingSessionId, reused: true };
+  }
 
   ipc.handle(
     TERMINAL_IPC_CHANNELS.create,
@@ -29,18 +45,12 @@ export function registerTerminalIpcHandlers(params: {
       },
     ) => {
     const persistKey = input.persistKey ?? null;
-    const existingSessionId = persistKey ? terminalByPersistKey.get(persistKey) : undefined;
-    if (existingSessionId && ptySessionManager.has(existingSessionId)) {
+    const attached = persistKey ? attachPersistentTerminal(event, persistKey) : null;
+    if (attached) {
       // The browser/desktop client was recreated, but the runner (and its PTY)
       // survived. Attach this sender to the live stream instead of launching a
       // second agent for the same persisted tab.
-      ptySessionManager.onData(existingSessionId, (data) => {
-        if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.data, { sessionId: existingSessionId, data });
-      });
-      ptySessionManager.onExit(existingSessionId, (code) => {
-        if (!event.sender.isDestroyed()) event.sender.send(TERMINAL_IPC_CHANNELS.exit, { sessionId: existingSessionId, code });
-      });
-      return { sessionId: existingSessionId, reused: true };
+      return attached;
     }
 
     const shell = input.launchCommand
@@ -71,6 +81,8 @@ export function registerTerminalIpcHandlers(params: {
 
     return { sessionId, reused: false };
   });
+
+  ipc.handle(TERMINAL_IPC_CHANNELS.attach, (event, persistKey: string) => attachPersistentTerminal(event, persistKey));
 
   ipc.on(TERMINAL_IPC_CHANNELS.write, (_event, sessionId: string, data: string) => {
     ptySessionManager.write(sessionId, data);

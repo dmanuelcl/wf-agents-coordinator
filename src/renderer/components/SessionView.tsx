@@ -1260,6 +1260,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               session={session}
               role="setup"
               mode="fresh"
+              persistKey={`${session.id}::setup`}
               onSetupReady={handleSetupReady}
               onSetupFailed={handleSetupFailed}
             />

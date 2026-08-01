@@ -47,6 +47,43 @@ describe("registerTerminalIpcHandlers", () => {
     expect(disconnected.send).not.toHaveBeenCalled();
   });
 
+  it("can attach to a live persistent setup terminal without creating a setup command", async () => {
+    let dataCallback: ((data: string) => void) | undefined;
+    const fakePty: PtySpawn = {
+      onData: (callback) => {
+        dataCallback = callback;
+      },
+      onExit: () => {},
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+    };
+    const spawnPty = vi.fn(() => fakePty);
+    const transport = createIpcHandlerRegistry();
+    registerTerminalIpcHandlers({
+      transport,
+      ptySessionManager: createPtySessionManager({ spawnPty }),
+      sessionStateStore: { get: async () => null, set: async () => {} },
+      scrollbackStore: { record: () => {}, read: async () => "", clear: async () => {}, flush: async () => {} },
+    });
+
+    const firstClient = sender(true);
+    const reloadedClient = sender();
+    const setup = { cwd: process.cwd(), cols: 80, rows: 24, launchCommand: "pnpm worktree:setup", persistKey: "session::setup" };
+
+    await transport.invoke(firstClient, TERMINAL_IPC_CHANNELS.create, [setup]);
+    const attached = await transport.invoke(reloadedClient, TERMINAL_IPC_CHANNELS.attach, [setup.persistKey]);
+
+    expect(attached).toEqual({ sessionId: "1", reused: true });
+    expect(spawnPty).toHaveBeenCalledTimes(1);
+
+    dataCallback?.("setup still running");
+    expect(reloadedClient.send).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.data, {
+      sessionId: "1",
+      data: "setup still running",
+    });
+  });
+
   it("continues routing terminal input through the transport", () => {
     const write = vi.fn();
     const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };

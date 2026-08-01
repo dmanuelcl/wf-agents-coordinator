@@ -151,6 +151,7 @@ export const IPC_CHANNELS = {
 
 export const TERMINAL_IPC_CHANNELS = {
   create: "terminal:create",
+  attach: "terminal:attach",
   write: "terminal:write",
   resize: "terminal:resize",
   kill: "terminal:kill",
@@ -215,6 +216,9 @@ export interface TerminalApi {
     environment?: Record<string, string>;
     persistKey?: string | null;
   }): Promise<TerminalCreateResult>;
+  // Reattach to a persistent terminal without spawning anything. Returns null
+  // when the runner no longer has a live PTY for this key.
+  attach(persistKey: string): Promise<TerminalCreateResult | null>;
   write(sessionId: string, data: string): void;
   resize(sessionId: string, cols: number, rows: number): void;
   kill(sessionId: string): void;

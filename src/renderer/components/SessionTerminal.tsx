@@ -290,6 +290,11 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         cwd: shellCwd,
         cols: term.cols,
         rows: term.rows,
+        // An agent that exits is deliberately replaced with a shell. Keep that
+        // replacement under the same key so a browser reload reattaches to the
+        // shell instead of launching the agent a second time. Setup repair
+        // shells stay ephemeral: their setup state is handled separately.
+        persistKey: isSetupTab ? null : persistKey ?? null,
       });
       const id = created.sessionId;
       if (disposed) {
@@ -307,78 +312,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       let wfPreType: string | null = null;
       let setupCommand: string | null = null;
 
-      if (isSetupTab) {
-        let waitingMessageShown = false;
-        while (!disposed) {
-          const plan = await window.agentCoordinator.sessions.claimSetup(session.id);
-          if (disposed) {
-            if (plan.state === "run") void window.agentCoordinator.sessions.releaseSetup(session.id);
-            return;
-          }
-          shellCwd = plan.cwd;
-          if (plan.state === "ready") {
-            onSetupReadyRef.current?.();
-            return;
-          }
-          if (plan.state === "run" && plan.command) {
-            ownsSetupClaim = true;
-            setupCommand = plan.command;
-            break;
-          }
-          if (!waitingMessageShown) {
-            waitingMessageShown = true;
-            term.write("\x1b[2m—— waiting for this session's setup ——\x1b[0m\r\n");
-          }
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
-        if (disposed) return;
-      } else if (autopilotLaunch) {
-        // Auto-pilot step: interactive launch seeded with the wf. When the wf is
-        // embedded in the command, typePrompt is null (nothing to type); otherwise
-        // the follow-up gate types + submits it once the agent is ready.
-        agentCommand = autopilotLaunch.command;
-        agentKind = autopilotLaunch.agentKind;
-        agentEnvironment = autopilotLaunch.environment;
-        shellCwd = autopilotLaunch.cwd;
-        wfPreType = autopilotLaunch.typePrompt;
-      } else if (role !== "shell") {
-        const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
-        if (disposed) return;
-        agentCommand = launch.agentCommand;
-        agentKind = launch.agentKind;
-        agentEnvironment = launch.environment;
-        shellCwd = launch.cwd;
-        wfPreType = launch.wfCommand;
-        if (launch.warnings.length > 0) setWarnings(launch.warnings);
-      }
-
-      // Restore prior scrollback (visual history only — the process is fresh)
-      // before the live shell starts producing output.
-      if (persistKey) {
-        const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
-        if (disposed) return;
-        if (saved) {
-          term.write(saved);
-          // Undo any TUI modes the recording left on, BEFORE the live shell runs,
-          // so no mouse reports leak into it.
-          term.write(TUI_MODE_RESET);
-          term.write("\r\n\x1b[2m—— restored ——\x1b[0m\r\n");
-        }
-      }
-
-      const followUpGate = wfPreType !== null
-        ? createTerminalFollowUpGate({
-            settleMs: SETTLE_MS,
-            maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
-            canDeliver: () => !hasBlockingStartupConfirmation(visibleTerminalText(term)),
-            deliver: () => sendFollowUp(wfPreType),
-          })
-        : null;
+      let followUpGate: ReturnType<typeof createTerminalFollowUpGate> | null = null;
 
       // The dedicated setup terminal is the only component allowed into the
       // setup phase. Role/shell terminals are not mounted until it persists
       // setupDone, so they always start directly in their normal phase.
-      let phase: "setup" | "finishing-setup" | "agent" = setupCommand ? "setup" : "agent";
+      let phase: "setup" | "finishing-setup" | "agent" = "agent";
 
       // Subscribe BEFORE creating the PTY. A fast agent can render its startup
       // screen before the create IPC promise resolves; subscribing afterwards
@@ -484,6 +423,107 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       const unsubscribeExit = window.agentCoordinator.terminal.onExit(handleExit);
       disposables.push(unsubscribeData, unsubscribeExit, () => followUpGate?.cancel());
 
+      // Register input before any reconnect early-return. An attached terminal
+      // is live, so the reloaded view must be able to type into it immediately.
+      const onDataDisposable = term.onData((data) => {
+        if (phase === "agent") followUpGate?.onUserInput();
+        if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);
+      });
+      disposables.push(() => onDataDisposable.dispose());
+
+      if (persistKey) {
+        // Reloading must first look for the existing PTY. Apart from avoiding
+        // a duplicate process, this also prevents the role-launch resolver
+        // from allocating/replacing a provider session just to reattach.
+        const attached = persistKey
+          ? await window.agentCoordinator.terminal.attach(persistKey)
+          : null;
+        if (disposed) return;
+        if (attached) {
+          const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
+          if (disposed) return;
+          // This PTY is still live. Replaying its recording preserves the TUI
+          // state the other view had; do not reset terminal modes here.
+          if (saved) term.write(saved);
+          phase = isSetupTab ? "setup" : "agent";
+          ptyId = attached.sessionId;
+          ptyIdRef.current = attached.sessionId;
+          for (const event of pendingData.splice(0)) handleData(event);
+          for (const event of pendingExits.splice(0)) handleExit(event);
+          return;
+        }
+
+        // The runner has no live PTY for this key. This is a genuine fresh
+        // launch (for example after the runner itself restarted), so restore
+        // only visual history and clear any stale TUI modes before launching.
+        const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
+        if (disposed) return;
+        if (saved) {
+          term.write(saved);
+          term.write(TUI_MODE_RESET);
+          term.write("\r\n\x1b[2m—— restored ——\x1b[0m\r\n");
+        }
+      }
+
+      if (isSetupTab) {
+        // No live setup PTY exists, so this renderer is allowed to claim the
+        // one-time setup command now.
+        let waitingMessageShown = false;
+        while (!disposed) {
+          const plan = await window.agentCoordinator.sessions.claimSetup(session.id);
+          if (disposed) {
+            if (plan.state === "run") void window.agentCoordinator.sessions.releaseSetup(session.id);
+            return;
+          }
+          shellCwd = plan.cwd;
+          if (plan.state === "ready") {
+            onSetupReadyRef.current?.();
+            return;
+          }
+          if (plan.state === "run" && plan.command) {
+            ownsSetupClaim = true;
+            setupCommand = plan.command;
+            phase = "setup";
+            break;
+          }
+          if (!waitingMessageShown) {
+            waitingMessageShown = true;
+            term.write("\x1b[2m—— waiting for this session's setup ——\x1b[0m\r\n");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        if (disposed) return;
+      } else if (autopilotLaunch) {
+        // Auto-pilot step: interactive launch seeded with the wf. When the wf
+        // is embedded in the command, typePrompt is null (nothing to type);
+        // otherwise the follow-up gate types + submits it once the agent is
+        // ready.
+        agentCommand = autopilotLaunch.command;
+        agentKind = autopilotLaunch.agentKind;
+        agentEnvironment = autopilotLaunch.environment;
+        shellCwd = autopilotLaunch.cwd;
+        wfPreType = autopilotLaunch.typePrompt;
+      } else if (role !== "shell") {
+        const launch = await window.agentCoordinator.sessions.buildRoleLaunch(session.id, role, mode);
+        if (disposed) return;
+        agentCommand = launch.agentCommand;
+        agentKind = launch.agentKind;
+        agentEnvironment = launch.environment;
+        shellCwd = launch.cwd;
+        wfPreType = launch.wfCommand;
+        if (launch.warnings.length > 0) setWarnings(launch.warnings);
+      }
+
+      if (wfPreType !== null) {
+        const prompt = wfPreType;
+        followUpGate = createTerminalFollowUpGate({
+          settleMs: SETTLE_MS,
+          maxWaitMs: MAX_FOLLOW_UP_WAIT_MS,
+          canDeliver: () => !hasBlockingStartupConfirmation(visibleTerminalText(term)),
+          deliver: () => sendFollowUp(prompt),
+        });
+      }
+
       if (setupCommand) {
         term.write(`\x1b[2m—— setup: ${setupCommand} ——\x1b[0m\r\n`);
       }
@@ -520,11 +560,6 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       for (const event of pendingData.splice(0)) handleData(event);
       for (const event of pendingExits.splice(0)) handleExit(event);
 
-      const onDataDisposable = term.onData((data) => {
-        if (phase === "agent") followUpGate?.onUserInput();
-        if (ptyId) window.agentCoordinator.terminal.write(ptyId, data);
-      });
-      disposables.push(() => onDataDisposable.dispose());
     }
 
     void start().catch((error: unknown) => {

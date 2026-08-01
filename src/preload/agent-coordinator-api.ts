@@ -89,6 +89,7 @@ export function createAgentCoordinatorApi(
     },
     terminal: {
       create: (input) => invoke(TERMINAL_IPC_CHANNELS.create, input) as ReturnType<AgentCoordinatorApi["terminal"]["create"]>,
+      attach: (persistKey) => invoke(TERMINAL_IPC_CHANNELS.attach, persistKey) as ReturnType<AgentCoordinatorApi["terminal"]["attach"]>,
       write: (sessionId, data) => transport.emit(TERMINAL_IPC_CHANNELS.write, sessionId, data),
       resize: (sessionId, cols, rows) => transport.emit(TERMINAL_IPC_CHANNELS.resize, sessionId, cols, rows),
       kill: (sessionId) => transport.emit(TERMINAL_IPC_CHANNELS.kill, sessionId),
