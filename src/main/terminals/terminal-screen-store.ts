@@ -1,4 +1,11 @@
-import { Terminal } from "@xterm/xterm";
+// `@xterm/xterm` is published as CommonJS.  Electron can consume its named
+// export directly, but the standalone Node runner cannot when Vite leaves the
+// dependency external.  Use the CommonJS default interop path so both hosts
+// load the same terminal model.
+import xterm from "@xterm/xterm";
+import type { Terminal as XtermTerminal } from "@xterm/xterm";
+
+const { Terminal } = xterm;
 
 export interface TerminalScreenSnapshot {
   cols: number;
@@ -18,7 +25,7 @@ export interface TerminalScreenStore {
 }
 
 interface ScreenEntry {
-  terminal: Terminal;
+  terminal: XtermTerminal;
   pendingWrite: Promise<void>;
 }
 
