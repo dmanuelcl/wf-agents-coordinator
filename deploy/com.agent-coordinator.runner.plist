@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agent-coordinator.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd 'CAMBIA_ESTA_RUTA/AGENTS' &amp;&amp; set -a &amp;&amp; source 'CAMBIA_ESTA_RUTA/runner.env' &amp;&amp; set +a &amp;&amp; exec pnpm remote:runner</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/CAMBIA_ESTE_USUARIO/Library/Logs/AgentCoordinator/runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/CAMBIA_ESTE_USUARIO/Library/Logs/AgentCoordinator/runner-error.log</string>
+</dict>
+</plist>
