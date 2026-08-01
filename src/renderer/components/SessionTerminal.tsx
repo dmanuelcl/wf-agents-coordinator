@@ -200,6 +200,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const terminalContainer = container;
 
     const term = new Terminal({
       convertEol: true,
@@ -216,8 +217,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.open(container);
-    fitAddon.fit();
+    term.open(terminalContainer);
 
     let ptyId: string | null = null;
     let disposed = false;
@@ -229,6 +229,35 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     const isSetupTab = role === "setup";
     const isAgentTab = role !== "shell" && !isSetupTab;
     const disposables: Array<() => void> = [];
+    let alternateScreenRedrawPtyId: string | null = null;
+    let resizeAnimationFrame: number | null = null;
+
+    function fitAndResizeLiveTerminal(): void {
+      // Do not let a hidden keep-alive tab report its zero-size box to the
+      // remote PTY. It would make a full-screen TUI permanently adopt a tiny
+      // geometry until the next real resize.
+      if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
+      fitAddon.fit();
+      if (!ptyId) return;
+
+      if (alternateScreenRedrawPtyId === ptyId) {
+        alternateScreenRedrawPtyId = null;
+        // A real size transition is required to make every PTY send SIGWINCH.
+        const redrawCols = term.cols > 2 ? term.cols - 1 : term.cols + 1;
+        window.agentCoordinator.terminal.resize(ptyId, redrawCols, term.rows);
+        window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
+        return;
+      }
+      window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
+    }
+
+    function scheduleFitAndResize(): void {
+      if (resizeAnimationFrame !== null) return;
+      resizeAnimationFrame = requestAnimationFrame(() => {
+        resizeAnimationFrame = null;
+        fitAndResizeLiveTerminal();
+      });
+    }
 
     // Clickable file paths: clicking a path the agent printed opens it in the OS
     // default app (resolved against the terminal's cwd in the main process).
@@ -447,17 +476,17 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
             // Claude/vim are displaying an alternate screen, which the runner
             // correctly omits from scrollback. A SIGWINCH prompts the still
             // live TUI to paint its current screen into this new browser view
-            // without executing or injecting anything into the agent. Toggle
-            // a column first because setting the existing size need not emit a
-            // SIGWINCH on every PTY implementation.
-            const redrawCols = term.cols > 2 ? term.cols - 1 : term.cols + 1;
-            window.agentCoordinator.terminal.resize(attached.sessionId, redrawCols, term.rows);
-            window.agentCoordinator.terminal.resize(attached.sessionId, term.cols, term.rows);
+            // without executing or injecting anything into the agent. Wait
+            // until the visible terminal has been measured before resizing it.
+            alternateScreenRedrawPtyId = attached.sessionId;
           } else {
             const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
             if (disposed) return;
             if (saved) term.write(saved);
           }
+          // The new client may have different dimensions from the one that
+          // created the PTY. Resize only after its own visible box is stable.
+          scheduleFitAndResize();
           for (const event of pendingData.splice(0)) handleData(event);
           for (const event of pendingExits.splice(0)) handleExit(event);
           return;
@@ -572,6 +601,11 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
 
     }
 
+    // Obtain an accurate initial geometry for a visible tab before any new
+    // shell/agent is created. Hidden tabs retain xterm's safe default until
+    // their ResizeObserver sees a real box.
+    fitAndResizeLiveTerminal();
+
     void start().catch((error: unknown) => {
       if (ownsSetupClaim) {
         ownsSetupClaim = false;
@@ -588,16 +622,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     });
 
     const resizeObserver = new ResizeObserver(() => {
-      // A hidden (inactive) tab reports a zero-size rect; fitting against that
-      // collapses the terminal to 0 cols/rows. Skip until it's visible again.
-      if (container.clientWidth === 0 || container.clientHeight === 0) return;
-      fitAddon.fit();
-      if (ptyId) window.agentCoordinator.terminal.resize(ptyId, term.cols, term.rows);
+      fitAndResizeLiveTerminal();
     });
-    resizeObserver.observe(container);
+    resizeObserver.observe(terminalContainer);
+    scheduleFitAndResize();
 
     return () => {
       disposed = true;
+      if (resizeAnimationFrame !== null) cancelAnimationFrame(resizeAnimationFrame);
       resizeObserver.disconnect();
       disposables.forEach((dispose) => dispose());
       if (ptyId && window.agentCoordinator.connection.mode === "local") window.agentCoordinator.terminal.kill(ptyId);
