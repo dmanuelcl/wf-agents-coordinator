@@ -1,6 +1,11 @@
 import type { RemoteServerFrame } from "../shared/remote/protocol";
 import type { CoordinatorClientTransport } from "./agent-coordinator-api";
 
+export interface RemoteIpcClient extends CoordinatorClientTransport {
+  /** Explicit authentication gate used before mounting Coordinator's UI. */
+  connect(): Promise<void>;
+}
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -11,7 +16,7 @@ function errorOf(value: unknown): Error {
 }
 
 /** Browser-compatible WebSocket implementation of the Coordinator IPC shape. */
-export function createRemoteIpcClient(params: { url: string; token: string }): CoordinatorClientTransport {
+export function createRemoteIpcClient(params: { url: string; token: string }): RemoteIpcClient {
   const subscriptions = new Map<string, Set<(payload: unknown) => void>>();
   const pending = new Map<string, PendingRequest>();
   let socket: WebSocket | null = null;
@@ -108,6 +113,7 @@ export function createRemoteIpcClient(params: { url: string; token: string }): C
   }
 
   return {
+    connect: ensureConnected,
     async invoke(channel, ...args) {
       const id = `${Date.now()}-${++requestCounter}`;
       const response = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }));

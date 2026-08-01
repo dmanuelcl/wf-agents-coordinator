@@ -27,9 +27,11 @@ const localTransport: CoordinatorClientTransport = {
   },
 };
 
-const api = createAgentCoordinatorApi(remote ? createRemoteIpcClient(remote) : localTransport, {
+const remoteClient = remote ? createRemoteIpcClient(remote) : null;
+const api = createAgentCoordinatorApi(remoteClient ?? localTransport, {
   mode: remote ? "remote" : "local",
   endpoint: remote?.url,
+  connect: remoteClient?.connect,
   getPathForFile: remote
     ? () => {
         throw new Error("Dragging a local file is not available in remote mode yet. Put the file on the runner first.");

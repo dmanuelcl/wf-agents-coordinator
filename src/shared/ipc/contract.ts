@@ -241,6 +241,10 @@ export interface AgentCoordinatorApi {
   connection: {
     mode: "local" | "remote";
     endpoint?: string;
+    // Resolves only after a remote runner has authenticated the client. Local
+    // mode resolves immediately; renderers use this to avoid showing an
+    // authenticated-looking workspace for a rejected remote connection.
+    connect(): Promise<void>;
   };
   projects: {
     list(): Promise<ProjectRecord[]>;

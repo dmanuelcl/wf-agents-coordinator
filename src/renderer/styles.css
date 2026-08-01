@@ -227,6 +227,10 @@ button:disabled {
   margin: 0 0 10px;
   color: var(--muted-fg);
 }
+.remote-connect-error {
+  color: #ffaaa4 !important;
+  font-style: normal !important;
+}
 .remote-connect label {
   color: var(--muted-fg);
   font-size: 12px;

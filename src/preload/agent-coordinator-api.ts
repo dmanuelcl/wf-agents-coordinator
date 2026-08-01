@@ -22,6 +22,7 @@ export interface CoordinatorClientTransport {
 export interface AgentCoordinatorApiOptions {
   mode: "local" | "remote";
   endpoint?: string;
+  connect?: () => Promise<void>;
   getPathForFile(file: File): string;
   clientSystem?: {
     openExternal(url: string): Promise<void>;
@@ -39,7 +40,7 @@ export function createAgentCoordinatorApi(
     transport.on(channel, (payload) => callback(payload as T));
 
   return {
-    connection: { mode: options.mode, endpoint: options.endpoint },
+    connection: { mode: options.mode, endpoint: options.endpoint, connect: options.connect ?? (async () => {}) },
     projects: {
       list: () => invoke(IPC_CHANNELS.projectsList) as ReturnType<AgentCoordinatorApi["projects"]["list"]>,
       add: (input) => invoke(IPC_CHANNELS.projectsAdd, input) as ReturnType<AgentCoordinatorApi["projects"]["add"]>,
