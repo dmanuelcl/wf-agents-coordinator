@@ -194,8 +194,23 @@ Para detenerlo: `launchctl bootout "gui/$(id -u)" com.agent-coordinator.runner`.
 
 1. Copia `agent-coordinator-runner.service` a
    `~/.config/systemd/user/`.
-2. Edita `WorkingDirectory`, `EnvironmentFile` y, si aplica, la ruta de
-   `pnpm`.
+2. Edita `WorkingDirectory`, `EnvironmentFile` y la ruta absoluta de `node` en
+   `ExecStart`. Obtén esa ruta desde tu terminal normal con `command -v node`.
+   Usa `node .../out/main/remote-runner.js` directamente, no `pnpm`: un
+   servicio de systemd no carga NVM ni tu `.bashrc`, y el ejecutable de pnpm
+   busca `node` usando su `PATH`.
+
+   Por ejemplo, si usas NVM y `command -v node` devuelve
+   `/home/dani/.nvm/versions/node/v24.11.0/bin/node`, las líneas quedan así:
+
+   ```ini
+   WorkingDirectory=/home/dani/biznex-project/wf-agents-coordinator
+   EnvironmentFile=/home/dani/.config/agent-coordinator/runner.env
+   ExecStart=/home/dani/.nvm/versions/node/v24.11.0/bin/node /home/dani/biznex-project/wf-agents-coordinator/out/main/remote-runner.js
+   ```
+
+   Si actualizas Node, ejecuta `pnpm remote:build` con ese Node y reemplaza la
+   ruta de `ExecStart` por la nueva.
 3. Actívalo:
 
    ```sh
