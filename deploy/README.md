@@ -157,13 +157,14 @@ runner: detener el runner todavía detiene sus PTYs.
 Con el runner funcionando, en esa misma máquina ejecuta una vez:
 
 ```sh
-tailscale serve --https=443 http://127.0.0.1:4765
+tailscale serve --bg --https=443 http://127.0.0.1:4765
 ```
 
 Tailscale mostrará la URL `https://nombre-maquina.tu-tailnet.ts.net`. Ábrela
 desde cualquier dispositivo que esté conectado a tu Tailnet. La interfaz usa
 esa misma URL para el WebSocket seguro; sólo debes introducir el token de
-Coordinator. No uses `tailscale funnel`.
+Coordinator. `--bg` guarda la configuración para que Tailscale vuelva a
+publicarla tras reiniciar la máquina o Tailscale. No uses `tailscale funnel`.
 
 Para revisar la configuración:
 
