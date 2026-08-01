@@ -176,7 +176,9 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       if (!proposed || term.cols === 0 || term.rows === 0) return;
       const currentFontSize = term.options.fontSize ?? 12;
       const scale = Math.min(proposed.cols / term.cols, proposed.rows / term.rows);
-      const nextFontSize = Math.max(8, Math.min(32, currentFontSize * scale));
+      // Leave a small visual margin rather than making a 16" client stretch
+      // the runner's fixed grid edge-to-edge with oversized glyphs.
+      const nextFontSize = Math.max(8, Math.min(22, currentFontSize * scale * 0.9));
       if (Math.abs(nextFontSize - currentFontSize) >= 0.1) {
         term.options.fontSize = nextFontSize;
       }
