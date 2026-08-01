@@ -41,6 +41,8 @@ En la máquina que será runner necesitas:
 - este repositorio en la rama `feature/remote-coordinator`;
 - Node, pnpm, Git y Tailscale;
 - los CLIs de los agentes que quieras usar;
+- herramientas de compilación nativa. En Ubuntu/Debian: `sudo apt-get install
+  -y build-essential python3`;
 - iniciar sesión en cada agente **como el mismo usuario que ejecutará el
   runner**. Para Codex, puedes ejecutar `codex login --device-auth` en esa
   máquina y completar la URL/código desde tu navegador habitual.
@@ -60,9 +62,9 @@ pnpm remote:build
 ```
 
 El runner remoto usa Node directamente: no descarga, no arranca ni necesita el
-binario de Electron. `pnpm remote:build` compila los módulos nativos para la
-versión de Node de esa máquina y produce `out/main/remote-runner.js` junto a la
-interfaz web que éste sirve.
+binario de Electron. `pnpm remote:build` fuerza la compilación nativa de
+`node-pty` y `better-sqlite3` para la versión de Node de esa máquina, y produce
+`out/main/remote-runner.js` junto a la interfaz web que éste sirve.
 
 Si ya hiciste un `pnpm install` que falló con un error de Electron, ejecuta en
 el checkout del runner:
@@ -72,6 +74,9 @@ rm -rf node_modules
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
 pnpm remote:build
 ```
+
+Si el runner ya fue construido pero muestra `Failed to load native module:
+pty.node`, no reinstales todo; basta con volver a ejecutar `pnpm remote:build`.
 
 ## Paso 2: crear la configuración privada
 

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "electron-rebuild -f -w node-pty,better-sqlite3 && electron-vite dev",
     "build": "electron-rebuild -f -w node-pty,better-sqlite3 && electron-vite build",
-    "remote:build": "pnpm rebuild node-pty better-sqlite3 && electron-vite build",
+    "remote:build": "npm_config_build_from_source=true pnpm rebuild node-pty && pnpm rebuild better-sqlite3 && electron-vite build",
     "remote:runner": "node out/main/remote-runner.js",
     "typecheck": "tsc --noEmit",
     "pretest": "pnpm rebuild better-sqlite3",
