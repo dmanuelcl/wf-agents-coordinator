@@ -5,6 +5,7 @@ import type { SessionRegistry } from "./session-registry";
 import type { SessionRuntimeStore, RunnerSessionRuntimeRecord } from "./session-runtime-store";
 import type { RunnerTerminalController } from "../ipc/register-terminal-ipc-handlers";
 import type { WorkSession } from "../../shared/workflow/work-session";
+import { INITIAL_CONDUCTOR_STATE } from "../../shared/workflow/conductor";
 
 function project(setupCommand = ""): ProjectRecord {
   return {
@@ -206,5 +207,83 @@ describe("createSessionOrchestrator", () => {
       expect.objectContaining({ persistKey: `${current.id}::role::reviewer`, launchCommand: "codex" }),
       expect.objectContaining({ persistKey: expect.stringContaining(`${current.id}::shell::`), cwd: "/repo" }),
     ]));
+  });
+
+  it("restores durable repository-root shells without looking up a WorkSession", async () => {
+    const store = memoryStore();
+    const creates: Parameters<RunnerTerminalController["create"]>[0][] = [];
+    const live = new Map<string, string>();
+    const getSession = vi.fn(async () => null);
+    let nextId = 0;
+    const terminals: RunnerTerminalController = {
+      create: async (input) => {
+        const sessionId = String(++nextId);
+        creates.push(input);
+        if (input.persistKey) live.set(input.persistKey, sessionId);
+        return { sessionId, reused: false };
+      },
+      replace: vi.fn(),
+      attach: async (key) => {
+        const sessionId = live.get(key);
+        return sessionId ? { sessionId, reused: true } : null;
+      },
+      kill: vi.fn(),
+      write: vi.fn(),
+    };
+    const makeOrchestrator = () => createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: store,
+      terminals,
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+
+    const repoId = "repo::project";
+    const firstRunner = makeOrchestrator();
+    const shell = await firstRunner.openShell({ sessionId: repoId, root: false });
+    expect(creates).toHaveLength(1);
+
+    // A service restart destroys the PTY, but not the durable root-shell tab.
+    live.clear();
+    await makeOrchestrator().resume();
+
+    expect(getSession).not.toHaveBeenCalled();
+    expect(creates).toHaveLength(2);
+    expect(creates[1]).toMatchObject({ persistKey: shell.key, cwd: "/repo" });
+  });
+
+  it("drops a runtime record whose session was deleted instead of failing startup", async () => {
+    const store = memoryStore();
+    await store.put({
+      sessionId: "deleted-session",
+      phase: "ready",
+      terminals: [],
+      error: null,
+      autoPilot: { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null },
+    });
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => null, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: store,
+      terminals: {
+        create: vi.fn(), replace: vi.fn(), attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+
+    await expect(orchestrator.resume()).resolves.toBeUndefined();
+    expect(await store.get("deleted-session")).toBeNull();
   });
 });

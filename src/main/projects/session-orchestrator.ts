@@ -138,9 +138,17 @@ export function createSessionOrchestrator(params: {
     const previous = workBySession.get(sessionId) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(task);
     workBySession.set(sessionId, next);
-    void next.finally(() => {
-      if (workBySession.get(sessionId) === next) workBySession.delete(sessionId);
-    });
+    // Do not use `finally` here. `finally` creates a second promise that
+    // rejects along with `next`; leaving that promise unobserved turns a
+    // recoverable restore error into Node's unhandled-rejection crash.
+    void next.then(
+      () => {
+        if (workBySession.get(sessionId) === next) workBySession.delete(sessionId);
+      },
+      () => {
+        if (workBySession.get(sessionId) === next) workBySession.delete(sessionId);
+      },
+    );
     return next;
   }
 
@@ -283,6 +291,28 @@ export function createSessionOrchestrator(params: {
     liveTerminal.set(created.sessionId, { sessionId, key: record.key });
   }
 
+  async function ensureRepositoryShells(sessionId: string): Promise<RunnerSessionRuntimeRecord> {
+    // `repo::<projectId>` is a deliberately synthetic session: it has shell
+    // tabs but no WorkSession row. Restoring it through sessionFor() therefore
+    // made every runner restart fail as soon as a root workspace was open.
+    const project = await projectFor(sessionId.slice("repo::".length));
+    const current = (await runtimeStore.get(sessionId)) ?? blankRuntime(sessionId, true);
+    current.phase = "ready";
+    current.error = null;
+
+    for (const terminal of current.terminals) {
+      if (terminal.kind === "shell") {
+        await ensureShell(terminal, sessionId, project.rootPath);
+      }
+    }
+    await publish(sessionId, true, current);
+    return current;
+  }
+
+  function isMissingRuntimeTarget(error: unknown): boolean {
+    return error instanceof Error && /^(Session|Project) not found: /.test(error.message);
+  }
+
   async function runAutopilot(sessionId: string): Promise<void> {
     await serial(sessionId, async () => {
       const checkpoint = latestCheckpoint.get(sessionId);
@@ -360,9 +390,26 @@ export function createSessionOrchestrator(params: {
     },
     async resume() {
       const records = await runtimeStore.list();
-      await Promise.all(records.map((record) => serial(record.sessionId, () => ensureSetupOrPrimary(record.sessionId)).catch((error: unknown) => {
-        console.error(`Could not resume session ${record.sessionId}:`, error);
-      })));
+      await Promise.all(records.map(async (record) => {
+        try {
+          await serial(record.sessionId, () => (
+            isRepoSessionId(record.sessionId)
+              ? ensureRepositoryShells(record.sessionId)
+              : ensureSetupOrPrimary(record.sessionId)
+          ));
+        } catch (error) {
+          console.error(`Could not resume session ${record.sessionId}:`, error);
+          // Session/project deletion leaves behind only runner intent. Remove
+          // that orphan so it cannot fail every subsequent service start.
+          if (isMissingRuntimeTarget(error)) {
+            try {
+              await runtimeStore.remove(record.sessionId);
+            } catch (cleanupError) {
+              console.error(`Could not remove stale runtime ${record.sessionId}:`, cleanupError);
+            }
+          }
+        }
+      }));
     },
     ensure(sessionId) {
       return serial(sessionId, () => ensureSetupOrPrimary(sessionId));
