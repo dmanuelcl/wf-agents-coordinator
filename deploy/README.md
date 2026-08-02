@@ -153,6 +153,11 @@ sólo la pestaña del navegador y vuelve a abrir la URL. El cliente se limita a
 mostrar la PTY y enviar tu teclado: ni F5, ni una segunda computadora, ni
 cerrar una pestaña reinician setup, agentes, tabs o Auto Pilot.
 
+La pestaña visible puede ajustar únicamente filas y columnas para aprovechar su
+pantalla. Es un `SIGWINCH` normal de terminal: no crea ni reinicia procesos,
+no reenvía prompts y no cambia el estado de la sesión. Al abrir la misma
+terminal en otra pantalla, esa pantalla visible pasa a ser la geometría activa.
+
 ## Paso 4: darle una URL privada con Tailscale
 
 Con el runner funcionando, en esa misma máquina ejecuta una vez:

@@ -170,21 +170,46 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     const disposables: Array<() => void> = [];
     let runnerOwnedGeometry = false;
     let resizeAnimationFrame: number | null = null;
+    let geometryTimer: ReturnType<typeof setTimeout> | null = null;
+    let geometryRequestInFlight = false;
+    let pendingGeometry: { cols: number; rows: number } | null = null;
+    let lastAppliedGeometry: string | null = null;
 
-    function fitRunnerDisplay(): void {
-      // Keep the terminal's logical grid equal to the runner PTY, but scale
-      // the local glyphs to the available pane. This is presentation only:
-      // it cannot make a second browser (or an F5) resize a full-screen TUI.
+    function queueRunnerDisplayGeometry(): void {
+      if (!runnerOwnedGeometry || !ptyId) return;
       const proposed = fitAddon.proposeDimensions();
-      if (!proposed || term.cols === 0 || term.rows === 0) return;
-      const currentFontSize = term.options.fontSize ?? 12;
-      const scale = Math.min(proposed.cols / term.cols, proposed.rows / term.rows);
-      // Leave a small visual margin rather than making a 16" client stretch
-      // the runner's fixed grid edge-to-edge with oversized glyphs.
-      const nextFontSize = Math.max(8, Math.min(22, currentFontSize * scale * 0.9));
-      if (Math.abs(nextFontSize - currentFontSize) >= 0.1) {
-        term.options.fontSize = nextFontSize;
-      }
+      if (!proposed) return;
+      const key = `${proposed.cols}:${proposed.rows}`;
+      if (key === lastAppliedGeometry && !geometryRequestInFlight) return;
+      pendingGeometry = proposed;
+      if (geometryTimer || geometryRequestInFlight) return;
+      geometryTimer = setTimeout(() => {
+        geometryTimer = null;
+        const geometry = pendingGeometry;
+        pendingGeometry = null;
+        const terminalId = ptyId;
+        if (!geometry || !terminalId || disposed) return;
+        geometryRequestInFlight = true;
+        void window.agentCoordinator.terminal
+          .setDisplayGeometry(terminalId, geometry.cols, geometry.rows)
+          .then((snapshot) => {
+            if (disposed || ptyId !== terminalId || !snapshot) return;
+            const appliedKey = `${snapshot.cols}:${snapshot.rows}`;
+            lastAppliedGeometry = appliedKey;
+            if (term.cols !== snapshot.cols || term.rows !== snapshot.rows) {
+              // Keep output that may have arrived while the resize RPC was in
+              // flight. Full-screen TUIs receive SIGWINCH and redraw normally.
+              term.resize(snapshot.cols, snapshot.rows);
+            }
+          })
+          .catch((error: unknown) => {
+            if (!disposed) setWarnings((current) => [...current, `Could not resize runner terminal: ${String(error)}`]);
+          })
+          .finally(() => {
+            geometryRequestInFlight = false;
+            if (pendingGeometry && !disposed) queueRunnerDisplayGeometry();
+          });
+      }, 80);
     }
 
     function fitAndResizeLiveTerminal(): void {
@@ -192,12 +217,14 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // remote PTY. It would make a full-screen TUI permanently adopt a tiny
       // geometry until the next real resize.
       if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
-      // A remote PTY has one runner-owned geometry. Fitting a fresh browser
-      // view must never resize that PTY (or a full-screen agent inside it).
       if (runnerOwnedGeometry) {
-        fitRunnerDisplay();
+        // Resizing is deliberately a presentation event. The existing runner
+        // PTY receives SIGWINCH, but its process, prompt and session survive.
+        queueRunnerDisplayGeometry();
         return;
       }
+      // Before attaching, this is only a local measurement surface. It must
+      // never create a PTY or decide an agent command.
       fitAddon.fit();
     }
 
@@ -289,22 +316,12 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         if (attached) {
           ptyId = attached.sessionId;
           ptyIdRef.current = attached.sessionId;
-          const proposed = fitAddon.proposeDimensions();
-          let runnerSnapshot: TerminalScreenSnapshot | null = null;
-          if (proposed) {
-            // A runner from before this protocol can still be viewed; it just
-            // keeps its existing grid instead of failing the whole attach.
-            runnerSnapshot = await window.agentCoordinator.terminal
-              .claimInitialGeometry(attached.sessionId, proposed.cols, proposed.rows)
-              .catch(() => null);
-          }
-          if (disposed) return;
-          if (runnerSnapshot ?? attached.snapshot) {
+          if (attached.snapshot) {
             // The runner owns a headless terminal model of this PTY. Hydrate
-            // the new view from it. The server may accept the *first* view's
-            // initial drawing bounds, but no later reload/view can resize it.
+            // the new view from it, then update only display rows/columns for
+            // the currently visible client.
             runnerOwnedGeometry = true;
-            restoreRunnerScreen(term, runnerSnapshot ?? attached.snapshot!);
+            restoreRunnerScreen(term, attached.snapshot);
             scheduleFitAndResize();
           } else if (!attached.alternateScreen) {
             const saved = await window.agentCoordinator.terminal.readScrollback(persistKey);
@@ -355,12 +372,19 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       fitAndResizeLiveTerminal();
     });
     resizeObserver.observe(terminalContainer);
+    const onWindowFocus = () => scheduleFitAndResize();
+    const onPointerDown = () => scheduleFitAndResize();
+    window.addEventListener("focus", onWindowFocus);
+    terminalContainer.addEventListener("pointerdown", onPointerDown);
     scheduleFitAndResize();
 
     return () => {
       disposed = true;
       if (resizeAnimationFrame !== null) cancelAnimationFrame(resizeAnimationFrame);
+      if (geometryTimer !== null) clearTimeout(geometryTimer);
       resizeObserver.disconnect();
+      window.removeEventListener("focus", onWindowFocus);
+      terminalContainer.removeEventListener("pointerdown", onPointerDown);
       disposables.forEach((dispose) => dispose());
       ptyIdRef.current = null;
       term.dispose();

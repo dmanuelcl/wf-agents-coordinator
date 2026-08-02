@@ -92,8 +92,8 @@ export function createAgentCoordinatorApi(
     },
     terminal: {
       attach: (persistKey) => invoke(TERMINAL_IPC_CHANNELS.attach, persistKey) as ReturnType<AgentCoordinatorApi["terminal"]["attach"]>,
-      claimInitialGeometry: (sessionId, cols, rows) =>
-        invoke(TERMINAL_IPC_CHANNELS.claimInitialGeometry, sessionId, cols, rows) as ReturnType<AgentCoordinatorApi["terminal"]["claimInitialGeometry"]>,
+      setDisplayGeometry: (sessionId, cols, rows) =>
+        invoke(TERMINAL_IPC_CHANNELS.setDisplayGeometry, sessionId, cols, rows) as ReturnType<AgentCoordinatorApi["terminal"]["setDisplayGeometry"]>,
       write: (sessionId, data) => transport.emit(TERMINAL_IPC_CHANNELS.write, sessionId, data),
       readScrollback: (persistKey) => invoke(TERMINAL_IPC_CHANNELS.readScrollback, persistKey) as ReturnType<AgentCoordinatorApi["terminal"]["readScrollback"]>,
       onData: (callback) => on<TerminalDataEvent>(TERMINAL_IPC_CHANNELS.data, callback),
