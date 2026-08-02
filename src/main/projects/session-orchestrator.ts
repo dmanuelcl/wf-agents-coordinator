@@ -62,7 +62,9 @@ export interface SessionOrchestrator {
 }
 
 function primaryRole(session: WorkSession): SessionAgentRole {
-  return session.kind === "review" ? "reviewer" : session.kind === "pr-fix" ? "implementer" : "architect";
+  if (session.kind === "review") return "reviewer";
+  if (session.kind === "pr-fix") return session.prFixDiagnoseFirst ? "architect" : "implementer";
+  return "architect";
 }
 
 function roleKey(sessionId: string, role: SessionAgentRole): string {
@@ -188,7 +190,10 @@ export function createSessionOrchestrator(params: {
       persistKey: terminal.key,
       initialInput: launch.wfCommand === null ? null : {
         text: launch.wfCommand,
-        submit: session.kind === "review" || (session.kind === "pr-fix" && terminal.role === "implementer"),
+        submit:
+          session.kind === "review" ||
+          (session.kind === "pr-fix" &&
+            (terminal.role === "implementer" || (session.prFixDiagnoseFirst === true && terminal.role === "architect"))),
       },
     });
     liveTerminal.set(created.sessionId, {
@@ -417,7 +422,7 @@ export function createSessionOrchestrator(params: {
     openRole(sessionId, role) {
       return serial(sessionId, async () => {
         const session = await sessionFor(sessionId);
-        if (!isSessionRoleUnlocked(session.kind, role, session.checkpointPath !== null)) {
+        if (!isSessionRoleUnlocked(session.kind, role, session.checkpointPath !== null, session.prFixDiagnoseFirst === true)) {
           throw new Error(`Role ${role} is not unlocked for this session.`);
         }
         const runtime = await ensureSetupOrPrimary(sessionId);
@@ -545,7 +550,7 @@ export function createSessionOrchestrator(params: {
         // Imported workspace layout can name stale or locked tabs. It is an
         // advisory view preference, never permission to bypass workflow gates.
         for (const role of intent.roles) {
-          if (!isSessionRoleUnlocked(session.kind, role, session.checkpointPath !== null)) continue;
+          if (!isSessionRoleUnlocked(session.kind, role, session.checkpointPath !== null, session.prFixDiagnoseFirst === true)) continue;
           let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === role);
           if (!terminal) {
             terminal = { key: roleKey(sessionId, role), kind: "agent", role, mode: "fresh", generation: 0 };

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPrFixArchitectKickoff,
   buildPrFixCompletionCheckpoint,
+  buildPrFixDiagnosisCheckpoint,
   buildPrFixKickoff,
   buildPrFixRoleCommand,
   prFixCompletionCheckpointPath,
@@ -94,6 +96,28 @@ describe("buildPrFixCompletionCheckpoint", () => {
   });
 });
 
+describe("buildPrFixDiagnosisCheckpoint", () => {
+  it("produces a valid Architect → Implementer checkpoint", () => {
+    const checkpointPath = prFixCompletionCheckpointPath("fix-pr-42");
+    const markdown = buildPrFixDiagnosisCheckpoint({
+      slug: "fix-pr-42",
+      branch: "feature/contacts",
+      worktreePath: "/repo/.worktrees/fix-pr-42",
+      completionCheckpoint: checkpointPath,
+      contextFile: ".agent-pr-context.md",
+      fixBaseSha: "abc123",
+    });
+    const parsed = parseCheckpointMarkdown({ checkpointPath, markdown });
+
+    expect(parsed.next?.role).toBe("implementer");
+    expect(parsed.next?.command).toBe(`wf implement ${checkpointPath}`);
+    expect(parsed.next?.sessionLane).toBe("fix/implementer");
+    expect(parsed.warnings).toEqual([]);
+    expect(markdown).toContain("# Plan de corrección");
+    expect(markdown).toContain("architect · DIAGNOSE");
+  });
+});
+
 describe("buildPrFixRoleCommand", () => {
   const params = {
     title: "Add contacts",
@@ -112,6 +136,16 @@ describe("buildPrFixRoleCommand", () => {
     expect(out).toContain("Add contacts");
     expect(out).toContain(".agent-pr-context.md");
     expect(out).not.toMatch(/^wf implement /);
+  });
+
+  it("starts an opted-in PR fix in Architect and leaves Implementer checkpoint-driven", () => {
+    const architect = buildPrFixRoleCommand({ ...params, role: "architect", checkpointPath: null, diagnoseFirst: true });
+    const implementer = buildPrFixRoleCommand({ ...params, role: "implementer", checkpointPath: null, diagnoseFirst: true });
+
+    expect(architect).toBe(buildPrFixArchitectKickoff(params));
+    expect(architect).toContain("No implementes cambios");
+    expect(architect).toContain("desbloquea al Implementer");
+    expect(implementer).toBeNull();
   });
 
   it("routes the reviewer through the canonical checkpoint workflow", () => {

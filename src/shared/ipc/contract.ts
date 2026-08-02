@@ -326,7 +326,7 @@ export interface AgentCoordinatorApi {
     create(projectId: string, input: SessionCreateInput): Promise<WorkSession>;
     createReview(projectId: string, input: ReviewSessionCreateInput): Promise<WorkSession>;
     createReviewFromPr(projectId: string, input: { url: string }): Promise<WorkSession>;
-    createFixFromPr(projectId: string, input: { url: string }): Promise<WorkSession>;
+    createFixFromPr(projectId: string, input: { url: string; diagnoseFirst?: boolean }): Promise<WorkSession>;
     pushFixBranch(sessionId: string): Promise<{ output: string }>;
     postReview(sessionId: string): Promise<{ commentUrl: string }>;
     reviewArtifactExists(sessionId: string): Promise<boolean>;

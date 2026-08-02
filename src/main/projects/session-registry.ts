@@ -52,6 +52,7 @@ export interface SessionRegistry {
     branch: string; // the PR source branch (writable checkout)
     baseBranch: string; // diff context (e.g. origin/<target>)
     pr: PrLink;
+    diagnoseFirst?: boolean;
     // The PR's head commit SHA (from the host API); verified after checkout — see above.
     expectedHeadSha?: string;
   }): Promise<WorkSession>;
@@ -382,7 +383,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       });
     },
 
-    createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, expectedHeadSha }) {
+    createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, diagnoseFirst = false, expectedHeadSha }) {
       return runExclusive(async () => {
         const { sessionName, baseSlug } = sessionIdentity(name);
 
@@ -440,6 +441,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
             branch,
             baseBranch,
             pr,
+            prFixDiagnoseFirst: diagnoseFirst,
             worktreePath,
             checkpointPath: null,
             setupDone: false,

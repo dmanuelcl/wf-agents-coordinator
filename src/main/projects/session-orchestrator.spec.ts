@@ -286,4 +286,55 @@ describe("createSessionOrchestrator", () => {
     await expect(orchestrator.resume()).resolves.toBeUndefined();
     expect(await store.get("deleted-session")).toBeNull();
   });
+
+  it("starts an opted-in PR fix in Architect before unlocking Implementer", async () => {
+    const current = session({
+      kind: "pr-fix",
+      setupDone: true,
+      prFixDiagnoseFirst: true,
+      pr: { host: "bitbucket", workspace: "workspace", repo: "repo", prId: "42", url: "https://example.test/pr/42", lastReviewedSha: null },
+    });
+    const creates: Parameters<RunnerTerminalController["create"]>[0][] = [];
+    const launchedRoles: string[] = [];
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async (input) => {
+          creates.push(input);
+          return { sessionId: "architect-pty", reused: false };
+        },
+        replace: vi.fn(), attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async (_sessionId, role) => {
+      launchedRoles.push(role);
+      return {
+        agentCommand: "codex",
+        agentKind: "codex",
+        environment: {},
+        wfCommand: "diagnose this PR",
+        cwd: current.worktreePath,
+        sessionUuid: null,
+        warnings: [],
+      };
+    });
+
+    await orchestrator.ensure(current.id);
+
+    expect(launchedRoles).toEqual(["architect"]);
+    expect(creates[0]).toMatchObject({
+      persistKey: `${current.id}::role::architect`,
+      initialInput: { text: "diagnose this PR", submit: true },
+    });
+    await expect(orchestrator.openRole(current.id, "implementer")).rejects.toThrow(/not unlocked/i);
+  });
 });

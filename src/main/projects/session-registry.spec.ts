@@ -248,9 +248,11 @@ describe("SessionRegistry", () => {
       branch: "feature/fixme",
       baseBranch: "main",
       pr: { host: "bitbucket", workspace: "a", repo: "b", prId: "1", url: "u", lastReviewedSha: null },
+      diagnoseFirst: true,
     });
 
     expect(session.kind).toBe("pr-fix");
+    expect(session.prFixDiagnoseFirst).toBe(true);
     expect(session.branch).toBe("feature/fixme");
     expect(existsSync(session.worktreePath)).toBe(true);
     expect(() => execFileSync("git", ["check-ignore", "-q", PR_CONTEXT_ARTIFACT], { cwd: session.worktreePath })).not.toThrow();
@@ -259,6 +261,9 @@ describe("SessionRegistry", () => {
       .toString()
       .trim();
     expect(head).toBe("feature/fixme");
+
+    const reloaded = await registry.getSession({ sessionId: session.id });
+    expect(reloaded?.prFixDiagnoseFirst).toBe(true);
   });
 
   it("markSetupDone flips setupDone (so setup runs once per worktree)", async () => {

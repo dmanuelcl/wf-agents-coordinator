@@ -12,6 +12,10 @@ describe("agentRolesForSessionKind", () => {
     expect(agentRolesForSessionKind("pr-fix")).toEqual(["implementer", "reviewer"]);
   });
 
+  it("adds Architect only when a PR fix starts with diagnosis", () => {
+    expect(agentRolesForSessionKind("pr-fix", true)).toEqual(["architect", "implementer", "reviewer"]);
+  });
+
   it("keeps PR review reviewer-only and regular workflows at three roles", () => {
     expect(agentRolesForSessionKind("review")).toEqual(["reviewer"]);
     expect(agentRolesForSessionKind("feature")).toEqual(["architect", "implementer", "reviewer"]);
@@ -24,6 +28,14 @@ describe("isSessionRoleUnlocked", () => {
     expect(isSessionRoleUnlocked("pr-fix", "implementer", false)).toBe(true);
     expect(isSessionRoleUnlocked("pr-fix", "reviewer", false)).toBe(false);
     expect(isSessionRoleUnlocked("pr-fix", "reviewer", true)).toBe(true);
+  });
+
+  it("starts diagnose-first PR fixes in Architect and unlocks the handoff after its checkpoint", () => {
+    expect(isSessionRoleUnlocked("pr-fix", "architect", false, true)).toBe(true);
+    expect(isSessionRoleUnlocked("pr-fix", "implementer", false, true)).toBe(false);
+    expect(isSessionRoleUnlocked("pr-fix", "reviewer", false, true)).toBe(false);
+    expect(isSessionRoleUnlocked("pr-fix", "implementer", true, true)).toBe(true);
+    expect(isSessionRoleUnlocked("pr-fix", "reviewer", true, true)).toBe(true);
   });
 
   it("preserves the existing gates for regular workflows and PR review", () => {

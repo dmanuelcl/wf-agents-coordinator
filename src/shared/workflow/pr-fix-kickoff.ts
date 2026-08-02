@@ -81,6 +81,85 @@ PR comment outcomes (same order as \`${params.contextFile}\`):
 - <comment identifier/location> — <resolved, already resolved, obsolete, or still open; include evidence>`;
 }
 
+/** Valid Architect → Implementer handoff for the optional diagnose-first flow. */
+export function buildPrFixDiagnosisCheckpoint(params: {
+  slug: string;
+  branch: string;
+  worktreePath: string;
+  completionCheckpoint: string;
+  contextFile: string;
+  fixBaseSha?: string | null;
+}): string {
+  const baseline = params.fixBaseSha ?? "<full PR head SHA captured before diagnosis>";
+  return `---
+feature: PR fix
+slug: ${params.slug}
+kind: fix
+branch: ${params.branch}
+worktree: ${params.worktreePath}
+status: IN_PROGRESS
+active: none
+---
+
+# ▶ NEXT
+- **Rol:** implementer
+- **Corre:** \`wf implement ${params.completionCheckpoint}\`
+- **Session lane:** \`fix/implementer\`
+- **Ejecuta sesión en:** capacidad alta (ejecución) · esfuerzo moderado · cwd \`.\`
+- **Tarea:** Ejecutar el plan de corrección de comentarios del PR, probarlo y dejarlo listo para PR review.
+
+# Plans ledger
+| # | Plan | IMPLEMENT | ARCH_REVIEW | PR_REVIEW | Estado |
+|---|------|-----------|-------------|-----------|--------|
+| 1 | PR comments correction plan | ⏳ | – | – | PLANNED |
+
+# Plan de corrección
+
+**Alcance de revisión:**
+- **Baseline commit:** ${baseline}
+- **Comentarios fuente:** \`${params.contextFile}\`
+- **Archivos previstos:** <rutas exactas>
+
+#### Paso 1 — <acción concreta> [origen: <comentario del PR>]
+
+- **Archivos:** <rutas exactas>
+- **Qué hacer:** <cambio ejecutable, sin decisiones pendientes>
+- **Aceptación:** <prueba o evidencia concreta>
+
+**Plan sufficiency:** PASS — executable by the Implementer without inventing.
+
+# Log
+
+## <YYYY-MM-DD HH:mm> · architect · DIAGNOSE · PR comments → ✅
+
+El Architect leyó \`${params.contextFile}\`, inspeccionó el código y convirtió todos los comentarios aplicables en el plan ejecutable anterior.`;
+}
+
+/**
+ * The Architect has the PR discussion but must not edit the branch. Its only
+ * output is the durable plan/checkpoint that makes the Implementer available.
+ */
+export function buildPrFixArchitectKickoff(p: PrFixKickoffParams): string {
+  const header = `Vas a diagnosticar los comentarios del PR «${p.title}» (${p.source} → ${p.target}) antes de implementar.`;
+  const context =
+    `Lee COMPLETO \`${p.contextFile}\` en la raíz del worktree; contiene la conversación completa del PR, incluidos comentarios inline. ` +
+    "Si se trunca, léelo por partes hasta llegar al final. Después inspecciona el código y el diff necesario para entender cada comentario.";
+  const scope =
+    "No implementes cambios, no hagas commit y no hagas push. Convierte los comentarios aplicables en un plan concreto y ordenado, " +
+    "con archivos, cambios, pruebas y criterios de aceptación. Marca explícitamente los comentarios ya resueltos u obsoletos con evidencia.";
+  const checkpoint = buildPrFixDiagnosisCheckpoint({
+    ...p,
+    branch: p.source,
+  });
+  const handoff =
+    `Como último paso escribe el checkpoint \`${p.completionCheckpoint}\` usando esta plantilla. Reemplaza todo \`<...>\` con información observada ` +
+    "y conserva los encabezados, el ledger y el bloque ▶ NEXT exactamente: su creación desbloquea al Implementer. " +
+    "El archivo es gitignored; no lo añadas al commit.\n\n" +
+    `\`\`\`markdown\n${checkpoint}\n\`\`\``;
+
+  return [header, context, scope, handoff].join("\n\n");
+}
+
 /**
  * Assemble the implementer kickoff for a PR-fix session. The potentially large
  * PR conversation lives in contextFile so the terminal prompt cannot truncate
@@ -116,17 +195,22 @@ export function buildPrFixKickoff(p: PrFixKickoffParams): string {
 }
 
 /**
- * A PR fix has one custom entrypoint only: the first implementer kickoff. Once
- * its checkpoint exists, every stage follows the canonical workflow command so
- * NEXT, ledger, findings and correction loops all share one source of truth.
+ * A PR fix has one custom entrypoint: either its initial Implementer kickoff
+ * or its optional Architect diagnosis. Once its checkpoint exists, every stage
+ * follows the canonical workflow command so NEXT, ledger, findings and
+ * correction loops all share one source of truth.
  */
 export function buildPrFixRoleCommand(
   params: PrFixKickoffParams & {
     role: SessionAgentRole;
     checkpointPath: string | null;
+    diagnoseFirst?: boolean;
   },
 ): string | null {
-  if (params.role === "implementer" && !params.checkpointPath) {
+  if (params.diagnoseFirst && params.role === "architect" && !params.checkpointPath) {
+    return buildPrFixArchitectKickoff(params);
+  }
+  if (!params.diagnoseFirst && params.role === "implementer" && !params.checkpointPath) {
     return buildPrFixKickoff(params);
   }
   return wfCommandForSessionRole(params.role, params.checkpointPath);

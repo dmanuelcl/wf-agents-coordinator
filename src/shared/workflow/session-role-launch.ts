@@ -14,8 +14,15 @@ const SESSION_ROLES_BY_KIND: Record<WorkSessionKind, readonly SessionAgentRole[]
   "pr-fix": ["implementer", "reviewer"],
 };
 
-/** Agent tabs exposed by each workflow. PR fixes implement first, then review. */
-export function agentRolesForSessionKind(kind: WorkSessionKind): readonly SessionAgentRole[] {
+/**
+ * Agent tabs exposed by each workflow. A normal PR fix implements first;
+ * diagnose-first PR fixes add Architect as their explicit planning stage.
+ */
+export function agentRolesForSessionKind(
+  kind: WorkSessionKind,
+  prFixDiagnoseFirst = false,
+): readonly SessionAgentRole[] {
+  if (kind === "pr-fix" && prFixDiagnoseFirst) return SESSION_AGENT_ROLES;
   return SESSION_ROLES_BY_KIND[kind];
 }
 
@@ -24,9 +31,13 @@ export function isSessionRoleUnlocked(
   kind: WorkSessionKind,
   role: SessionAgentRole,
   hasCheckpoint: boolean,
+  prFixDiagnoseFirst = false,
 ): boolean {
   if (kind === "review") return role === "reviewer";
-  if (kind === "pr-fix") return role === "implementer" || (role === "reviewer" && hasCheckpoint);
+  if (kind === "pr-fix") {
+    if (!prFixDiagnoseFirst) return role === "implementer" || (role === "reviewer" && hasCheckpoint);
+    return role === "architect" || hasCheckpoint;
+  }
   return role === "architect" || hasCheckpoint;
 }
 

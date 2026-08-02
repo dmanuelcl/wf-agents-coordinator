@@ -34,6 +34,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [reviewSource, setReviewSource] = useState<ReviewSource>("manual");
   const [prUrl, setPrUrl] = useState("");
+  const [prFixDiagnoseFirst, setPrFixDiagnoseFirst] = useState(false);
   const [preview, setPreview] = useState<ResolvedPr | null>(null);
   const [resolving, setResolving] = useState(false);
   const [hasVcsCreds, setHasVcsCreds] = useState(false);
@@ -97,7 +98,10 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     try {
       let session: WorkSession;
       if (kind === "pr-fix") {
-        session = await window.agentCoordinator.sessions.createFixFromPr(projectId, { url: prUrl.trim() });
+        session = await window.agentCoordinator.sessions.createFixFromPr(projectId, {
+          url: prUrl.trim(),
+          diagnoseFirst: prFixDiagnoseFirst,
+        });
       } else if (kind === "review" && linkMode) {
         session = await window.agentCoordinator.sessions.createReviewFromPr(projectId, { url: prUrl.trim() });
       } else if (kind === "review") {
@@ -180,6 +184,22 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
 
               {kind === "pr-fix" && !hasVcsCreds && (
                 <p className="field-hint">PR fix needs a VCS host + API token in the project settings.</p>
+              )}
+
+              {kind === "pr-fix" && (
+                <div className="new-session-field">
+                  <label className="new-session-check">
+                    <input
+                      type="checkbox"
+                      checked={prFixDiagnoseFirst}
+                      onChange={(event) => setPrFixDiagnoseFirst(event.target.checked)}
+                    />
+                    <span>Diagnose and plan before implementing</span>
+                  </label>
+                  <p className="field-hint">
+                    Architect reads the PR discussion and writes a correction plan first; then Implementer executes it and Reviewer validates it.
+                  </p>
+                </div>
               )}
 
               {linkMode ? (

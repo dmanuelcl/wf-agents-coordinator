@@ -72,7 +72,7 @@ const ARCHITECT_TAB_LABEL: Record<WorkSessionKind, string> = {
   feature: "Architect",
   fix: "Diagnose",
   review: "Reviewer",
-  "pr-fix": "Implementer",
+  "pr-fix": "Diagnose",
 };
 
 function roleLabel(role: SessionAgentRole, kind: WorkSessionKind): string {
@@ -88,6 +88,9 @@ function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: 
     return "This review auto-runs the kickoff against the branch when the agent loads. When it's done, use `Post to PR` (or `Post to Slack`) to publish it.";
   }
   if (kind === "pr-fix") {
+    if (role === "architect") {
+      return "Architect reads the PR discussion and writes the correction-plan checkpoint. It does not edit, commit, or push; that checkpoint unlocks Implementer.";
+    }
     if (role === "implementer") {
       if (hasCheckpoint) {
         return "The PR Fix is now checkpoint-driven. When ▶ NEXT returns to Implementer, run `wf implement <checkpoint>` in this agent and keep the same findings and review scope.";
@@ -444,11 +447,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const kind = session.kind;
   const reviewMode = kind === "review";
   const fixMode = kind === "pr-fix";
+  const prFixDiagnoseFirst = session.prFixDiagnoseFirst === true;
   // PR review has one reviewer; PR fix starts with Implementer and exposes a
   // second, on-demand Reviewer stage.
   const prSession = reviewMode || fixMode;
-  const prPrimaryRole: SessionAgentRole = fixMode ? "implementer" : "reviewer";
-  const sessionAgentRoles = agentRolesForSessionKind(kind);
+  const prPrimaryRole: SessionAgentRole = fixMode ? (prFixDiagnoseFirst ? "architect" : "implementer") : "reviewer";
+  const sessionAgentRoles = agentRolesForSessionKind(kind, prFixDiagnoseFirst);
   const hasCheckpoint = session.checkpointPath !== null;
 
   // A fresh repo workspace opens with exactly one shell, seeded here (not via an
@@ -463,7 +467,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     if (!repoMode && !session.setupDone) return "setup";
     const restoredActive = initialLayout?.activeTab;
     if (restoredActive === "setup") return prSession ? prPrimaryRole : "architect";
-    if (fixMode && !hasCheckpoint && restoredActive === "reviewer") return "implementer";
+    if (fixMode && !hasCheckpoint && restoredActive === "reviewer") return prPrimaryRole;
     return restoredActive ?? seedRepoShell?.id ?? (prSession ? prPrimaryRole : "architect");
   });
   // Agent tabs opened at least once. Their runner-owned terminals stay mounted
@@ -475,7 +479,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       : prSession
         ? initialPrTabs(
             initialLayout,
-            fixMode && !hasCheckpoint ? ["implementer"] : sessionAgentRoles,
+            fixMode && !hasCheckpoint ? [prPrimaryRole] : sessionAgentRoles,
             prPrimaryRole,
           )
         : initialRoleTabs(initialLayout),
@@ -631,11 +635,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   }, []);
 
   function isRoleDisabled(role: SessionAgentRole): boolean {
-    return !isSessionRoleUnlocked(kind, role, hasCheckpoint);
+    return !isSessionRoleUnlocked(kind, role, hasCheckpoint, prFixDiagnoseFirst);
   }
 
   const disabledHint = fixMode
-    ? "Waiting for Implementer to finish, test, commit, and write the review checkpoint."
+    ? prFixDiagnoseFirst
+      ? "Waiting for Architect to finish the diagnosis and write the correction-plan checkpoint."
+      : "Waiting for Implementer to finish, test, commit, and write the review checkpoint."
     : "Finish in Architect first — the checkpoint isn't created yet.";
 
   function selectRole(role: SessionAgentRole): void {

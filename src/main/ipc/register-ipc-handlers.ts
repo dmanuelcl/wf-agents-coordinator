@@ -250,10 +250,15 @@ export function registerIpcHandlers(params: {
     project: ProjectRecord,
     role: SessionAgentRole,
   ): Promise<string | null> {
-    // PR fix: the initial implementer gets the PR-specific kickoff. From the
+    // PR fixes either start directly in Implementer or, when selected at
+    // creation, let Architect produce the initial correction plan. From the
     // first checkpoint onward every role follows wf/NEXT as the sole authority.
     // Refresh the referenced artifact in case new PR comments arrived meanwhile.
-    if (session.kind === "pr-fix" && session.pr && (role === "implementer" || role === "reviewer")) {
+    if (
+      session.kind === "pr-fix" &&
+      session.pr &&
+      (role === "implementer" || role === "reviewer" || (role === "architect" && session.prFixDiagnoseFirst === true))
+    ) {
       await refreshPrContextArtifact(session, project, "fix");
       return buildPrFixRoleCommand({
         title: session.name,
@@ -266,6 +271,7 @@ export function registerIpcHandlers(params: {
         completionCheckpoint: prFixCompletionCheckpointPath(session.slug),
         role,
         checkpointPath: session.checkpointPath,
+        diagnoseFirst: session.prFixDiagnoseFirst === true,
       });
     }
 
@@ -509,7 +515,11 @@ export function registerIpcHandlers(params: {
     return session;
   });
 
-  ipc.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (_event, projectId: string, input: { url: string }) => {
+  ipc.handle(IPC_CHANNELS.sessionsCreateFixFromPr, async (
+    _event,
+    projectId: string,
+    input: { url: string; diagnoseFirst?: boolean },
+  ) => {
     const project = await findProject(projectRegistry, projectId);
     if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
     const ref = parsePrUrl(project.vcs.host, input.url);
@@ -531,6 +541,7 @@ export function registerIpcHandlers(params: {
         lastReviewedSha: null,
         fixBaseSha: resolved.headSha,
       },
+      diagnoseFirst: input.diagnoseFirst === true,
       expectedHeadSha: resolved.headSha,
     });
     // The reviewer remains gated until the implementer writes this session's

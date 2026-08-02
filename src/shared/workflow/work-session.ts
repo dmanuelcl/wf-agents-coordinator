@@ -47,6 +47,10 @@ export interface WorkSession {
   baseBranch: string | null;
   // Set for a review session created from a PR link; null otherwise.
   pr: PrLink | null;
+  // PR fixes normally start directly in Implementer. When selected at
+  // creation, Architect first turns the PR discussion into a durable,
+  // executable correction plan before Implementer is unlocked.
+  prFixDiagnoseFirst?: boolean;
   worktreePath: string;
   checkpointPath: string | null;
   // Whether the project's setup command has already run, or its build artifacts
