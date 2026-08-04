@@ -14,9 +14,29 @@ Los dos son compatibles.
 | Tu Mac de 48/32 GB | Empezar ahora, sin comprar VPS | `launchd` (`com.agent-coordinator.runner.plist`) |
 | Un servidor Linux | Uso permanente con mucha RAM/disco | `systemd` (`agent-coordinator-runner.service`) |
 
-No hay diferencia funcional: el código, las sesiones y la URL de Tailscale son
-los mismos. Linux es una recomendación operativa para un servidor dedicado, no
-un requisito. Para la primera prueba, usa tu Mac más potente.
+No hay diferencia funcional: el código, las sesiones y la URL pública son los
+mismos. Linux es una recomendación operativa para un servidor dedicado, no un
+requisito. Para la primera prueba, usa tu Mac más potente.
+
+## ¿Tailscale o Cloudflare Tunnel?
+
+El runner escucha **sólo en `127.0.0.1:4765`** y nunca se debe exponer
+directamente. Delante va un proxy, y hay dos opciones soportadas:
+
+| | **Tailscale Serve** | **Cloudflare Tunnel** |
+| --- | --- | --- |
+| URL | `https://maquina.tu-tailnet.ts.net` | **tu propio dominio**, p. ej. `https://coordinator.tudominio.com` |
+| Quién puede llegar | sólo dispositivos de tu tailnet | **todo Internet** (salvo que pongas Cloudflare Access delante) |
+| Requiere | Tailscale en runner y cliente | una cuenta de Cloudflare con tu dominio |
+| Cliente sin instalar nada | no (el dispositivo debe estar en el tailnet) | sí, cualquier navegador |
+| Autenticación | la red misma, más el token | el token, más Access si lo configuras |
+
+Usa **Tailscale** si te vale una URL privada: es el camino más corto y el más
+seguro por defecto. Usa **Cloudflare Tunnel** si quieres dominio propio o
+entrar desde un dispositivo que no puede unirse al tailnet — asumiendo el
+punto de seguridad que se explica en el Paso 4B.
+
+Ambas rutas terminan igual: abres la URL, escribes el token y trabajas.
 
 ## Qué queda en cada máquina
 
@@ -25,21 +45,22 @@ Mac/servidor que ejecuta el runner
   ├─ repositorios y worktrees
   ├─ agentes y sus OAuth (Codex, Claude, etc.)
   ├─ estado de Coordinator, intentos de terminal y scrollback
-  └─ Tailscale Serve → URL privada HTTPS
+  └─ Tailscale Serve  ó  cloudflared → URL HTTPS
 
 Tu laptop/iPad/navegador
   └─ sólo la interfaz; no conserva agentes ni repositorios
 ```
 
-Tailscale es el proxy privado entre ambas partes. El runner escucha únicamente
-en `127.0.0.1:4765`: no se abre ningún puerto del router ni de Internet.
+El proxy es lo único que cruza la red. El runner escucha únicamente en
+`127.0.0.1:4765`: no se abre ningún puerto del router, y `cloudflared` o
+`tailscaled` corren en esa misma máquina y se conectan al loopback.
 
 ## Antes de empezar
 
 En la máquina que será runner necesitas:
 
 - este repositorio en la rama `feature/remote-coordinator`;
-- Node, pnpm, Git y Tailscale;
+- Node, pnpm, Git, y **Tailscale o `cloudflared`** según la opción que elijas;
 - los CLIs de los agentes que quieras usar;
 - herramientas de compilación nativa. En Ubuntu/Debian: `sudo apt-get install
   -y build-essential python3`;
@@ -127,7 +148,7 @@ En Linux cambia la ruta de estado, por ejemplo a:
 AGENT_COORDINATOR_STATE_DIR=/srv/agent-coordinator/state
 ```
 
-## Paso 3: primera prueba, sin Tailscale todavía
+## Paso 3: primera prueba, todavía sin proxy
 
 En una terminal nueva de la máquina runner:
 
@@ -158,7 +179,13 @@ pantalla. Es un `SIGWINCH` normal de terminal: no crea ni reinicia procesos,
 no reenvía prompts y no cambia el estado de la sesión. Al abrir la misma
 terminal en otra pantalla, esa pantalla visible pasa a ser la geometría activa.
 
-## Paso 4: darle una URL privada con Tailscale
+## Paso 4: publicar la URL
+
+Elige **una** de las dos. En ambas, `AGENT_COORDINATOR_REMOTE_HOST` se queda en
+`127.0.0.1`: el proxy corre en la misma máquina que el runner. Nunca lo
+cambies a `0.0.0.0`.
+
+### Paso 4A: URL privada con Tailscale
 
 Con el runner funcionando, en esa misma máquina ejecuta una vez:
 
@@ -170,13 +197,80 @@ Tailscale mostrará la URL `https://nombre-maquina.tu-tailnet.ts.net`. Ábrela
 desde cualquier dispositivo que esté conectado a tu Tailnet. La interfaz usa
 esa misma URL para el WebSocket seguro; sólo debes introducir el token de
 Coordinator. `--bg` guarda la configuración para que Tailscale vuelva a
-publicarla tras reiniciar la máquina o Tailscale. No uses `tailscale funnel`.
+publicarla tras reiniciar la máquina o Tailscale. No uses `tailscale funnel`:
+eso sí publicaría el runner en Internet, y sin el control que da Access.
 
 Para revisar la configuración:
 
 ```sh
 tailscale serve status
 ```
+
+### Paso 4B: dominio propio con Cloudflare Tunnel
+
+Útil cuando quieres `https://coordinator.tudominio.com` o entrar desde un
+dispositivo que no puede unirse al tailnet. Requiere que el dominio esté en
+Cloudflare.
+
+Instala `cloudflared` en la máquina runner (`brew install cloudflared` en
+macOS; en Linux el `.deb`/`.rpm` oficial) y autentícalo una vez:
+
+```sh
+cloudflared tunnel login
+cloudflared tunnel create agent-coordinator
+cloudflared tunnel route dns agent-coordinator coordinator.tudominio.com
+```
+
+`cloudflared tunnel create` imprime el UUID del túnel y deja el fichero de
+credenciales en `~/.cloudflared/<UUID>.json`. Escribe
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: agent-coordinator
+credentials-file: /Users/TU_USUARIO/.cloudflared/UUID-DEL-TUNEL.json
+
+ingress:
+  - hostname: coordinator.tudominio.com
+    service: http://127.0.0.1:4765
+  - service: http_status:404
+```
+
+Pruébalo en primer plano y luego instálalo como servicio para que sobreviva a
+reinicios:
+
+```sh
+cloudflared tunnel run agent-coordinator     # prueba
+sudo cloudflared service install             # launchd en macOS, systemd en Linux
+```
+
+Abre `https://coordinator.tudominio.com`. La interfaz deduce el WebSocket de la
+propia URL (`wss://coordinator.tudominio.com/rpc`), así que sólo escribes el
+token.
+
+Los WebSocket vienen habilitados por defecto en hostnames proxied; si alguien
+los desactivó en tu cuenta, están en el panel de Cloudflare bajo **Network →
+WebSockets**. El runner envía un heartbeat propio para que una conexión inactiva
+no se caiga por el timeout del proxy, así que no hace falta configurar nada más.
+
+#### Lo que cambia respecto a Tailscale
+
+Un túnel de Cloudflare publica el runner en **Internet**. A partir de ahí, el
+token de Coordinator es lo único que separa al mundo de shells con tus repos y
+tus sesiones de agente autenticadas. Dos consecuencias:
+
+1. Usa un token largo y aleatorio (`openssl rand -base64 32`, que es lo que ya
+   generaste) y rótalo si crees que se filtró: cámbialo en `runner.env`,
+   reinicia el runner y vuelve a conectar los clientes.
+2. Pon **Cloudflare Access** delante del hostname (Zero Trust → Access →
+   Applications → self-hosted) con una política de correo o SSO. Así Cloudflare
+   pide identidad antes de que la petición llegue siquiera al runner.
+
+Advertencia sobre Access y la app desktop: Access autentica en el navegador y
+guarda una cookie, así que la vía web funciona bien. La app desktop conectada
+con `AGENT_COORDINATOR_REMOTE_URL` **no** lleva esa cookie y Access rechazará su
+WebSocket. Si quieres las dos cosas, usa el navegador para la vía protegida por
+Access, o deja el hostname fuera de Access y acepta que el token es la única
+credencial.
 
 ## Mantenerlo encendido tras reiniciar
 
@@ -241,13 +335,20 @@ equipo cliente; cuando ambas variables existen, no inicia runner, base de datos
 ni PTYs locales:
 
 ```sh
+# Tailscale
 AGENT_COORDINATOR_REMOTE_URL="wss://nombre-maquina.tu-tailnet.ts.net/rpc" \
+AGENT_COORDINATOR_REMOTE_TOKEN="tu-token" \
+"/Applications/Agent Coordinator.app/Contents/MacOS/Agent Coordinator"
+
+# Cloudflare Tunnel
+AGENT_COORDINATOR_REMOTE_URL="wss://coordinator.tudominio.com/rpc" \
 AGENT_COORDINATOR_REMOTE_TOKEN="tu-token" \
 "/Applications/Agent Coordinator.app/Contents/MacOS/Agent Coordinator"
 ```
 
 Desktop y navegador muestran la misma interfaz y pueden conectarse al mismo
-runner a la vez.
+runner a la vez. Si protegiste el hostname con Cloudflare Access, esta vía
+desktop no pasará: Access espera la cookie del navegador (ver Paso 4B).
 
 ## Actualizaciones y límites actuales
 

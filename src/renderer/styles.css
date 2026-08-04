@@ -4,6 +4,11 @@
    reimplemented as plain CSS tokens (no copied source).
    ───────────────────────────────────────────────────────────── */
 :root {
+  /* The app ships one warm-dark theme. Declaring it means the browser renders
+     everything CSS cannot reach — <select> popups, scrollbars, autofill, focus
+     rings on native controls — dark too, instead of light-on-light. */
+  color-scheme: dark;
+
   --bg: #151110;
   --fg: #eae8e6;
   --sidebar: #1a1716;
@@ -215,7 +220,9 @@ button:disabled {
   padding: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface);
+  /* Was var(--surface), which this theme never defined — the card rendered
+     with no background at all. */
+  background: var(--card);
   display: grid;
   gap: 10px;
 }
@@ -238,8 +245,22 @@ button:disabled {
 .remote-connect input {
   width: 100%;
 }
+/* This button used to set only its margin, so it kept the native light
+   background while `button { color: inherit }` painted near-white text on it —
+   the label was invisible. It is the first thing anyone sees on a remote
+   client, so it is styled like a modal's confirm action. */
 .remote-connect button {
   margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px solid var(--primary-ring);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--fg);
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+.remote-connect button:hover {
+  border-color: var(--border-strong);
+  background: var(--elevated);
 }
 
 .project-rail-add {
@@ -2854,14 +2875,20 @@ pre {
   margin-top: 12px;
 }
 
+/* Theme form controls by ELEMENT, not per screen. Enumerating them one screen
+   at a time is how `remote-connect`'s url/password inputs, the auto-pilot
+   number fields and every new <select> ended up rendering as native
+   light-on-light controls inside a dark modal. Scoped rules below still win on
+   specificity where a control needs something different. */
 input[type="text"],
+input[type="url"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+select,
+textarea,
 .project-modal-name input,
-.repo-source-fields input,
-.stage-config-table select,
-.stage-config-table input[type="text"],
-.review-config input[type="password"],
-.review-config textarea,
-.review-config select {
+.repo-source-fields input {
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--fg);
@@ -2872,11 +2899,14 @@ input[type="text"],
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 input[type="text"]:focus,
+input[type="url"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus,
+select:focus,
+textarea:focus,
 .project-modal-name input:focus,
-.repo-source-fields input:focus,
-.review-config input[type="password"]:focus,
-.review-config textarea:focus,
-.review-config select:focus {
+.repo-source-fields input:focus {
   border-color: var(--primary-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }

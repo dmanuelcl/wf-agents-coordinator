@@ -68,6 +68,69 @@ installer) and run `kimi` once to `/login`.
 
 ---
 
+## Running it: local or remote
+
+Same app, same UI, two topologies. Pick by where you want the repos and the
+agents to live.
+
+| | **Local** | **Remote** |
+| --- | --- | --- |
+| Runs | the Electron app on your machine | a headless Node **runner** on one machine + a client anywhere |
+| Repos, worktrees, agent logins | on your machine | on the runner |
+| Client | the app window | any browser, or the desktop app pointed at the runner |
+| Survives closing the client | n/a | yes — terminals, agents and Auto Pilot keep running |
+| Use it for | ordinary solo work | a big always-on box, or driving sessions from a laptop/iPad |
+
+### Local
+
+```bash
+pnpm dev              # development, hot reload
+pnpm package:mac      # or :win / :linux for an installable build
+```
+
+Everything stays on your machine. This is the default and needs no extra setup.
+
+### Remote
+
+The runner owns the repos, worktrees, PTYs and agent OAuth; the client only
+draws the UI and sends your keystrokes. Reloading, closing a tab, or switching
+devices never restarts setup, agents, tabs or Auto Pilot.
+
+On the runner machine:
+
+```bash
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
+pnpm remote:build                                  # builds native modules for Node, not Electron
+set -a; source ~/.config/agent-coordinator/runner.env; set +a
+pnpm remote:runner                                 # listens on 127.0.0.1:4765
+```
+
+It binds **loopback only** — no router port is opened. To reach it from another
+device, put one of these in front:
+
+- **Tailscale Serve** — a private HTTPS URL on your tailnet. Nothing is exposed
+  to the Internet. Simplest, and the right default.
+- **Cloudflare Tunnel** — serves it on **your own domain**
+  (`https://coordinator.yourdomain.com`). This publishes to the public
+  Internet, so put Cloudflare Access in front of it or treat the Coordinator
+  token as the only thing guarding shells on that machine.
+
+Then open the URL and enter the token, or point the desktop app at it:
+
+```bash
+AGENT_COORDINATOR_REMOTE_URL="wss://coordinator.yourdomain.com/rpc" \
+AGENT_COORDINATOR_REMOTE_TOKEN="your-token" \
+"/Applications/Agent Coordinator.app/Contents/MacOS/Agent Coordinator"
+```
+
+Browser and desktop can be connected to the same runner at once.
+
+**[`deploy/README.md`](deploy/README.md)** has the full walkthrough: generating the
+secrets, both proxies step by step, and keeping the runner alive across reboots
+with `launchd` (macOS) or `systemd` (Linux).
+
+---
+
 ## Building & packaging
 
 `electron-builder` produces installers per OS. Because the app links **native
@@ -178,6 +241,31 @@ Opening a role tab spawns the agent (`claude --resume …`, `kimi --session …`
 submitting — you press Enter. Each tab shows a green "how to start" hint for its
 state. When an agent quits, the tab drops to a usable shell instead of dying.
 
+### Session kinds
+The **New session** dialog offers four, and the kind decides which role tabs
+exist and where the session starts:
+
+| Kind | Tabs | Starts in | Worktree |
+| --- | --- | --- | --- |
+| **New feature** / **Bug fix** | Architect · Implementer · Reviewer | Architect (or Implementer if it adopts a checkpoint) | new branch, or an existing one — see *Starting from work that already exists* |
+| **PR review** | Reviewer | Reviewer, auto-submitted | **detached** at the branch under review — read-only by construction |
+| **PR fix** | Implementer · Reviewer (+ Architect when *Diagnose first*) | Implementer, or Architect when diagnosing first | **writable** checkout of the PR's source branch |
+
+PR sessions can be created from a branch pair, or from a **PR link** once the
+project has a VCS host and API token (**Bitbucket** and **GitHub**). From a link
+the app resolves source/target, pulls the whole PR conversation into a gitignored
+`.agent-pr-context.md`, and refuses to create a stale worktree if the checkout
+does not land on the PR's head commit. A PR fix commits but never pushes — push
+is a separate gated button.
+
+### Auto Pilot
+Per session, a conductor can drive the workflow without you pressing Enter: it
+watches the checkpoint, waits for it to settle (default 4s), and launches the
+next role's `wf` command itself. It stops on its own at a configurable re-loop
+limit (default 3 reviewer→implementer rounds) so a disagreeing pair cannot spin
+forever, and pauses with a reason instead of guessing whenever the checkpoint
+does not say clearly what comes next. Both values are per-project settings.
+
 ### Shells
 `+` opens a plain shell in the worktree; the **⌂** button opens one in the **repo
 root** (gold `ROOT` badge). Shells persist a bounded scrollback across restarts,
@@ -212,12 +300,22 @@ src/
 ├── main/        # Electron main: PTYs (node-pty), git worktrees, project registry
 │   │            # (better-sqlite3), checkpoint watchers (chokidar), IPC handlers
 │   ├── ipc/           # registerIpcHandlers / registerTerminalIpcHandlers
-│   ├── projects/      # project registry, worktrees, diff, checkpoint watch, layout
-│   └── terminals/     # pty manager, scrollback, agent session/uuid stores
+│   ├── projects/      # project registry, worktrees, start points, diff, checkpoint watch, layout
+│   ├── terminals/     # pty manager, scrollback, agent session/uuid stores
+│   ├── vcs/           # Bitbucket + GitHub providers, encrypted token store
+│   ├── remote/        # headless runner: WebSocket server + CLI entry point
+│   ├── runtime/       # the process-agnostic coordinator wiring both entry points share
+│   └── platform/      # Electron-specific system integration behind an interface
 ├── preload/     # contextBridge: exposes the typed AgentCoordinatorApi to the renderer
 ├── renderer/    # React 18 UI (SessionView, SessionTerminal, FileTree, GitDiffView, Composer, …)
 └── shared/      # IPC contract + workflow types shared by main/preload/renderer
 ```
+
+The desktop app and the headless runner are the **same coordinator** with
+different hosts: `runtime/coordinator-runtime.ts` owns sessions, terminals and
+watchers, while Electron and the WebSocket server only supply transport and
+system integration. That is why a browser client can attach to a session the
+desktop app started, and why reloading a client restarts nothing.
 
 - **Terminals**: `node-pty` processes rendered with `@xterm/xterm`. The renderer
   writes to a PTY via IPC; a bracketed-paste helper inserts multi-line text without
