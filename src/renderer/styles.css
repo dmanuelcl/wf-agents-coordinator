@@ -2586,6 +2586,12 @@ pre {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* A centred flex item taller than its container overflows in BOTH directions,
+     and the part above the top edge cannot be scrolled to. `margin: auto` on the
+     modal centres it without that trap, and the padding keeps a full-height
+     dialog off the window edges. */
+  overflow-y: auto;
+  padding: 24px;
   z-index: 50;
 }
 .modal {
@@ -2594,6 +2600,9 @@ pre {
   border-radius: var(--radius);
   padding: 22px;
   max-width: 420px;
+  max-height: 85vh;
+  margin: auto;
+  overflow-y: auto;
   box-shadow: var(--shadow-pop);
 }
 .modal-actions {
@@ -2626,14 +2635,45 @@ pre {
 }
 
 /* ── New session dialog ─────────────────────────────────────── */
+/* The tallest dialog in the app: four kinds, a start point, a branch, a
+   checkpoint and two checkboxes. On a 14" screen it exceeds the viewport, so
+   the FIELDS scroll inside it while the title, any error and the actions stay
+   visible — reaching Create must never require scrolling a dialog. */
 .new-session-modal {
   max-width: 560px;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  /* The inner body owns the scrolling; a second one here would double the bars. */
+  overflow: hidden;
 }
 .new-session-modal form {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* min-height:0 lets the body shrink below its content height — without it a
+     flex child refuses to, and the modal grows past max-height instead. */
+  flex: 1;
+  min-height: 0;
+}
+/* Everything that is not the scrolling body must keep its natural height —
+   a flex item shrinks by default, which would squeeze the title and buttons
+   instead of scrolling the fields. */
+.new-session-modal > h2,
+.new-session-modal .error-banner,
+.new-session-modal .modal-actions {
+  flex: none;
+}
+.new-session-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  /* Negative margin cancels the padding, which is only there so a field's focus
+     ring is not clipped by the scroll container's edge. */
+  padding: 3px;
+  margin: -3px;
 }
 .new-session-field {
   display: flex;

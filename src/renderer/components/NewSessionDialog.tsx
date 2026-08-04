@@ -191,271 +191,275 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
       <div className="modal new-session-modal">
         <h2>New session</h2>
         <form onSubmit={(event) => void handleSubmit(event)}>
-          <div className="new-session-field">
-            <span className="field-label">Kind</span>
-            <div className="segmented" role="radiogroup" aria-label="Session kind">
-              {KIND_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={kind === option.value}
-                  className={`segmented-option${kind === option.value ? " selected" : ""}`}
-                  onClick={() => setKind(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
+          {/* Only the fields scroll. The error and the actions stay put, so a
+              laptop screen never hides the button you are looking for. */}
+          <div className="new-session-body">
+            <div className="new-session-field">
+              <span className="field-label">Kind</span>
+              <div className="segmented" role="radiogroup" aria-label="Session kind">
+                {KIND_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={kind === option.value}
+                    className={`segmented-option${kind === option.value ? " selected" : ""}`}
+                    onClick={() => setKind(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          {isPrKind ? (
-            <>
-              {kind === "review" && (
-                <div className="new-session-field">
-                  <span className="field-label">Source</span>
-                  <div className="segmented" role="radiogroup" aria-label="Review source">
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={reviewSource === "manual"}
-                      className={`segmented-option${reviewSource === "manual" ? " selected" : ""}`}
-                      onClick={() => setReviewSource("manual")}
-                    >
-                      Manual (branch + base)
-                    </button>
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={reviewSource === "link"}
-                      disabled={!hasVcsCreds}
-                      title={hasVcsCreds ? undefined : "Configure a VCS host + token in project settings first"}
-                      className={`segmented-option${reviewSource === "link" ? " selected" : ""}`}
-                      onClick={() => setReviewSource("link")}
-                    >
-                      From PR link
-                    </button>
+            {isPrKind ? (
+              <>
+                {kind === "review" && (
+                  <div className="new-session-field">
+                    <span className="field-label">Source</span>
+                    <div className="segmented" role="radiogroup" aria-label="Review source">
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={reviewSource === "manual"}
+                        className={`segmented-option${reviewSource === "manual" ? " selected" : ""}`}
+                        onClick={() => setReviewSource("manual")}
+                      >
+                        Manual (branch + base)
+                      </button>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={reviewSource === "link"}
+                        disabled={!hasVcsCreds}
+                        title={hasVcsCreds ? undefined : "Configure a VCS host + token in project settings first"}
+                        className={`segmented-option${reviewSource === "link" ? " selected" : ""}`}
+                        onClick={() => setReviewSource("link")}
+                      >
+                        From PR link
+                      </button>
+                    </div>
+                    {!hasVcsCreds && (
+                      <p className="field-hint">From-link needs a VCS host + API token in the project settings.</p>
+                    )}
                   </div>
-                  {!hasVcsCreds && (
-                    <p className="field-hint">From-link needs a VCS host + API token in the project settings.</p>
-                  )}
+                )}
+
+                {kind === "pr-fix" && !hasVcsCreds && (
+                  <p className="field-hint">PR fix needs a VCS host + API token in the project settings.</p>
+                )}
+
+                {kind === "pr-fix" && (
+                  <div className="new-session-field">
+                    <label className="new-session-check">
+                      <input
+                        type="checkbox"
+                        checked={prFixDiagnoseFirst}
+                        onChange={(event) => setPrFixDiagnoseFirst(event.target.checked)}
+                      />
+                      <span>Diagnose and plan before implementing</span>
+                    </label>
+                    <p className="field-hint">
+                      Architect reads the PR discussion and writes a correction plan first; then Implementer executes it and Reviewer validates it.
+                    </p>
+                  </div>
+                )}
+
+                {linkMode ? (
+                  <div className="new-session-field">
+                    <label htmlFor="review-pr-url" className="field-label">
+                      PR link <span className="req">*</span>
+                    </label>
+                    <div className="pr-url-row">
+                      <input
+                        id="review-pr-url"
+                        type="text"
+                        placeholder="https://bitbucket.org/workspace/repo/pull-requests/482"
+                        value={prUrl}
+                        onChange={(event) => {
+                          setPrUrl(event.target.value);
+                          setPreview(null);
+                        }}
+                      />
+                      <button type="button" onClick={() => void resolvePreview()} disabled={!prUrl.trim() || resolving}>
+                        {resolving ? "Resolving…" : "Check"}
+                      </button>
+                    </div>
+                    {preview && (
+                      <p className="field-preview">
+                        <code>{preview.source}</code> → <code>{preview.target}</code> · {preview.title}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="new-session-field">
+                      <label htmlFor="review-branch" className="field-label">
+                        Branch to review <span className="req">*</span>
+                      </label>
+                      <BranchCombobox
+                        inputId="review-branch"
+                        branches={branches}
+                        loading={loadingBranches}
+                        value={reviewBranch}
+                        onChange={chooseBranch}
+                      />
+                    </div>
+
+                    <div className="new-session-field">
+                      <label htmlFor="review-base" className="field-label">
+                        Base branch <span className="req">*</span>
+                      </label>
+                      <input
+                        id="review-base"
+                        type="text"
+                        placeholder="main / develop"
+                        value={baseBranch}
+                        onChange={(event) => setBaseBranch(event.target.value)}
+                      />
+                    </div>
+
+                    <div className="new-session-field">
+                      <label htmlFor="session-name" className="field-label">
+                        Session name <span className="req">*</span>
+                      </label>
+                      <input
+                        id="session-name"
+                        type="text"
+                        placeholder="Auto-filled from the branch"
+                        value={name}
+                        maxLength={SESSION_NAME_MAX_LENGTH}
+                        onChange={(event) => editName(event.target.value)}
+                      />
+                      <p className="field-hint">
+                        {name.length}/{SESSION_NAME_MAX_LENGTH} characters
+                      </p>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="new-session-field">
+                  <span className="field-label">Start from</span>
+                  <div className="segmented" role="radiogroup" aria-label="Start point">
+                    {START_FROM_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={startFrom === option.value}
+                        className={`segmented-option${startFrom === option.value ? " selected" : ""}`}
+                        onClick={() => chooseStartFrom(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="field-hint">
+                    {startFrom === "new"
+                      ? "A new branch off whatever the repo root has checked out."
+                      : startFrom === "continue"
+                        ? "Pick up work already on a branch — a teammate's session, or your own from another machine."
+                        : "Start a new branch from a base an architect published the specs and plan on."}
+                  </p>
                 </div>
-              )}
 
-              {kind === "pr-fix" && !hasVcsCreds && (
-                <p className="field-hint">PR fix needs a VCS host + API token in the project settings.</p>
-              )}
+                {startFrom !== "new" && (
+                  <>
+                    <div className="new-session-field">
+                      <label htmlFor="start-ref" className="field-label">
+                        {startFrom === "continue" ? "Branch to continue" : "Base branch"} <span className="req">*</span>
+                      </label>
+                      <BranchCombobox
+                        inputId="start-ref"
+                        branches={branches}
+                        loading={loadingBranches}
+                        value={startRef}
+                        onChange={chooseStartRef}
+                      />
+                      {startRef && <p className="field-hint">{startFromBranchHint(startFrom, startRef)}</p>}
+                    </div>
 
-              {kind === "pr-fix" && (
+                    <div className="new-session-field">
+                      <label htmlFor="start-checkpoint" className="field-label">
+                        Checkpoint
+                      </label>
+                      <select
+                        id="start-checkpoint"
+                        value={startCheckpoint}
+                        disabled={!startRef || loadingCheckpoints}
+                        onChange={(event) => setStartCheckpoint(event.target.value)}
+                      >
+                        <option value="">
+                          {loadingCheckpoints ? "Reading the branch…" : "None — start at Architect"}
+                        </option>
+                        {(refCheckpoints ?? []).map((checkpoint) => (
+                          <option key={checkpoint.path} value={checkpoint.path}>
+                            {checkpoint.feature ?? checkpoint.slug ?? checkpoint.path} · {checkpoint.status}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="field-hint">
+                        {!startRef
+                          ? "Pick a branch first."
+                          : refCheckpoints && refCheckpoints.length === 0
+                            ? "No checkpoint committed on this branch — the session starts at Architect."
+                            : "Adopting one unlocks Implementer and Reviewer right away, with wf implement pre-typed."}
+                      </p>
+                    </div>
+                  </>
+                )}
+
+                <div className="new-session-field">
+                  <label htmlFor="session-name" className="field-label">
+                    Session name <span className="req">*</span>
+                  </label>
+                  <input
+                    id="session-name"
+                    type="text"
+                    placeholder="What are you working on?"
+                    value={name}
+                    autoFocus
+                    maxLength={SESSION_NAME_MAX_LENGTH}
+                    onChange={(event) => editName(event.target.value)}
+                  />
+                  <p className="field-hint">
+                    {name.length}/{SESSION_NAME_MAX_LENGTH} characters
+                  </p>
+                </div>
+
+                <div className="new-session-field">
+                  <label className="new-session-check">
+                    <input type="checkbox" checked={copyEnv} onChange={(event) => setCopyEnv(event.target.checked)} />
+                    <span>
+                      Copy <code>.env</code> files into the worktree
+                    </span>
+                  </label>
+                  <p className="field-hint">
+                    So it can run tasks that need env vars. Your <code>.env</code> is gitignored, so it stays out of git.
+                  </p>
+                </div>
+
                 <div className="new-session-field">
                   <label className="new-session-check">
                     <input
                       type="checkbox"
-                      checked={prFixDiagnoseFirst}
-                      onChange={(event) => setPrFixDiagnoseFirst(event.target.checked)}
+                      checked={reuseBuildArtifacts}
+                      onChange={(event) => setReuseBuildArtifacts(event.target.checked)}
                     />
-                    <span>Diagnose and plan before implementing</span>
+                    <span>
+                      Reuse <code>dist</code>/<code>generated</code> and skip worktree setup
+                    </span>
                   </label>
                   <p className="field-hint">
-                    Architect reads the PR discussion and writes a correction plan first; then Implementer executes it and Reviewer validates it.
+                    Fast path for parallel sessions. Only ignored output from a clean repo root at the same commit is
+                    copied; use it when that output is current. Copy-on-write is used when available.
                   </p>
                 </div>
-              )}
-
-              {linkMode ? (
-                <div className="new-session-field">
-                  <label htmlFor="review-pr-url" className="field-label">
-                    PR link <span className="req">*</span>
-                  </label>
-                  <div className="pr-url-row">
-                    <input
-                      id="review-pr-url"
-                      type="text"
-                      placeholder="https://bitbucket.org/workspace/repo/pull-requests/482"
-                      value={prUrl}
-                      onChange={(event) => {
-                        setPrUrl(event.target.value);
-                        setPreview(null);
-                      }}
-                    />
-                    <button type="button" onClick={() => void resolvePreview()} disabled={!prUrl.trim() || resolving}>
-                      {resolving ? "Resolving…" : "Check"}
-                    </button>
-                  </div>
-                  {preview && (
-                    <p className="field-preview">
-                      <code>{preview.source}</code> → <code>{preview.target}</code> · {preview.title}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="new-session-field">
-                    <label htmlFor="review-branch" className="field-label">
-                      Branch to review <span className="req">*</span>
-                    </label>
-                    <BranchCombobox
-                      inputId="review-branch"
-                      branches={branches}
-                      loading={loadingBranches}
-                      value={reviewBranch}
-                      onChange={chooseBranch}
-                    />
-                  </div>
-
-                  <div className="new-session-field">
-                    <label htmlFor="review-base" className="field-label">
-                      Base branch <span className="req">*</span>
-                    </label>
-                    <input
-                      id="review-base"
-                      type="text"
-                      placeholder="main / develop"
-                      value={baseBranch}
-                      onChange={(event) => setBaseBranch(event.target.value)}
-                    />
-                  </div>
-
-                  <div className="new-session-field">
-                    <label htmlFor="session-name" className="field-label">
-                      Session name <span className="req">*</span>
-                    </label>
-                    <input
-                      id="session-name"
-                      type="text"
-                      placeholder="Auto-filled from the branch"
-                      value={name}
-                      maxLength={SESSION_NAME_MAX_LENGTH}
-                      onChange={(event) => editName(event.target.value)}
-                    />
-                    <p className="field-hint">
-                      {name.length}/{SESSION_NAME_MAX_LENGTH} characters
-                    </p>
-                  </div>
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="new-session-field">
-                <span className="field-label">Start from</span>
-                <div className="segmented" role="radiogroup" aria-label="Start point">
-                  {START_FROM_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={startFrom === option.value}
-                      className={`segmented-option${startFrom === option.value ? " selected" : ""}`}
-                      onClick={() => chooseStartFrom(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="field-hint">
-                  {startFrom === "new"
-                    ? "A new branch off whatever the repo root has checked out."
-                    : startFrom === "continue"
-                      ? "Pick up work already on a branch — a teammate's session, or your own from another machine."
-                      : "Start a new branch from a base an architect published the specs and plan on."}
-                </p>
-              </div>
-
-              {startFrom !== "new" && (
-                <>
-                  <div className="new-session-field">
-                    <label htmlFor="start-ref" className="field-label">
-                      {startFrom === "continue" ? "Branch to continue" : "Base branch"} <span className="req">*</span>
-                    </label>
-                    <BranchCombobox
-                      inputId="start-ref"
-                      branches={branches}
-                      loading={loadingBranches}
-                      value={startRef}
-                      onChange={chooseStartRef}
-                    />
-                    {startRef && <p className="field-hint">{startFromBranchHint(startFrom, startRef)}</p>}
-                  </div>
-
-                  <div className="new-session-field">
-                    <label htmlFor="start-checkpoint" className="field-label">
-                      Checkpoint
-                    </label>
-                    <select
-                      id="start-checkpoint"
-                      value={startCheckpoint}
-                      disabled={!startRef || loadingCheckpoints}
-                      onChange={(event) => setStartCheckpoint(event.target.value)}
-                    >
-                      <option value="">
-                        {loadingCheckpoints ? "Reading the branch…" : "None — start at Architect"}
-                      </option>
-                      {(refCheckpoints ?? []).map((checkpoint) => (
-                        <option key={checkpoint.path} value={checkpoint.path}>
-                          {checkpoint.feature ?? checkpoint.slug ?? checkpoint.path} · {checkpoint.status}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="field-hint">
-                      {!startRef
-                        ? "Pick a branch first."
-                        : refCheckpoints && refCheckpoints.length === 0
-                          ? "No checkpoint committed on this branch — the session starts at Architect."
-                          : "Adopting one unlocks Implementer and Reviewer right away, with wf implement pre-typed."}
-                    </p>
-                  </div>
-                </>
-              )}
-
-              <div className="new-session-field">
-                <label htmlFor="session-name" className="field-label">
-                  Session name <span className="req">*</span>
-                </label>
-                <input
-                  id="session-name"
-                  type="text"
-                  placeholder="What are you working on?"
-                  value={name}
-                  autoFocus
-                  maxLength={SESSION_NAME_MAX_LENGTH}
-                  onChange={(event) => editName(event.target.value)}
-                />
-                <p className="field-hint">
-                  {name.length}/{SESSION_NAME_MAX_LENGTH} characters
-                </p>
-              </div>
-
-              <div className="new-session-field">
-                <label className="new-session-check">
-                  <input type="checkbox" checked={copyEnv} onChange={(event) => setCopyEnv(event.target.checked)} />
-                  <span>
-                    Copy <code>.env</code> files into the worktree
-                  </span>
-                </label>
-                <p className="field-hint">
-                  So it can run tasks that need env vars. Your <code>.env</code> is gitignored, so it stays out of git.
-                </p>
-              </div>
-
-              <div className="new-session-field">
-                <label className="new-session-check">
-                  <input
-                    type="checkbox"
-                    checked={reuseBuildArtifacts}
-                    onChange={(event) => setReuseBuildArtifacts(event.target.checked)}
-                  />
-                  <span>
-                    Reuse <code>dist</code>/<code>generated</code> and skip worktree setup
-                  </span>
-                </label>
-                <p className="field-hint">
-                  Fast path for parallel sessions. Only ignored output from a clean repo root at the same commit is
-                  copied; use it when that output is current. Copy-on-write is used when available.
-                </p>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
 
           {error && <p className="error-banner">{error}</p>}
 
