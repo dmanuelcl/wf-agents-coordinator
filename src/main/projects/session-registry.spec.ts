@@ -426,3 +426,258 @@ describe("SessionRegistry", () => {
     expect(existsSync(session.worktreePath)).toBe(true);
   });
 });
+
+// A session that picks up work someone else started: another dev's branch, or
+// a base branch on which a global architect committed the specs and plan.
+describe("SessionRegistry · startFrom", () => {
+  let remoteDir: string;
+
+  function currentBranch(dir: string): string {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir }).toString().trim();
+  }
+
+  function commitFile(dir: string, name: string, message: string): void {
+    writeFileSync(join(dir, name), `${name}\n`, "utf8");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", message], { cwd: dir });
+  }
+
+  function writeCheckpoint(dir: string, name: string, slug: string): string {
+    const relative = join("docs", "workflow", "checkpoints", name);
+    mkdirSync(join(dir, "docs", "workflow", "checkpoints"), { recursive: true });
+    writeFileSync(join(dir, relative), `---\nfeature: ${slug}\nslug: ${slug}\nstatus: IN_PROGRESS\n---\n`, "utf8");
+    return relative;
+  }
+
+  /** Give `repoDir` a bare origin and publish its starting branch. */
+  function addRemote(): string {
+    remoteDir = mkdtempSync(join(tmpdir(), "agent-coordinator-remote-"));
+    execFileSync("git", ["init", "-q", "--bare"], { cwd: remoteDir });
+    execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir });
+    execFileSync("git", ["push", "-q", "-u", "origin", currentBranch(repoDir)], { cwd: repoDir });
+    return remoteDir;
+  }
+
+  /** A teammate pushing to `branch` from their own checkout. */
+  function advanceRemote(branch: string, fileName: string): void {
+    const clone = mkdtempSync(join(tmpdir(), "agent-coordinator-clone-"));
+    execFileSync("git", ["clone", "-q", remoteDir, clone]);
+    execFileSync("git", ["config", "user.email", "other@example.com"], { cwd: clone });
+    execFileSync("git", ["config", "user.name", "Other"], { cwd: clone });
+    execFileSync("git", ["checkout", "-q", branch], { cwd: clone });
+    commitFile(clone, fileName, `teammate ${fileName}`);
+    execFileSync("git", ["push", "-q", "origin", branch], { cwd: clone });
+    rmSync(clone, { recursive: true, force: true });
+  }
+
+  afterEach(() => {
+    if (remoteDir) rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("continue checks out the chosen branch writable, keeping the session kind", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/auth"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Continue auth",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "feature/auth" },
+    });
+
+    expect(session.kind).toBe("feature");
+    expect(session.branch).toBe("feature/auth");
+    expect(existsSync(session.worktreePath)).toBe(true);
+    // Writable, not detached: the worktree is ON the branch, so commits land there.
+    expect(currentBranch(session.worktreePath)).toBe("feature/auth");
+  });
+
+  it("continue adopts the chosen checkpoint so the workflow gate opens at creation", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["checkout", "-q", "-b", "feature/auth"], { cwd: repoDir });
+    const checkpoint = writeCheckpoint(repoDir, "auth-checkpoint.md", "auth");
+    commitFile(repoDir, "impl.txt", "architect hands off");
+    execFileSync("git", ["checkout", "-q", "-"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Continue auth",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "feature/auth", checkpointPath: checkpoint },
+    });
+
+    expect(session.checkpointPath).toBe(checkpoint);
+    expect(existsSync(join(session.worktreePath, checkpoint))).toBe(true);
+  });
+
+  it("continue fast-forwards a branch that is behind its remote", async () => {
+    initGitRepo(repoDir);
+    addRemote();
+    execFileSync("git", ["push", "-q", "-u", "origin", `${currentBranch(repoDir)}:feature/auth`], { cwd: repoDir });
+    execFileSync("git", ["branch", "feature/auth", `origin/feature/auth`], { cwd: repoDir });
+    advanceRemote("feature/auth", "teammate.txt");
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Continue auth",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "feature/auth" },
+    });
+
+    expect(existsSync(join(session.worktreePath, "teammate.txt"))).toBe(true);
+  });
+
+  it("continue refuses & rolls back when the branch diverged from its remote", async () => {
+    initGitRepo(repoDir);
+    addRemote();
+    execFileSync("git", ["push", "-q", "origin", `${currentBranch(repoDir)}:feature/auth`], { cwd: repoDir });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoDir });
+    execFileSync("git", ["branch", "feature/auth", "origin/feature/auth"], { cwd: repoDir });
+    advanceRemote("feature/auth", "teammate.txt");
+    // Our own commit on the same branch, made without their work.
+    execFileSync("git", ["checkout", "-q", "feature/auth"], { cwd: repoDir });
+    commitFile(repoDir, "mine.txt", "my work");
+    execFileSync("git", ["checkout", "-q", "-"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await expect(
+      registry.createSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "Continue auth",
+        kind: "feature",
+        startFrom: { mode: "continue", ref: "feature/auth" },
+      }),
+    ).rejects.toThrow(/diverged/i);
+
+    expect(existsSync(join(repoDir, ".worktrees", "continue-auth"))).toBe(false);
+    await expect(registry.listSessions({ projectId: "p1" })).resolves.toEqual([]);
+    // Their branch is not ours to delete on rollback.
+    expect(branchExists(repoDir, "feature/auth")).toBe(true);
+  });
+
+  it("continue refuses a branch that is already checked out elsewhere", async () => {
+    initGitRepo(repoDir);
+    const root = currentBranch(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+
+    await expect(
+      registry.createSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "Continue root",
+        kind: "feature",
+        startFrom: { mode: "continue", ref: root },
+      }),
+    ).rejects.toThrow(/already checked out/i);
+  });
+
+  it("names the session already holding a branch instead of only its worktree path", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["branch", "feature/auth"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+    await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Auth work",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "feature/auth" },
+    });
+
+    await expect(
+      registry.createSession({
+        projectId: "p1",
+        projectRoot: repoDir,
+        name: "Auth again",
+        kind: "feature",
+        startFrom: { mode: "continue", ref: "feature/auth" },
+      }),
+    ).rejects.toThrow(/Auth work/);
+  });
+
+  it("continue creates a local tracking branch for a remote-only branch", async () => {
+    initGitRepo(repoDir);
+    addRemote();
+    execFileSync("git", ["push", "-q", "origin", `${currentBranch(repoDir)}:feature/theirs`], { cwd: repoDir });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoDir });
+    expect(branchExists(repoDir, "feature/theirs")).toBe(false);
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Continue theirs",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "feature/theirs" },
+    });
+
+    expect(session.branch).toBe("feature/theirs");
+    expect(currentBranch(session.worktreePath)).toBe("feature/theirs");
+  });
+
+  it("continue accepts a remote-qualified ref and still checks out a writable branch", async () => {
+    initGitRepo(repoDir);
+    addRemote();
+    execFileSync("git", ["push", "-q", "origin", `${currentBranch(repoDir)}:feature/theirs`], { cwd: repoDir });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Continue qualified",
+      kind: "feature",
+      startFrom: { mode: "continue", ref: "origin/feature/theirs" },
+    });
+
+    expect(session.branch).toBe("feature/theirs");
+    expect(currentBranch(session.worktreePath)).toBe("feature/theirs");
+  });
+
+  it("fork branches off the published base and records it as the session's base", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["checkout", "-q", "-b", "develop"], { cwd: repoDir });
+    const checkpoint = writeCheckpoint(repoDir, "auth-checkpoint.md", "auth");
+    commitFile(repoDir, "spec.txt", "architect writes the specs");
+    execFileSync("git", ["checkout", "-q", "-"], { cwd: repoDir });
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Auth rotation",
+      kind: "feature",
+      startFrom: { mode: "fork", ref: "develop", checkpointPath: checkpoint },
+    });
+
+    expect(session.branch).toBe("feature/auth-rotation");
+    expect(session.baseBranch).toBe("develop");
+    expect(session.checkpointPath).toBe(checkpoint);
+    // It inherited the architect's work even though the root was not on develop.
+    expect(existsSync(join(session.worktreePath, "spec.txt"))).toBe(true);
+    expect(existsSync(join(session.worktreePath, checkpoint))).toBe(true);
+  });
+
+  it("records the repo root's current branch as the base of an ordinary session", async () => {
+    initGitRepo(repoDir);
+    execFileSync("git", ["checkout", "-q", "-b", "develop"], { cwd: repoDir });
+    commitFile(repoDir, "dev.txt", "develop work");
+    const registry = createSessionRegistry({ storeFilePath });
+
+    const session = await registry.createSession({
+      projectId: "p1",
+      projectRoot: repoDir,
+      name: "Plain",
+      kind: "feature",
+    });
+
+    expect(session.baseBranch).toBe("develop");
+    expect(session.checkpointPath).toBeNull();
+  });
+});

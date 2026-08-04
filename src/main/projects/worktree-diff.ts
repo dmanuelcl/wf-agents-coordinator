@@ -31,8 +31,16 @@ async function gitCaptureStdout(cwd: string, args: string[]): Promise<string> {
   }
 }
 
-async function resolveBaseRef(cwd: string): Promise<string | null> {
-  for (const ref of ["main", "master"]) {
+/**
+ * The ref the session's work branched from. `preferred` is the session's
+ * recorded `baseBranch` — in practice `develop`, since sessions branch off the
+ * repo root rather than off `main`. Without it the diff carries the whole
+ * base-vs-main delta as noise. Sessions created before `baseBranch` existed,
+ * and refs that have since been deleted, fall back to the original behavior.
+ */
+async function resolveBaseRef(cwd: string, preferred?: string | null): Promise<string | null> {
+  for (const ref of [preferred, "main", "master"]) {
+    if (!ref) continue;
     if ((await tryGit(cwd, ["rev-parse", "--verify", "--quiet", ref])) !== null) return ref;
   }
   return null;
@@ -44,8 +52,8 @@ async function resolveBaseRef(cwd: string): Promise<string | null> {
  * but they're exactly the new files the agent creates, so we synthesize an
  * all-added diff for each (respecting .gitignore). Empty string means no changes.
  */
-export async function getWorktreeDiff(worktreePath: string): Promise<string> {
-  const base = await resolveBaseRef(worktreePath);
+export async function getWorktreeDiff(worktreePath: string, baseRef?: string | null): Promise<string> {
+  const base = await resolveBaseRef(worktreePath, baseRef);
   let from = "HEAD";
   if (base) {
     const mergeBase = await tryGit(worktreePath, ["merge-base", base, "HEAD"]);

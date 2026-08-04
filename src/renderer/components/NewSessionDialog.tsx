@@ -2,10 +2,23 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { SESSION_NAME_MAX_LENGTH, truncateSessionName } from "../../shared/workflow/work-session";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { BranchList, ResolvedPr } from "../../shared/ipc/contract";
+import type { BranchList, RefCheckpointSummary, ResolvedPr } from "../../shared/ipc/contract";
 import { BranchCombobox } from "./BranchCombobox";
+import {
+  buildStartFromInput,
+  canSubmitStartFrom,
+  startFromBranchHint,
+  suggestSessionName,
+} from "./session-start-from";
+import type { StartFromMode } from "./session-start-from";
 
 type ReviewSource = "manual" | "link";
+
+const START_FROM_OPTIONS: { value: StartFromMode; label: string }[] = [
+  { value: "new", label: "New branch" },
+  { value: "continue", label: "Continue" },
+  { value: "fork", label: "Fork" },
+];
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -33,6 +46,11 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [branches, setBranches] = useState<BranchList | null>(null);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [reviewSource, setReviewSource] = useState<ReviewSource>("manual");
+  const [startFrom, setStartFrom] = useState<StartFromMode>("new");
+  const [startRef, setStartRef] = useState("");
+  const [startCheckpoint, setStartCheckpoint] = useState("");
+  const [refCheckpoints, setRefCheckpoints] = useState<RefCheckpointSummary[] | null>(null);
+  const [loadingCheckpoints, setLoadingCheckpoints] = useState(false);
   const [prUrl, setPrUrl] = useState("");
   const [prFixDiagnoseFirst, setPrFixDiagnoseFirst] = useState(false);
   const [preview, setPreview] = useState<ResolvedPr | null>(null);
@@ -46,20 +64,64 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     void window.agentCoordinator.projects.hasVcsCreds(projectId).then(setHasVcsCreds);
   }, [projectId]);
 
-  // Load local + remote branches the first time Review is picked (fetches remotes).
+  const isPrKind = kind === "review" || kind === "pr-fix";
+  // pr-fix is link-only; review uses the manual/link toggle.
+  const linkMode = kind === "pr-fix" || (kind === "review" && reviewSource === "link");
+  const needsBranchList = (kind === "review" && reviewSource === "manual") || (!isPrKind && startFrom !== "new");
+
+  // Load local + remote branches the first time a branch has to be picked
+  // (fetches remotes), for either a manual review or a start point.
   useEffect(() => {
-    if (kind !== "review" || reviewSource !== "manual" || branches || loadingBranches) return;
+    if (!needsBranchList || branches || loadingBranches) return;
     setLoadingBranches(true);
     window.agentCoordinator.git
       .listBranches(projectId)
       .then((list) => setBranches(list))
       .catch((caught) => setError(String(caught)))
       .finally(() => setLoadingBranches(false));
-  }, [kind, reviewSource, branches, loadingBranches, projectId]);
+  }, [needsBranchList, branches, loadingBranches, projectId]);
+
+  // Read the chosen ref's checkpoints without checking it out, so the picker
+  // can offer them before any worktree exists.
+  useEffect(() => {
+    if (startFrom === "new" || !startRef) {
+      setRefCheckpoints(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingCheckpoints(true);
+    setRefCheckpoints(null);
+    window.agentCoordinator.git
+      .listRefCheckpoints(projectId, startRef)
+      .then((found) => {
+        if (!cancelled) setRefCheckpoints(found);
+      })
+      .catch(() => {
+        if (!cancelled) setRefCheckpoints([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCheckpoints(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, startFrom, startRef]);
 
   function chooseBranch(branch: string): void {
     setReviewBranch(branch);
     if (!nameTouched) setName(branch ? truncateSessionName(`Review ${branch}`) : "");
+  }
+
+  function chooseStartRef(branch: string): void {
+    setStartRef(branch);
+    setStartCheckpoint("");
+    if (!nameTouched) setName(suggestSessionName(startFrom, branch));
+  }
+
+  function chooseStartFrom(mode: StartFromMode): void {
+    setStartFrom(mode);
+    setStartCheckpoint("");
+    if (!nameTouched) setName(suggestSessionName(mode, startRef));
   }
 
   function editName(value: string): void {
@@ -81,14 +143,11 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     }
   }
 
-  const isPrKind = kind === "review" || kind === "pr-fix";
-  // pr-fix is link-only; review uses the manual/link toggle.
-  const linkMode = kind === "pr-fix" || (kind === "review" && reviewSource === "link");
   const canSubmit = isPrKind
     ? linkMode
       ? prUrl.trim().length > 0
       : name.trim().length > 0 && reviewBranch.length > 0 && baseBranch.trim().length > 0
-    : name.trim().length > 0;
+    : canSubmitStartFrom({ mode: startFrom, ref: startRef, name });
 
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -116,6 +175,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
           kind,
           copyEnv,
           reuseBuildArtifacts,
+          startFrom: buildStartFromInput({ mode: startFrom, ref: startRef, checkpointPath: startCheckpoint }),
         });
       }
       onCreated(session);
@@ -277,6 +337,77 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
             </>
           ) : (
             <>
+              <div className="new-session-field">
+                <span className="field-label">Start from</span>
+                <div className="segmented" role="radiogroup" aria-label="Start point">
+                  {START_FROM_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={startFrom === option.value}
+                      className={`segmented-option${startFrom === option.value ? " selected" : ""}`}
+                      onClick={() => chooseStartFrom(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="field-hint">
+                  {startFrom === "new"
+                    ? "A new branch off whatever the repo root has checked out."
+                    : startFrom === "continue"
+                      ? "Pick up work already on a branch — a teammate's session, or your own from another machine."
+                      : "Start a new branch from a base an architect published the specs and plan on."}
+                </p>
+              </div>
+
+              {startFrom !== "new" && (
+                <>
+                  <div className="new-session-field">
+                    <label htmlFor="start-ref" className="field-label">
+                      {startFrom === "continue" ? "Branch to continue" : "Base branch"} <span className="req">*</span>
+                    </label>
+                    <BranchCombobox
+                      inputId="start-ref"
+                      branches={branches}
+                      loading={loadingBranches}
+                      value={startRef}
+                      onChange={chooseStartRef}
+                    />
+                    {startRef && <p className="field-hint">{startFromBranchHint(startFrom, startRef)}</p>}
+                  </div>
+
+                  <div className="new-session-field">
+                    <label htmlFor="start-checkpoint" className="field-label">
+                      Checkpoint
+                    </label>
+                    <select
+                      id="start-checkpoint"
+                      value={startCheckpoint}
+                      disabled={!startRef || loadingCheckpoints}
+                      onChange={(event) => setStartCheckpoint(event.target.value)}
+                    >
+                      <option value="">
+                        {loadingCheckpoints ? "Reading the branch…" : "None — start at Architect"}
+                      </option>
+                      {(refCheckpoints ?? []).map((checkpoint) => (
+                        <option key={checkpoint.path} value={checkpoint.path}>
+                          {checkpoint.feature ?? checkpoint.slug ?? checkpoint.path} · {checkpoint.status}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="field-hint">
+                      {!startRef
+                        ? "Pick a branch first."
+                        : refCheckpoints && refCheckpoints.length === 0
+                          ? "No checkpoint committed on this branch — the session starts at Architect."
+                          : "Adopting one unlocks Implementer and Reviewer right away, with wf implement pre-typed."}
+                    </p>
+                  </div>
+                </>
+              )}
+
               <div className="new-session-field">
                 <label htmlFor="session-name" className="field-label">
                   Session name <span className="req">*</span>

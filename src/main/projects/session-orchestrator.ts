@@ -64,7 +64,10 @@ export interface SessionOrchestrator {
 function primaryRole(session: WorkSession): SessionAgentRole {
   if (session.kind === "review") return "reviewer";
   if (session.kind === "pr-fix") return session.prFixDiagnoseFirst ? "architect" : "implementer";
-  return "architect";
+  // A checkpoint means the architect stage is done, so the session's entry
+  // point is the implementer. Sessions adopted from an existing branch are born
+  // that way; an ordinary session reaches it once its architect hands off.
+  return session.checkpointPath ? "implementer" : "architect";
 }
 
 function roleKey(sessionId: string, role: SessionAgentRole): string {

@@ -74,16 +74,31 @@ New module `src/main/projects/session-start-point.ts`. Pure: it receives already
 and returns a plan. No `execFile` inside, so the whole matrix is tested without a repo.
 
 ```ts
-resolveStartPoint({ mode, ref, hasLocal, hasRemote, ahead, behind, checkedOutAt })
-  → { action: "new-branch";   branch: string; from: string }
-  | { action: "checkout";     branch: string; fastForward: boolean }
-  | { action: "track-remote"; branch: string; from: string }
-  | { action: "abort";        reason: StartPointAbort }
+resolveStartPoint({ mode, ref, sessionBranch, state: { hasLocal, remote, ahead, behind, checkedOutAt } })
+  → { action: "new-branch"; branch: string; from: string }
+  | { action: "checkout";   branch: string; fastForward: boolean }
+  | { action: "abort";      reason: string }
 ```
 
-`session-registry.ts` reads the branch state with git, calls the resolver, and executes the plan.
-Decision and execution stay separate. All three modes go through the resolver, so there is a single
-creation path rather than a conditional bypass.
+Two refinements over the shape sketched during design, both found while writing the tests:
+
+`remote` is the **name** of the remote carrying the branch rather than a boolean. A fork's base and
+a teammate's branch can live on different remotes, and hardcoding `origin/` would branch off the
+wrong place — or off nothing — in a repo with an `upstream`.
+
+There is no separate `track-remote` action. Checking out a remote-only branch and checking out a
+local one execute the identical `git worktree add <path> <branch>`; git DWIMs the tracking branch
+when no local one exists. A distinct action would have been a distinction the executor could not
+act on.
+
+`session-registry.ts` fetches, reads the branch state with git, calls the resolver, and executes the
+plan. Decision and execution stay separate. All three modes go through the resolver, so there is a
+single creation path rather than a conditional bypass.
+
+**The fetch happens before resolution, not inside a plan.** `ahead`/`behind` are computed against
+remote-tracking refs, so resolving before fetching would call a branch that is behind up to date and
+skip the fast-forward. When the ref has a remote and the fetch failed, creation aborts naming the
+fetch error rather than resolving against state it cannot trust.
 
 `new` resolves to `{ action: "new-branch", branch: "<kind>/<slug>", from: "HEAD" }`, except when
 that local branch already exists — a session recreated under a name whose branch outlived its
@@ -93,15 +108,30 @@ a resolver case instead of an inline flag.
 
 ### `continue` — the branch is shared with the other dev
 
+All rows below are evaluated *after* the up-front fetch.
+
 | State of the chosen branch | Plan |
 |---|---|
-| Local + origin, local **behind** | `git fetch origin <b>:<b>` (fast-forward), then `worktree add <path> <b>` |
-| Local + origin, **up to date** | `worktree add <path> <b>` |
-| Local + origin, **diverged** | **abort**, reporting ahead/behind counts |
-| **origin only** | `fetch`, then `worktree add <path> <b>` — git DWIMs a tracking branch |
-| **local only** (no remote, or no upstream) | `worktree add <path> <b>` as-is; no fetch, no guard |
-| Already checked out in another worktree | **abort**, naming the path holding it |
-| Already held by another session of the app | **reuse that session** — idempotent, as `createFixSession:400` does |
+| Local + remote, local **behind** | `git fetch <remote> <b>:<b>` (fast-forward), then `worktree add <path> <b>` |
+| Local + remote, **up to date** | `worktree add <path> <b>` |
+| Local + remote, **ahead only** (unpushed work) | `worktree add <path> <b>` — not a conflict |
+| Local + remote, **diverged** | **abort**, reporting ahead/behind counts |
+| **remote only** | `worktree add <path> <b>` — git DWIMs a tracking branch from the fetched ref |
+| **local only** (no remote configured, or branch never pushed) | `worktree add <path> <b>` as-is; no fetch guard |
+| Neither | **abort** — the ref no longer resolves |
+| Already checked out in another worktree | **abort**, naming the session holding it |
+
+The design called for reusing the existing session when one already holds the branch, mirroring
+`createFixSession`. That is right for PR fixes, where the app creates sessions from a link and the
+name is derived — but here the user has typed a name, and silently returning a differently-named
+session hides what happened. Instead the abort **names the session**, so the message points at the
+thing the user has to go open:
+
+> Branch "feature/auth" is already checked out at "Auth work" (…/.worktrees/auth-work).
+> Git allows a branch in only one worktree.
+
+Matching worktree paths goes through `realpath`: git reports `/private/var/…` on macOS while a
+stored record can hold the symlinked `/var/…`, and plain `resolve` would treat one directory as two.
 
 `git fetch origin <b>:<b>` on a branch that is not checked out is already fast-forward-only and
 fails on divergence. The policy is one command rather than a hand-rolled comparison.

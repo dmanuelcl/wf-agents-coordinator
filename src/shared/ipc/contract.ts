@@ -77,6 +77,18 @@ export interface ProjectCreateInput {
   setupCommand?: string;
 }
 
+// Where a session's worktree starts from. "continue" opens a teammate's branch
+// writable; "fork" starts a fresh branch off a base an architect published specs
+// on. Absent means today's behavior: a new branch off the repo root's HEAD.
+export interface SessionStartFromInput {
+  mode: "continue" | "fork";
+  // A branch as picked in the UI; may be remote-qualified ("origin/feature/x").
+  ref: string;
+  // A checkpoint committed on that ref, adopted at creation so the workflow
+  // gate opens immediately. Null starts the session at Architect.
+  checkpointPath: string | null;
+}
+
 export interface SessionCreateInput {
   name: string;
   kind: WorkSessionKind;
@@ -85,6 +97,15 @@ export interface SessionCreateInput {
   // Clone ignored dist/generated output from the clean repo root and consider
   // the setup satisfied. Obvious revision mismatches fail instead of being copied.
   reuseBuildArtifacts?: boolean;
+  startFrom?: SessionStartFromInput;
+}
+
+// A checkpoint committed on a ref, read without checking that ref out.
+export interface RefCheckpointSummary {
+  path: string;
+  feature: string | null;
+  slug: string | null;
+  status: string;
 }
 
 export interface ReviewSessionCreateInput {
@@ -132,6 +153,7 @@ export const IPC_CHANNELS = {
   sessionsReviewArtifactExists: "sessions:review-artifact-exists",
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
+  gitListRefCheckpoints: "git:list-ref-checkpoints",
   gitResolvePrUrl: "git:resolve-pr-url",
   gitTestVcs: "git:test-vcs",
   projectsSetVcsToken: "projects:set-vcs-token",
@@ -315,6 +337,9 @@ export interface AgentCoordinatorApi {
   };
   git: {
     listBranches(projectId: string): Promise<BranchList>;
+    // Checkpoints committed on `ref`, read without checking it out. An
+    // unresolvable ref yields an empty list rather than an error.
+    listRefCheckpoints(projectId: string, ref: string): Promise<RefCheckpointSummary[]>;
     resolvePrUrl(projectId: string, url: string): Promise<ResolvedPr>;
     // Verify VCS creds/host/repo. token is the just-typed value (or null to use
     // the stored one for projectId). Resolves with the repo's full name, rejects
@@ -366,7 +391,8 @@ export interface AgentCoordinatorApi {
     readFile(absPath: string): Promise<string>;
     writeFile(absPath: string, content: string): Promise<void>;
     // The session's git diff (branch point → now), for the worktree.
-    gitDiff(worktreePath: string): Promise<string>;
+    /** `baseRef` is the session's recorded `baseBranch`; null falls back to main/master. */
+    gitDiff(worktreePath: string, baseRef?: string | null): Promise<string>;
     // One directory's entries (dirs first, then files), for the file tree.
     listDir(dirPath: string): Promise<SystemDirEntry[]>;
     // The absolute path of a dragged/dropped File (Electron `webUtils`). Sync,

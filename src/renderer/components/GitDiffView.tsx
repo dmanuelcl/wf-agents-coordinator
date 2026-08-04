@@ -5,6 +5,8 @@ import type { SendTarget } from "./Composer";
 
 interface GitDiffViewProps {
   worktreePath: string;
+  /** The session's `baseBranch` — the ref its work branched from. */
+  baseRef?: string | null;
   // Composer wiring (shared with the session's file views).
   sendTargets?: SendTarget[];
   onSend?: (targetKey: string, text: string, execute: boolean) => boolean;
@@ -84,7 +86,7 @@ function classForLine(line: string): string {
 const STATUS_LABEL: Record<DiffStatus, string> = { modified: "M", added: "A", deleted: "D", renamed: "R" };
 
 export function GitDiffView(props: GitDiffViewProps): JSX.Element {
-  const { worktreePath, sendTargets, onSend } = props;
+  const { worktreePath, baseRef, sendTargets, onSend } = props;
   const [diff, setDiff] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -101,7 +103,7 @@ export function GitDiffView(props: GitDiffViewProps): JSX.Element {
   useEffect(() => {
     setLoading(true);
     let cancelled = false;
-    void window.agentCoordinator.system.gitDiff(worktreePath).then(
+    void window.agentCoordinator.system.gitDiff(worktreePath, baseRef).then(
       (result) => {
         if (!cancelled) {
           setDiff(result);
@@ -118,7 +120,7 @@ export function GitDiffView(props: GitDiffViewProps): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [worktreePath, refreshKey]);
+  }, [worktreePath, baseRef, refreshKey]);
 
   const files = useMemo(() => (diff ? parseDiff(diff) : []), [diff]);
   const active = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;

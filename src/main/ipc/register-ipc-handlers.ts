@@ -27,6 +27,7 @@ import { truncateSessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
+import { listRefCheckpoints } from "../projects/ref-checkpoints";
 import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
 import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
@@ -363,8 +364,8 @@ export function registerIpcHandlers(params: {
     await writeFile(absPath, content, "utf8");
   });
 
-  ipc.handle(IPC_CHANNELS.systemGitDiff, async (_event, worktreePath: string) => {
-    return getWorktreeDiff(worktreePath);
+  ipc.handle(IPC_CHANNELS.systemGitDiff, async (_event, worktreePath: string, baseRef?: string | null) => {
+    return getWorktreeDiff(worktreePath, baseRef);
   });
 
   ipc.handle(IPC_CHANNELS.systemListDir, async (_event, dirPath: string) => {
@@ -423,6 +424,7 @@ export function registerIpcHandlers(params: {
       kind: input.kind,
       copyEnv: input.copyEnv,
       reuseBuildArtifacts: input.reuseBuildArtifacts,
+      startFrom: input.startFrom,
     });
     // Establish both watchers before the renderer can launch an architect.
     await watchSessionCheckpoint(session);
@@ -450,6 +452,11 @@ export function registerIpcHandlers(params: {
   ipc.handle(IPC_CHANNELS.gitListBranches, async (_event, projectId: string) => {
     const project = await findProject(projectRegistry, projectId);
     return listGitBranches({ projectRoot: project.rootPath });
+  });
+
+  ipc.handle(IPC_CHANNELS.gitListRefCheckpoints, async (_event, projectId: string, ref: string) => {
+    const project = await findProject(projectRegistry, projectId);
+    return listRefCheckpoints({ projectRoot: project.rootPath, ref, globs: project.checkpointGlobs });
   });
 
   ipc.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {

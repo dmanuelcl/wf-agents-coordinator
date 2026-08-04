@@ -64,6 +64,7 @@ export function createAgentCoordinatorApi(
     },
     git: {
       listBranches: (projectId) => invoke(IPC_CHANNELS.gitListBranches, projectId) as ReturnType<AgentCoordinatorApi["git"]["listBranches"]>,
+      listRefCheckpoints: (projectId, ref) => invoke(IPC_CHANNELS.gitListRefCheckpoints, projectId, ref) as ReturnType<AgentCoordinatorApi["git"]["listRefCheckpoints"]>,
       resolvePrUrl: (projectId, url) => invoke(IPC_CHANNELS.gitResolvePrUrl, projectId, url) as ReturnType<AgentCoordinatorApi["git"]["resolvePrUrl"]>,
       testVcs: (input) => invoke(IPC_CHANNELS.gitTestVcs, input) as ReturnType<AgentCoordinatorApi["git"]["testVcs"]>,
     },
@@ -116,7 +117,7 @@ export function createAgentCoordinatorApi(
       resolveFile: (pathToken, cwd) => invoke(IPC_CHANNELS.systemResolveFile, pathToken, cwd) as ReturnType<AgentCoordinatorApi["system"]["resolveFile"]>,
       readFile: (absPath) => invoke(IPC_CHANNELS.systemReadFile, absPath) as ReturnType<AgentCoordinatorApi["system"]["readFile"]>,
       writeFile: (absPath, content) => invoke(IPC_CHANNELS.systemWriteFile, absPath, content) as ReturnType<AgentCoordinatorApi["system"]["writeFile"]>,
-      gitDiff: (worktreePath) => invoke(IPC_CHANNELS.systemGitDiff, worktreePath) as ReturnType<AgentCoordinatorApi["system"]["gitDiff"]>,
+      gitDiff: (worktreePath, baseRef) => invoke(IPC_CHANNELS.systemGitDiff, worktreePath, baseRef ?? null) as ReturnType<AgentCoordinatorApi["system"]["gitDiff"]>,
       listDir: (dirPath) => invoke(IPC_CHANNELS.systemListDir, dirPath) as ReturnType<AgentCoordinatorApi["system"]["listDir"]>,
       getPathForFile: options.getPathForFile,
     },

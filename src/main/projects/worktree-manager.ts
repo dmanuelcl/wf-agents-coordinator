@@ -69,6 +69,12 @@ export async function createWorktree(params: {
   branch: string;
   /** When true, create the branch with the worktree (`-b`) instead of checking out an existing one. */
   createBranch?: boolean;
+  /**
+   * Start point for a created branch. Defaults to the repo root's HEAD, which
+   * is what an ordinary session wants; a forked session passes the base ref it
+   * was told to start from (typically `origin/develop`).
+   */
+  from?: string;
   /** When true, check out `branch` in DETACHED HEAD (for reviewing an existing ref, incl. `origin/…`). */
   detach?: boolean;
   execFileImpl?: typeof execFileAsync;
@@ -87,7 +93,7 @@ export async function createWorktree(params: {
   const args = params.detach
     ? ["worktree", "add", "--detach", plan.path, params.branch]
     : params.createBranch
-      ? ["worktree", "add", "-b", params.branch, plan.path]
+      ? ["worktree", "add", "-b", params.branch, plan.path, ...(params.from ? [params.from] : [])]
       : ["worktree", "add", plan.path, params.branch];
   await exec("git", args, { cwd: params.projectRoot });
 }

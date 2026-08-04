@@ -1239,7 +1239,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         )}
         {setupReady && diffOpen && (
           <div className="session-terminal-host" hidden={activeTab !== "diff"}>
-            <GitDiffView worktreePath={session.worktreePath} sendTargets={sendTargets} onSend={handleComposerSend} />
+            <GitDiffView
+              worktreePath={session.worktreePath}
+              baseRef={session.baseBranch}
+              sendTargets={sendTargets}
+              onSend={handleComposerSend}
+            />
           </div>
         )}
         {setupReady &&

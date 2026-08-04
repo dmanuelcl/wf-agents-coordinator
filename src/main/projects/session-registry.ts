@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -13,8 +13,18 @@ import {
 } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import { buildWorktreeCreatePlan, createWorktree, pruneWorktrees, removeWorktree } from "./worktree-manager";
+import { normalizeStartRef, resolveStartPoint } from "./session-start-point";
+import type { BranchState, StartPointPlan } from "./session-start-point";
 import { reuseWorktreeArtifacts } from "./worktree-artifacts";
 import { addWorktreeExclude } from "./worktree-exclude";
+
+export interface SessionStartFrom {
+  mode: "continue" | "fork";
+  /** A branch as picked in the UI; may be remote-qualified (`origin/feature/x`). */
+  ref: string;
+  /** A checkpoint committed on that ref, relative to the repo root. */
+  checkpointPath?: string | null;
+}
 
 // The gitignored review artifact a PR-review reviewer writes; posted to the PR.
 export const REVIEW_ARTIFACT = ".agent-review.md";
@@ -31,6 +41,14 @@ export interface SessionRegistry {
     kind: WorkSessionKind;
     copyEnv?: boolean;
     reuseBuildArtifacts?: boolean;
+    /**
+     * Pick up work that already exists instead of branching off the repo root:
+     * `continue` opens a teammate's branch writable, `fork` starts a fresh
+     * branch from a base an architect published specs on. `checkpointPath`
+     * adopts a checkpoint committed on that ref, which opens the workflow gate
+     * at creation. Absent means today's behavior.
+     */
+    startFrom?: SessionStartFrom;
   }): Promise<WorkSession>;
   createReviewSession(params: {
     projectId: string;
@@ -155,6 +173,123 @@ async function localBranchExists(projectRoot: string, branch: string): Promise<b
   }
 }
 
+/**
+ * Compare worktree paths by their real location. Git reports the resolved path
+ * (`/private/var/...` on macOS) while a stored record can hold the symlinked
+ * one (`/var/...`), so plain `resolve` would call two names for one directory
+ * different.
+ */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** The repo root's branch — the base a session's work will be compared against. */
+async function currentBranch(projectRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: projectRoot });
+    return stdout.trim() || null;
+  } catch {
+    // Detached HEAD has no branch to record; the diff falls back to main/master.
+    return null;
+  }
+}
+
+async function remoteNames(projectRoot: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync("git", ["remote"], { cwd: projectRoot });
+    return stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function refExists(projectRoot: string, ref: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: projectRoot });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Where each branch is checked out, so we can name the worktree that holds one. */
+async function branchWorktrees(projectRoot: string): Promise<Map<string, string>> {
+  const held = new Map<string, string>();
+  try {
+    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: projectRoot });
+    let path: string | null = null;
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
+      else if (line.startsWith("branch refs/heads/") && path) {
+        held.set(line.slice("branch refs/heads/".length).trim(), path);
+      }
+    }
+  } catch {
+    // No git metadata to read means nothing is held.
+  }
+  return held;
+}
+
+/**
+ * Read everything `resolveStartPoint` needs about one branch. Ahead/behind are
+ * only meaningful after a fetch, so the caller fetches first — resolving
+ * against stale remote-tracking refs would call a behind branch up to date.
+ */
+async function readBranchState(params: {
+  projectRoot: string;
+  branch: string;
+  remotes: readonly string[];
+  /** Worktree path -> session name, so a conflict can name the session, not just a path. */
+  sessionNameByWorktree?: Map<string, string>;
+}): Promise<BranchState> {
+  const { projectRoot, branch, remotes } = params;
+  const hasLocal = await localBranchExists(projectRoot, branch);
+
+  let remote: string | null = null;
+  for (const candidate of remotes) {
+    if (await refExists(projectRoot, `refs/remotes/${candidate}/${branch}`)) {
+      remote = candidate;
+      break;
+    }
+  }
+
+  let ahead = 0;
+  let behind = 0;
+  if (hasLocal && remote) {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-list", "--left-right", "--count", `${branch}...${remote}/${branch}`],
+        { cwd: projectRoot },
+      );
+      const [left, right] = stdout.trim().split(/\s+/);
+      ahead = Number(left) || 0;
+      behind = Number(right) || 0;
+    } catch {
+      // Unrelated histories: treat as diverged rather than silently proceeding.
+      ahead = 1;
+      behind = 1;
+    }
+  }
+
+  const heldAt = (await branchWorktrees(projectRoot)).get(branch) ?? null;
+  const sessionName = heldAt ? params.sessionNameByWorktree?.get(canonicalPath(heldAt)) : undefined;
+
+  return {
+    hasLocal,
+    remote,
+    ahead,
+    behind,
+    // Prefer the session's name: "at /long/path/.worktrees/auth-work" makes the
+    // user map a path back to a session themselves.
+    checkedOutAt: heldAt === null ? null : sessionName ? `"${sessionName}" (${heldAt})` : heldAt,
+  };
+}
+
 async function checkedOutBranches(projectRoot: string): Promise<Set<string>> {
   try {
     const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: projectRoot });
@@ -270,21 +405,69 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return records.find((record) => record.id === sessionId) ?? null;
     },
 
-    createSession({ projectId, projectRoot, name, kind, copyEnv, reuseBuildArtifacts }) {
+    createSession({ projectId, projectRoot, name, kind, copyEnv, reuseBuildArtifacts, startFrom }) {
       return runExclusive(async () => {
         const { sessionName, baseSlug } = sessionIdentity(name);
 
-        const branchForSlug = (slug: string): string => `${kind === "fix" ? "fix" : "feature"}/${slug}`;
-        const slug = await allocateSlug({ projectRoot, baseSlug, branchForSlug });
-        const branch = branchForSlug(slug);
+        const sessionBranchForSlug = (slug: string): string => `${kind === "fix" ? "fix" : "feature"}/${slug}`;
+        const mode = startFrom?.mode ?? "new";
+        const remotes = startFrom ? await remoteNames(projectRoot) : [];
+        const ref = startFrom ? normalizeStartRef(startFrom.ref, remotes) : null;
+
+        // Refresh remote-tracking refs BEFORE reading ahead/behind. A failed
+        // fetch on a branch that has a remote means the state we would resolve
+        // against is stale, so we surface it instead of starting on old code.
+        let fetchError: string | null = null;
+        if (startFrom && remotes.length > 0) {
+          fetchError = await fetchRemotes(projectRoot);
+        }
+
+        // Continuing takes the branch as given, so only the worktree path needs
+        // allocating; the other modes must also land on a free branch name.
+        const slug =
+          mode === "continue"
+            ? await allocateSlug({ projectRoot, baseSlug })
+            : await allocateSlug({ projectRoot, baseSlug, branchForSlug: sessionBranchForSlug });
+        const sessionBranch = sessionBranchForSlug(slug);
+
+        const state = await readBranchState({
+          projectRoot,
+          branch: mode === "continue" || mode === "fork" ? (ref as string) : sessionBranch,
+          remotes,
+          sessionNameByWorktree: new Map(
+            (await readAll()).map((record) => [canonicalPath(record.worktreePath), record.name]),
+          ),
+        });
+        if (fetchError && state.remote) {
+          throw new Error(
+            `Could not refresh "${ref}" from ${state.remote}, so this session would start on an out-of-date copy:\n${fetchError}`,
+          );
+        }
+
+        const plan: StartPointPlan = resolveStartPoint({ mode, ref, sessionBranch, state });
+        if (plan.action === "abort") throw new Error(plan.reason);
+
+        const branch = plan.branch;
         const worktreePath = buildWorktreeCreatePlan({ projectRoot, slug, branch }).path;
-        // A deleted session intentionally leaves its branch behind. Recreating
-        // the same name should reopen that branch, not fail because `-b` sees it.
-        const branchPreexisted = await localBranchExists(projectRoot, branch);
+        // Only a branch WE create may be deleted on rollback. A continued
+        // branch belongs to whoever else is working on it.
+        const createdBranch = plan.action === "new-branch";
         let worktreeCreated = false;
 
         try {
-          await createWorktree({ projectRoot, slug, branch, createBranch: !branchPreexisted });
+          if (plan.action === "checkout" && plan.fastForward && state.remote) {
+            // Fast-forward-only by construction: git refuses this refspec when
+            // the update would not be a fast-forward, and the branch is not
+            // checked out anywhere, so no working tree can be disturbed.
+            await execFileAsync("git", ["fetch", state.remote, `${branch}:${branch}`], { cwd: projectRoot });
+          }
+          await createWorktree({
+            projectRoot,
+            slug,
+            branch,
+            createBranch: createdBranch,
+            from: plan.action === "new-branch" ? plan.from : undefined,
+          });
           worktreeCreated = true;
 
           const record: WorkSession = {
@@ -294,10 +477,15 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
             kind,
             slug,
             branch,
-            baseBranch: null,
+            // Forking knows its base exactly; otherwise the work branched off
+            // whatever the repo root has checked out — in practice `develop`.
+            baseBranch: mode === "fork" ? ref : await currentBranch(projectRoot),
             pr: null,
             worktreePath,
-            checkpointPath: null,
+            // Adopting a checkpoint opens the workflow gate at creation, so the
+            // watcher (which ignores files inherited from the checkout) is
+            // never consulted for this session.
+            checkpointPath: startFrom?.checkpointPath ?? null,
             setupDone: false,
             // Git has finished checking out inherited files before this value is
             // captured. The checkpoint watcher uses the boundary to ignore them.
@@ -318,7 +506,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
           if (worktreeCreated) {
             await removeWorktree({ projectRoot, worktreePath }).catch(() => {});
           }
-          if (!branchPreexisted) {
+          if (createdBranch) {
             await execFileAsync("git", ["branch", "-D", branch], { cwd: projectRoot }).catch(() => {});
           }
           throw error;

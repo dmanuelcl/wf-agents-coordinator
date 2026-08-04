@@ -337,4 +337,89 @@ describe("createSessionOrchestrator", () => {
     });
     await expect(orchestrator.openRole(current.id, "implementer")).rejects.toThrow(/not unlocked/i);
   });
+
+  it("opens a session that already carries a checkpoint in Implementer, not Architect", async () => {
+    // A session adopted from an existing branch is born with its checkpoint, so
+    // the architect stage is already done — the handoff is `wf implement`.
+    const current = session({
+      kind: "feature",
+      setupDone: true,
+      branch: "feature/auth",
+      checkpointPath: "docs/workflow/checkpoints/auth-checkpoint.md",
+    });
+    const creates: Parameters<RunnerTerminalController["create"]>[0][] = [];
+    const launchedRoles: string[] = [];
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async (input) => {
+          creates.push(input);
+          return { sessionId: "implementer-pty", reused: false };
+        },
+        replace: vi.fn(), attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async (_sessionId, role) => {
+      launchedRoles.push(role);
+      return {
+        agentCommand: "codex",
+        agentKind: "codex",
+        environment: {},
+        wfCommand: `wf implement ${current.checkpointPath}`,
+        cwd: current.worktreePath,
+        sessionUuid: null,
+        warnings: [],
+      };
+    });
+
+    await orchestrator.ensure(current.id);
+
+    expect(launchedRoles).toEqual(["implementer"]);
+    expect(creates[0]).toMatchObject({
+      persistKey: `${current.id}::role::implementer`,
+      // Feature/fix sessions pre-type without submitting — the user presses Enter.
+      initialInput: { text: "wf implement docs/workflow/checkpoints/auth-checkpoint.md", submit: false },
+    });
+  });
+
+  it("still opens a checkpointless feature session in Architect", async () => {
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/auth", checkpointPath: null });
+    const launchedRoles: string[] = [];
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async () => ({ sessionId: "architect-pty", reused: false }),
+        replace: vi.fn(), attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async (_sessionId, role) => {
+      launchedRoles.push(role);
+      return {
+        agentCommand: "codex", agentKind: "codex", environment: {},
+        wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
+      };
+    });
+
+    await orchestrator.ensure(current.id);
+
+    expect(launchedRoles).toEqual(["architect"]);
+  });
 });

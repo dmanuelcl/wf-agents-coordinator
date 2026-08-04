@@ -133,6 +133,25 @@ only when the root output is current. Removing a session removes the worktree
 (after confirmation). Everything the session's agents do happens inside that
 worktree.
 
+### Starting from work that already exists
+A feature/fix session can start somewhere other than a fresh branch — pick **Start from** in the
+new-session dialog:
+
+- **Continue** — check out an existing branch *writable*, to pick up a session a teammate started
+  (or your own from another machine). The branch is fetched and fast-forwarded first; if it has
+  diverged from its remote, or another session already holds it, creation stops and says so rather
+  than starting on the wrong code.
+- **Fork** — cut a new `feature/<slug>` branch from a base an architect published the specs and plan
+  on (typically `develop`), starting from `origin/<base>` rather than from local commits.
+
+Either way you can **adopt a checkpoint** committed on that branch: the picker reads it straight out
+of the ref without checking it out, and the session is born past the gate — Implementer and Reviewer
+unlocked, `wf implement <checkpoint>` pre-typed. The agent conversation is not resumed (those ids
+live on the machine that created them); the checkpoint *is* the handoff.
+
+A session also records the branch it started from, so **Diff** compares against that base instead of
+always against `main`.
+
 If the configured setup command fails, its terminal stays open as a repair shell
 while agent tabs remain gated. After fixing the worktree there, use **Continue
 with agents** to persist the setup as ready and resume the session's normal

@@ -86,6 +86,26 @@ describe("createWorktree", () => {
     expect(branches).toContain("feature/brand-new");
   });
 
+  it("creates the new branch at an explicit start point rather than at HEAD", async () => {
+    initGitRepo(dir);
+    // A commit that only `feature/example` carries, so branching from it is visible.
+    execFileSync("git", ["checkout", "-q", "feature/example"], { cwd: dir });
+    writeFileSync(join(dir, "spec.txt"), "spec\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", "architect writes the spec"], { cwd: dir });
+    execFileSync("git", ["checkout", "-q", "-"], { cwd: dir });
+
+    await createWorktree({
+      projectRoot: dir,
+      slug: "forked",
+      branch: "feature/forked",
+      createBranch: true,
+      from: "feature/example",
+    });
+
+    expect(existsSync(join(dir, ".worktrees", "forked", "spec.txt"))).toBe(true);
+  });
+
   it("prunes an invisible stale registration before recreating a worktree", async () => {
     initGitRepo(dir);
     const worktreePath = join(dir, ".worktrees", "example");
