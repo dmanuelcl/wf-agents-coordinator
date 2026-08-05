@@ -26,7 +26,9 @@ export interface TerminalScreenStore {
 
 interface ScreenEntry {
   terminal: XtermTerminal;
-  pendingWrite: Promise<void>;
+  /** Whether chunks have been queued since the last drain, so an idle terminal
+   *  can snapshot without waiting on xterm's write queue at all. */
+  pendingChunks: boolean;
 }
 
 /**
@@ -46,16 +48,23 @@ export function createTerminalScreenStore(): TerminalScreenStore {
       entries.get(sessionId)?.terminal.dispose();
       entries.set(sessionId, {
         terminal: new Terminal({ cols, rows, scrollback: 3000, allowProposedApi: false }),
-        pendingWrite: Promise.resolve(),
+        pendingChunks: false,
       });
     },
 
+    /**
+     * Hand the chunk straight to xterm's own write queue, which already batches
+     * and preserves order. Awaiting a promise per chunk instead — as this did —
+     * forced one event-loop turn per PTY chunk, and a streaming agent emits
+     * tens of thousands of them: 20k chunks cost 23s that way versus 13ms this
+     * way, and that stall is on the runner's event loop, so it delayed every
+     * client's terminal stream too.
+     */
     write(sessionId, data) {
       const entry = entryFor(sessionId);
       if (!entry) return;
-      entry.pendingWrite = entry.pendingWrite.then(
-        () => new Promise<void>((resolve) => entry.terminal.write(data, resolve)),
-      );
+      entry.pendingChunks = true;
+      entry.terminal.write(data);
     },
 
     resize(sessionId, { cols, rows }) {
@@ -67,7 +76,16 @@ export function createTerminalScreenStore(): TerminalScreenStore {
     async snapshot(sessionId) {
       const entry = entryFor(sessionId);
       if (!entry) return null;
-      await entry.pendingWrite;
+      // An empty write's callback fires once everything queued before it has
+      // been parsed, so a snapshot still sees every prior chunk — one promise
+      // per snapshot (rare) instead of one per chunk (constant). An idle
+      // terminal has nothing to drain and must not wait on the queue at all:
+      // the very first snapshot of a silent PTY happens before any output.
+      if (entry.pendingChunks) {
+        // Cleared BEFORE awaiting so a chunk arriving mid-drain re-arms it.
+        entry.pendingChunks = false;
+        await new Promise<void>((resolve) => entry.terminal.write("", resolve));
+      }
       const buffer = entry.terminal.buffer.active;
       const lines: string[] = [];
       for (let row = 0; row < entry.terminal.rows; row += 1) {
