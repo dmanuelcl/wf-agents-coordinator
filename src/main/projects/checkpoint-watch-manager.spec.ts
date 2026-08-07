@@ -209,6 +209,33 @@ describe("createCheckpointWatchManager", () => {
     expect(watchedPaths.some((p) => p.includes(join(".worktrees", "feature-x")))).toBe(true);
   });
 
+  // Auto-pilot routing resolves this path against the project root before
+  // comparing it with a session's own worktree-relative checkpointPath, so the
+  // worktree prefix belongs in the reported path.
+  it("reports a worktree checkpoint relative to the project root, not to its worktree", async () => {
+    const filePath = writeCheckpoint(join(dir, ".worktrees", "feature-x"), "feature-x-example");
+    const { createWatcher, watchers } = makeFakeCreateWatcher();
+    const onCheckpointChanged = vi.fn();
+
+    const manager = createCheckpointWatchManager({
+      createWatcher,
+      debounceMs: 0,
+      onCheckpointChanged,
+      onCheckpointRemoved: vi.fn(),
+    });
+
+    await manager.watchProject(makeProject(dir));
+    watchers[0]?.emitChange(filePath);
+    await vi.waitFor(() => expect(onCheckpointChanged).toHaveBeenCalled());
+
+    expect(onCheckpointChanged).toHaveBeenCalledWith(
+      "test-project",
+      expect.objectContaining({
+        checkpointPath: join(".worktrees", "feature-x", "docs", "workflow", "checkpoints", "feature-x-example-checkpoint.md"),
+      }),
+    );
+  });
+
   it("stops forwarding events after unwatchProject", async () => {
     const filePath = writeCheckpoint(dir, "root-example");
     const { createWatcher, watchers } = makeFakeCreateWatcher();

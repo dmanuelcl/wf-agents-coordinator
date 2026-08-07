@@ -9,6 +9,7 @@ import type { IpcTransport } from "../ipc/ipc-transport";
 import type { SystemIntegration } from "../platform/system-integration";
 import { createChokidarWatcher } from "../projects/chokidar-watcher-adapter";
 import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manager";
+import { sessionsOwningCheckpoint } from "../projects/checkpoint-session-routing";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import { createSessionRegistry } from "../projects/session-registry";
 import { createSessionOrchestrator } from "../projects/session-orchestrator";
@@ -77,11 +78,18 @@ export async function createCoordinatorRuntime(
     createWatcher: createChokidarWatcher,
     onCheckpointChanged: (projectId, checkpoint) => {
       broadcast(CHECKPOINT_IPC_CHANNELS.changed, { projectId, checkpoint });
-      void sessionRegistry.listSessions({ projectId }).then((sessions) => {
-        for (const session of sessions) {
-          if (session.checkpointPath === checkpoint.checkpointPath) {
-            sessionOrchestrator?.onCheckpoint(session.id, checkpoint);
-          }
+      void Promise.all([
+        projectRegistry.listProjects(),
+        sessionRegistry.listSessions({ projectId }),
+      ]).then(([projects, sessions]) => {
+        const projectRoot = projects.find((candidate) => candidate.id === projectId)?.rootPath;
+        if (!projectRoot) return;
+        for (const session of sessionsOwningCheckpoint({
+          projectRoot,
+          sessions,
+          changedCheckpointPath: checkpoint.checkpointPath,
+        })) {
+          sessionOrchestrator?.onCheckpoint(session.id, checkpoint);
         }
       }).catch((error: unknown) => {
         console.error(`Could not route checkpoint ${checkpoint.checkpointPath} to auto-pilot:`, error);
