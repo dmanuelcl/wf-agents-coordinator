@@ -1,5 +1,5 @@
 import { truncateSessionName } from "../../shared/workflow/work-session";
-import type { SessionStartFromInput } from "../../shared/ipc/contract";
+import type { RefCheckpointSummary, SessionStartFromInput } from "../../shared/ipc/contract";
 
 /**
  * Where a new feature/fix session starts. `new` is today's behavior — a fresh
@@ -43,4 +43,22 @@ export function startFromBranchHint(mode: StartFromMode, ref: string): string {
     return `The worktree checks out ${ref} itself — writable, so your commits land on that branch.`;
   }
   return `A new branch is cut from origin/${ref} when it is published, so you start from what was pushed rather than from local commits.`;
+}
+
+/**
+ * What the checkpoint field says under itself. Once one is adopted the hint
+ * becomes its full path: the picker is searched by title, so the path is the
+ * only place the exact file being adopted is spelled out.
+ */
+export function startFromCheckpointHint(params: {
+  ref: string;
+  checkpoints: RefCheckpointSummary[] | null;
+  checkpointPath: string;
+}): string {
+  if (!params.ref) return "Pick a branch first.";
+  if (params.checkpointPath) return `Adopting ${params.checkpointPath}`;
+  if (params.checkpoints && params.checkpoints.length === 0) {
+    return "No checkpoint committed on this branch — the session starts at Architect.";
+  }
+  return "Adopting one unlocks Implementer and Reviewer right away, with wf implement pre-typed.";
 }

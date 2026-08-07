@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildStartFromInput, canSubmitStartFrom, startFromBranchHint, suggestSessionName } from "./session-start-from";
+import {
+  buildStartFromInput,
+  canSubmitStartFrom,
+  startFromBranchHint,
+  startFromCheckpointHint,
+  suggestSessionName,
+} from "./session-start-from";
+import type { RefCheckpointSummary } from "../../shared/ipc/contract";
 
 describe("canSubmitStartFrom", () => {
   it("requires only a name in the default mode", () => {
@@ -71,5 +78,40 @@ describe("startFromBranchHint", () => {
 
   it("has nothing to say without a branch", () => {
     expect(startFromBranchHint("continue", "")).toBe("");
+  });
+});
+
+describe("startFromCheckpointHint", () => {
+  const checkpoint: RefCheckpointSummary = {
+    path: "docs/checkpoints/session-start-point.md",
+    feature: "Session start point",
+    slug: "session-start-point",
+    status: "PLANNED",
+  };
+
+  it("asks for a branch before anything can be listed", () => {
+    expect(startFromCheckpointHint({ ref: "", checkpoints: null, checkpointPath: "" })).toBe("Pick a branch first.");
+  });
+
+  it("says the session starts at Architect when the branch carries no checkpoint", () => {
+    const hint = startFromCheckpointHint({ ref: "develop", checkpoints: [], checkpointPath: "" });
+
+    expect(hint).toContain("No checkpoint committed on this branch");
+  });
+
+  it("shows the full path of the adopted checkpoint, not its title", () => {
+    const hint = startFromCheckpointHint({
+      ref: "develop",
+      checkpoints: [checkpoint],
+      checkpointPath: "docs/checkpoints/session-start-point.md",
+    });
+
+    expect(hint).toBe("Adopting docs/checkpoints/session-start-point.md");
+  });
+
+  it("explains what adopting one buys while the list is still being read", () => {
+    const hint = startFromCheckpointHint({ ref: "develop", checkpoints: null, checkpointPath: "" });
+
+    expect(hint).toContain("unlocks Implementer and Reviewer");
   });
 });

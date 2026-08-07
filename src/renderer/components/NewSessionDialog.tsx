@@ -4,10 +4,12 @@ import { SESSION_NAME_MAX_LENGTH, truncateSessionName } from "../../shared/workf
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
 import type { BranchList, RefCheckpointSummary, ResolvedPr } from "../../shared/ipc/contract";
 import { BranchCombobox } from "./BranchCombobox";
+import { CheckpointCombobox } from "./CheckpointCombobox";
 import {
   buildStartFromInput,
   canSubmitStartFrom,
   startFromBranchHint,
+  startFromCheckpointHint,
   suggestSessionName,
 } from "./session-start-from";
 import type { StartFromMode } from "./session-start-from";
@@ -385,27 +387,20 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                       <label htmlFor="start-checkpoint" className="field-label">
                         Checkpoint
                       </label>
-                      <select
-                        id="start-checkpoint"
+                      <CheckpointCombobox
+                        inputId="start-checkpoint"
+                        checkpoints={refCheckpoints}
+                        loading={loadingCheckpoints}
+                        disabled={!startRef}
                         value={startCheckpoint}
-                        disabled={!startRef || loadingCheckpoints}
-                        onChange={(event) => setStartCheckpoint(event.target.value)}
-                      >
-                        <option value="">
-                          {loadingCheckpoints ? "Reading the branch…" : "None — start at Architect"}
-                        </option>
-                        {(refCheckpoints ?? []).map((checkpoint) => (
-                          <option key={checkpoint.path} value={checkpoint.path}>
-                            {checkpoint.feature ?? checkpoint.slug ?? checkpoint.path} · {checkpoint.status}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setStartCheckpoint}
+                      />
                       <p className="field-hint">
-                        {!startRef
-                          ? "Pick a branch first."
-                          : refCheckpoints && refCheckpoints.length === 0
-                            ? "No checkpoint committed on this branch — the session starts at Architect."
-                            : "Adopting one unlocks Implementer and Reviewer right away, with wf implement pre-typed."}
+                        {startFromCheckpointHint({
+                          ref: startRef,
+                          checkpoints: refCheckpoints,
+                          checkpointPath: startCheckpoint,
+                        })}
                       </p>
                     </div>
                   </>

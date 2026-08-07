@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { statusBadgeClass } from "./checkpoint-display";
 import { CopyButton } from "./CopyButton";
 import { FileTree } from "./FileTree";
 import { GitDiffView } from "./GitDiffView";
@@ -223,12 +224,6 @@ function LedgerTable(props: { rows: LedgerRow[]; onOpenPlan: (planCell: string) 
 
 function findingCountLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function statusBadgeClass(status: WorkflowStatus): string {
-  if (status === "BLOCKED") return "badge badge-attention";
-  if (status === "DONE") return "badge badge-done";
-  return "badge";
 }
 
 // At-a-glance state for deciding what to do next: status, who's active, open vs
