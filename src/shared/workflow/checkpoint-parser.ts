@@ -18,6 +18,20 @@ const KNOWN_ROLES: readonly WorkflowRole[] = ["architect", "implementer", "revie
 const KNOWN_ROLE_SET = new Set<string>(KNOWN_ROLES);
 const KNOWN_STATUSES: readonly WorkflowStatus[] = ["IN_PROGRESS", "BLOCKED", "DONE"];
 const KNOWN_STATUS_SET = new Set<string>(KNOWN_STATUSES);
+/**
+ * Splits one markdown table row into its cells, honouring the `\|` escape.
+ *
+ * A raw `|` reaches these cells through inline code a checkpoint legitimately quotes — a TS union
+ * (`Foo | undefined`), an enum union (`CONFLICT|INVALID_ORDER_TRANSITION`), a shell pipe. Splitting
+ * on the raw character shifts every later cell by one, so `Estado` is read out of the `Origen`
+ * column and the row lands in `UNKNOWN` — counted in `total`, absent from every per-state bucket, so
+ * `open: 0` reads true while real pendings exist. Checkpoints escape those pipes as `\|` (valid
+ * markdown, renders as `|`); this splitter is the other half of that contract.
+ */
+function splitTableCells(line: string): string[] {
+  return line.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
 const KNOWN_FOLLOW_UP_STATES: readonly FollowUpState[] = ["OPEN", "KEEP", "PROMOTED", "DONE", "DROPPED"];
 const KNOWN_FOLLOW_UP_STATE_SET = new Set<string>(KNOWN_FOLLOW_UP_STATES);
 const ROLE_LABELS = new Set(["rol", "role"]);
@@ -241,7 +255,7 @@ function parseLedgerSection(sectionText: string): LedgerRow[] {
   const dataLines = tableLines.slice(2);
 
   return dataLines.map((line) => {
-    const cells = line.split("|").map((cell) => cell.trim());
+    const cells = splitTableCells(line);
     if (cells[0] === "") cells.shift();
     if (cells[cells.length - 1] === "") cells.pop();
 
@@ -295,7 +309,7 @@ function parseFollowUpsSection(sectionText: string): WorkflowFollowUp[] {
   const dataLines = tableLines.slice(2);
 
   return dataLines.map((line) => {
-    const cells = line.split("|").map((cell) => cell.trim());
+    const cells = splitTableCells(line);
     if (cells[0] === "") cells.shift();
     if (cells[cells.length - 1] === "") cells.pop();
 

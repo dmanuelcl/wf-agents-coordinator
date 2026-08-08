@@ -697,3 +697,45 @@ Started.
     expect(result.followUpCounts).toEqual({ total: 2, open: 0, keep: 1, promoted: 1, done: 0, dropped: 0 });
   });
 });
+
+const ESCAPED_PIPE_CHECKPOINT = `---
+feature: Escaped pipes
+slug: escaped-pipes
+kind: feature
+branch: feature/escaped-pipes
+worktree: .worktrees/escaped-pipes
+status: IN_PROGRESS
+active: none
+---
+
+# ▶ NEXT
+- **Rol:** implementer
+- **Corre:** \`wf implement docs/workflow/checkpoints/escaped-pipes-checkpoint.md\`
+- **Session lane:** \`plan-1/implementer\`
+- **Tarea:** Plan-1 — implementación fresca.
+
+# Follow-ups
+| ID | Título | Origen | Estado | Detalle |
+|----|--------|--------|--------|---------|
+| FU1 | Quitar el cast \`billingType as BillingTypeEnum \\| undefined\` | Plan-7 T1 | PROMOTED→Plan-10 | Detalle simple |
+| FU2 | Aceptar \`CONFLICT\\|INVALID_ORDER_TRANSITION\` | Plan-2 ARCH Obs1 | OPEN | – |
+| FU3 | Fila normal, sin tuberías | Plan-3 PR V1 | DONE | Cerrada con \`grep -v x\\|y\` |
+`;
+
+describe("escaped pipes inside table cells", () => {
+  it("does not split a cell on an escaped pipe, and unescapes it in the parsed value", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: ESCAPED_PIPE_CHECKPOINT });
+
+    expect(result.followUps.map((followUp) => followUp.state)).toEqual(["PROMOTED", "OPEN", "DONE"]);
+    expect(result.followUps[0]?.title).toBe("Quitar el cast `billingType as BillingTypeEnum | undefined`");
+    expect(result.followUps[0]?.promotedTo).toBe("Plan-10");
+    expect(result.followUps[1]?.title).toBe("Aceptar `CONFLICT|INVALID_ORDER_TRANSITION`");
+    expect(result.followUps[2]?.detail).toBe("Cerrada con `grep -v x|y`");
+  });
+
+  it("counts an escaped-pipe row in its real bucket instead of dropping it into UNKNOWN", () => {
+    const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: ESCAPED_PIPE_CHECKPOINT });
+
+    expect(result.followUpCounts).toEqual({ total: 3, open: 1, keep: 0, promoted: 1, done: 1, dropped: 0 });
+  });
+});
