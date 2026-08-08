@@ -11,6 +11,8 @@ import type {
   TerminalScreenSnapshot,
   WorkSession,
 } from "../../shared/ipc/contract";
+import { terminalFitMode } from "./terminal-fit-mode";
+import type { TerminalFitMode } from "./terminal-fit-mode";
 
 // File-path-ish tokens in terminal output: optional dir prefix, a filename with
 // an extension, and an optional :line[:col] suffix. A token that isn't a real
@@ -168,15 +170,20 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     let disposed = false;
     let shellCwd = cwdOverride ?? session.worktreePath;
     const disposables: Array<() => void> = [];
-    let runnerOwnedGeometry = false;
+    let runnerScreenAdopted = false;
+    let ptyExited = false;
     let resizeAnimationFrame: number | null = null;
     let geometryTimer: ReturnType<typeof setTimeout> | null = null;
     let geometryRequestInFlight = false;
     let pendingGeometry: { cols: number; rows: number } | null = null;
     let lastAppliedGeometry: string | null = null;
 
+    function fitMode(): TerminalFitMode {
+      return terminalFitMode({ attached: ptyId !== null, runnerScreenAdopted, ptyExited });
+    }
+
     function queueRunnerDisplayGeometry(): void {
-      if (!runnerOwnedGeometry || !ptyId) return;
+      if (fitMode() !== "runner") return;
       const proposed = fitAddon.proposeDimensions();
       if (!proposed) return;
       const key = `${proposed.cols}:${proposed.rows}`;
@@ -217,14 +224,15 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
       // remote PTY. It would make a full-screen TUI permanently adopt a tiny
       // geometry until the next real resize.
       if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
-      if (runnerOwnedGeometry) {
+      if (fitMode() === "runner") {
         // Resizing is deliberately a presentation event. The existing runner
         // PTY receives SIGWINCH, but its process, prompt and session survive.
         queueRunnerDisplayGeometry();
         return;
       }
-      // Before attaching, this is only a local measurement surface. It must
-      // never create a PTY or decide an agent command.
+      // Before attaching — and again after the PTY exits, when the runner no
+      // longer holds a screen model to resize — this is only a local
+      // measurement surface. It must never create a PTY or decide a command.
       fitAddon.fit();
     }
 
@@ -292,6 +300,13 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
         }
         if (event.sessionId !== ptyId) return;
         setExitCode(event.code);
+        // The runner discards this PTY's screen model on exit, so every further
+        // resize it is asked for answers null. Without handing fitting back to
+        // the view here, a failed setup command leaves the pane stuck on the
+        // runner's grid with its last lines — the error — clipped off-screen.
+        ptyExited = true;
+        lastAppliedGeometry = null;
+        scheduleFitAndResize();
       };
 
       const unsubscribeData = window.agentCoordinator.terminal.onData(handleData);
@@ -320,7 +335,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
             // The runner owns a headless terminal model of this PTY. Hydrate
             // the new view from it, then update only display rows/columns for
             // the currently visible client.
-            runnerOwnedGeometry = true;
+            runnerScreenAdopted = true;
             restoreRunnerScreen(term, attached.snapshot);
             scheduleFitAndResize();
           } else if (!attached.alternateScreen) {
