@@ -12,6 +12,7 @@ import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { isRepoSessionId } from "../../shared/workflow/work-session";
 import type { WorkSession } from "../../shared/workflow/work-session";
 import type { RunnerTerminalController } from "../ipc/register-terminal-ipc-handlers";
+import { checkpointCommitState } from "./checkpoint-commit-gate";
 import type { ProjectRecord, ProjectRegistry } from "./project-registry";
 import type {
   RunnerSessionRuntimeRecord,
@@ -26,6 +27,11 @@ import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-stor
 // without letting a browser resize an agent running on another device.
 const RUNNER_COLS = 160;
 const RUNNER_ROWS = 44;
+
+// How often to look for the commit that closes an agent's turn. Short on
+// purpose: the project's settle delay is meant to run *after* that commit
+// lands, so polling for it must not add a delay of its own.
+const HANDOFF_COMMIT_POLL_MS = 2_000;
 
 export interface SessionRuntimeChangedEvent {
   sessionId: string;
@@ -122,6 +128,10 @@ export function createSessionOrchestrator(params: {
   const workBySession = new Map<string, Promise<unknown>>();
   const autoPilotTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const latestCheckpoint = new Map<string, ParsedCheckpoint>();
+  // When the commit that closes a hand-off was first seen, per session. The
+  // project's settle delay is measured from this moment, not from the
+  // checkpoint write that preceded it.
+  const handoffCommittedAt = new Map<string, { stepKey: string; atEpochMs: number }>();
   // Kimi exposes the durable conversation id in terminal output. Keep the
   // small rolling window on the runner: a browser reconnect must not decide
   // whether an agent can later be resumed.
@@ -348,6 +358,50 @@ export function createSessionOrchestrator(params: {
         return;
       }
 
+      // Hand off only once the outgoing agent has committed this NEXT — its
+      // last act, and the only end-of-turn signal that is a fact rather than a
+      // guess. An agent that writes NEXT early in its turn has not committed
+      // yet, so the gate holds instead of starting a second agent on top of it.
+      // Nothing is committed to conductor state here: the step is not acted on.
+      const stepKey = `${action.role}|${action.lane}|${action.command}`;
+      const waitFor = async (message: string, delayMs: number): Promise<void> => {
+        if (runtime.autoPilot.message !== message) {
+          runtime.autoPilot.message = message;
+          await publish(sessionId, runtime.phase === "ready", runtime);
+        }
+        scheduleAutopilot(sessionId, delayMs);
+      };
+      const commitState = session.checkpointPath === null
+        ? "committed"
+        : await checkpointCommitState({
+          worktreePath: session.worktreePath,
+          checkpointPath: session.checkpointPath,
+        });
+      if (commitState !== "committed") {
+        handoffCommittedAt.delete(sessionId);
+        await waitFor(
+          commitState === "unknown"
+            ? "waiting · cannot read the checkpoint's commit state"
+            : "waiting · hand-off not committed yet",
+          HANDOFF_COMMIT_POLL_MS,
+        );
+        return;
+      }
+
+      // The configured settle delay runs from the commit, not from the write.
+      const committed = handoffCommittedAt.get(sessionId);
+      if (!committed || committed.stepKey !== stepKey) {
+        handoffCommittedAt.set(sessionId, { stepKey, atEpochMs: Date.now() });
+        await waitFor("hand-off committed · settling", config.settleDelayMs);
+        return;
+      }
+      const settledFor = Date.now() - committed.atEpochMs;
+      if (settledFor < config.settleDelayMs) {
+        await waitFor("hand-off committed · settling", config.settleDelayMs - settledFor);
+        return;
+      }
+      handoffCommittedAt.delete(sessionId);
+
       if (!buildAutopilotLaunch) throw new Error("Session orchestrator was started before its auto-pilot launch builder was registered.");
       const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command);
       let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === action.role);
@@ -498,6 +552,7 @@ export function createSessionOrchestrator(params: {
         runtime.autoPilot.message = enabled ? "Auto-pilot enabled" : "Auto-pilot disabled";
         if (!enabled) {
           runtime.autoPilot.state = INITIAL_CONDUCTOR_STATE;
+          handoffCommittedAt.delete(sessionId);
           const timer = autoPilotTimers.get(sessionId);
           if (timer) clearTimeout(timer);
           autoPilotTimers.delete(sessionId);
@@ -507,7 +562,9 @@ export function createSessionOrchestrator(params: {
         if (enabled) {
           const checkpoint = latestCheckpoint.get(sessionId) ?? await readCheckpoint(sessionId);
           if (checkpoint) latestCheckpoint.set(sessionId, checkpoint);
-          if (checkpoint) scheduleAutopilot(sessionId, (await projectFor(session.projectId)).autoPilot.settleDelayMs);
+          // Straight to the commit check: the settle delay is applied on the
+          // far side of it, once the hand-off commit has actually been seen.
+          if (checkpoint) scheduleAutopilot(sessionId, HANDOFF_COMMIT_POLL_MS);
         }
         return runtime;
       });
@@ -580,9 +637,9 @@ export function createSessionOrchestrator(params: {
       latestCheckpoint.set(sessionId, checkpoint);
       void runtimeStore.get(sessionId).then(async (runtime) => {
         if (!runtime?.autoPilot.enabled) return;
-        const session = await sessionFor(sessionId);
-        const project = await projectFor(session.projectId);
-        scheduleAutopilot(sessionId, project.autoPilot.settleDelayMs);
+        // Start looking for the hand-off commit right away. Waiting the settle
+        // delay here too would charge it twice — it belongs after the commit.
+        scheduleAutopilot(sessionId, HANDOFF_COMMIT_POLL_MS);
       }).catch((error: unknown) => {
         console.error(`Could not schedule auto-pilot for ${sessionId}:`, error);
       });
@@ -637,6 +694,7 @@ export function createSessionOrchestrator(params: {
       if (timer) clearTimeout(timer);
       autoPilotTimers.delete(sessionId);
       latestCheckpoint.delete(sessionId);
+      handoffCommittedAt.delete(sessionId);
       await runtimeStore.remove(sessionId);
       for (const [terminalId, live] of liveTerminal) {
         if (live.sessionId !== sessionId) continue;
