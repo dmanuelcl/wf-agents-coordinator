@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { createSessionOrchestrator } from "./session-orchestrator";
@@ -428,38 +424,30 @@ describe("createSessionOrchestrator", () => {
     expect(launchedRoles).toEqual(["architect"]);
   });
 
-  it("holds the hand-off until the agent commits its NEXT, then settles and runs it", async () => {
+  it("waits for the next hand-off before launching the role the checkpoint moved to", async () => {
     const checkpointPath = "docs/workflow/checkpoints/auth-checkpoint.md";
-    const worktreePath = mkdtempSync(join(tmpdir(), "agent-coordinator-handoff-"));
-    const git = (...args: string[]): void => { execFileSync("git", args, { cwd: worktreePath }); };
-    git("init", "-q", "-b", "feature/auth");
-    git("config", "user.email", "test@example.com");
-    git("config", "user.name", "Test");
-    writeFileSync(join(worktreePath, "README.md"), "init\n", "utf8");
-    git("add", ".");
-    git("commit", "-q", "-m", "init");
+    const checkpointFor = (role: string, lane: string) => parseCheckpointMarkdown({
+      checkpointPath,
+      markdown: [
+        "---", "feature: Auth", "slug: auth", "kind: feature", "status: IN_PROGRESS", "active: none", "---",
+        "",
+        "# ▶ NEXT",
+        `- **Rol:** ${role}`,
+        `- **Corre:** \`wf ${role === "implementer" ? "implement" : "review"} ${checkpointPath}\``,
+        `- **Session lane:** \`${lane}\``,
+      ].join("\n"),
+    });
+    const toImplementer = checkpointFor("implementer", "plan-1/implementer");
+    const toReviewer = checkpointFor("reviewer", "plan-1/reviewer");
 
-    // The outgoing agent has written its hand-off but not committed it yet.
-    mkdirSync(join(worktreePath, "docs", "workflow", "checkpoints"), { recursive: true });
-    const markdown = [
-      "---", "feature: Auth", "slug: auth", "kind: feature", "status: IN_PROGRESS", "active: none", "---",
-      "",
-      "# ▶ NEXT",
-      "- **Rol:** implementer",
-      `- **Corre:** \`wf implement ${checkpointPath}\``,
-      "- **Session lane:** `plan-1/implementer`",
-    ].join("\n");
-    writeFileSync(join(worktreePath, checkpointPath), markdown, "utf8");
-    const checkpoint = parseCheckpointMarkdown({ checkpointPath, markdown });
-
-    const current = session({ kind: "feature", setupDone: true, branch: "feature/auth", worktreePath, checkpointPath });
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/auth", checkpointPath });
     const replace = vi.fn(async (_input: Parameters<RunnerTerminalController["replace"]>[0]) => ({
-      sessionId: "implementer-pty-2",
+      sessionId: "agent-pty-2",
       reused: false,
     }));
     const orchestrator = createSessionOrchestrator({
       projectRegistry: {
-        listProjects: async () => [{ ...project(), autoPilot: { reloopLimit: 3, settleDelayMs: 50 } }],
+        listProjects: async () => [{ ...project(), autoPilot: { reloopLimit: 3, settleDelayMs: 30 } }],
         addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
       } as unknown as ProjectRegistry,
       sessionRegistry: {
@@ -467,7 +455,85 @@ describe("createSessionOrchestrator", () => {
       } as unknown as SessionRegistry,
       runtimeStore: memoryStore(),
       terminals: {
-        create: async () => ({ sessionId: "implementer-pty", reused: false }),
+        create: async () => ({ sessionId: "agent-pty", reused: false }),
+        replace, attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => toImplementer),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async () => ({
+      agentCommand: "codex", agentKind: "codex", environment: {},
+      wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
+    }));
+    orchestrator.setAutopilotLaunchBuilder(async () => ({
+      command: "codex", agentKind: "codex", cwd: current.worktreePath, environment: {}, typePrompt: "wf step",
+    }));
+
+    try {
+      await orchestrator.ensure(current.id);
+      // The architect's `wf done`: turn over, handing to the implementer.
+      orchestrator.onHandoff(current.id, {
+        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer",
+      });
+      await orchestrator.setAutopilot(current.id, true);
+
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      expect(replace.mock.calls[0]?.[0]).toMatchObject({ persistKey: `${current.id}::role::implementer` });
+
+      // The implementer moves NEXT to the reviewer mid-turn. Without a hand-off
+      // that is not permission to start the reviewer on top of it.
+      orchestrator.onCheckpoint(current.id, toReviewer);
+      await vi.waitFor(async () => {
+        expect((await orchestrator.runtime(current.id))?.autoPilot.message)
+          .toBe("waiting · the current agent has not handed off yet");
+      }, { timeout: 5_000 });
+      expect(replace).toHaveBeenCalledTimes(1);
+
+      // Now the implementer's turn actually ends.
+      orchestrator.onHandoff(current.id, {
+        turn: 2, checkpointPath, role: "reviewer", sessionLane: "plan-1/reviewer",
+      });
+
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      expect(replace.mock.calls[1]?.[0]).toMatchObject({ persistKey: `${current.id}::role::reviewer` });
+      expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf review ${checkpointPath}`);
+    } finally {
+      await orchestrator.remove(current.id);
+    }
+  }, 20_000);
+
+  // A workflow that does not emit hand-offs keeps the behavior it had before the
+  // gate existed, and says so, rather than never advancing again.
+  it("advances a session that has never produced a hand-off, naming the weaker signal", async () => {
+    const checkpointPath = "docs/workflow/checkpoints/auth-checkpoint.md";
+    const checkpoint = parseCheckpointMarkdown({
+      checkpointPath,
+      markdown: [
+        "---", "feature: Auth", "slug: auth", "kind: feature", "status: IN_PROGRESS", "active: none", "---",
+        "",
+        "# ▶ NEXT",
+        "- **Rol:** implementer",
+        `- **Corre:** \`wf implement ${checkpointPath}\``,
+        "- **Session lane:** `plan-1/implementer`",
+      ].join("\n"),
+    });
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/auth", checkpointPath });
+    const replace = vi.fn(async (_input: Parameters<RunnerTerminalController["replace"]>[0]) => ({
+      sessionId: "agent-pty-2",
+      reused: false,
+    }));
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [{ ...project(), autoPilot: { reloopLimit: 3, settleDelayMs: 30 } }],
+        addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async () => ({ sessionId: "agent-pty", reused: false }),
         replace, attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
       },
       sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
@@ -476,34 +542,21 @@ describe("createSessionOrchestrator", () => {
     });
     orchestrator.setRoleLaunchBuilder(async () => ({
       agentCommand: "codex", agentKind: "codex", environment: {},
-      wfCommand: null, cwd: worktreePath, sessionUuid: null, warnings: [],
+      wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
     }));
     orchestrator.setAutopilotLaunchBuilder(async () => ({
-      command: "codex", agentKind: "codex", cwd: worktreePath, environment: {}, typePrompt: "wf implement",
+      command: "codex", agentKind: "codex", cwd: current.worktreePath, environment: {}, typePrompt: "wf step",
     }));
 
     try {
       await orchestrator.ensure(current.id);
       await orchestrator.setAutopilot(current.id, true);
 
-      await vi.waitFor(async () => {
-        expect((await orchestrator.runtime(current.id))?.autoPilot.message)
-          .toBe("waiting · hand-off not committed yet");
-      }, { timeout: 10_000 });
-      expect(replace).not.toHaveBeenCalled();
-
-      // The agent's last act lands: NEXT is now committed.
-      git("add", checkpointPath);
-      git("commit", "-q", "-m", "hand off to implementer");
-
-      await vi.waitFor(() => {
-        expect(replace).toHaveBeenCalledTimes(1);
-      }, { timeout: 10_000 });
-      expect(replace.mock.calls[0]?.[0]).toMatchObject({ persistKey: `${current.id}::role::implementer` });
-      expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf implement ${checkpointPath}`);
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      expect((await orchestrator.runtime(current.id))?.autoPilot.message)
+        .toBe(`→ wf implement ${checkpointPath} · no hand-off signal`);
     } finally {
       await orchestrator.remove(current.id);
-      rmSync(worktreePath, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 20_000);
 });

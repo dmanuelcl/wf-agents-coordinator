@@ -42,12 +42,18 @@ to happen once per plan, folded into a work commit, or not at all.
 
 ## The hand-off file
 
-Path `<worktree>/.agent-handoff.json`, at the worktree root beside `.agent-review.md`.
+Path `<worktree>/.wf/handoff.json`.
 
-Registered with `addWorktreeExclude(worktreePath, ".agent-handoff.json")` when the session is
-created, alongside the existing `REVIEW_ARTIFACT` and `PR_CONTEXT_ARTIFACT` calls. That puts the
-pattern in the repository's local `info/exclude`, so the file never appears in `git status`, never
-reaches a diff, and never requires a commit to the tracked `.gitignore`.
+A directory rather than a file at the worktree root, because chokidar watches recursively: a watch
+pointed at the root would walk `node_modules` and every build output in the tree. The watch is
+pointed at `.wf/` instead, which is a leaf. `.wf` rather than `.agents`, which already means agent
+skills and model configuration.
+
+`addWorktreeExclude(worktreePath, ".wf/")` puts the pattern in the repository's local
+`info/exclude`, so the directory never appears in `git status`, never reaches a diff, and never
+requires a commit to the tracked `.gitignore`. It is applied by the watcher rather than at session
+creation, so that worktrees made by older app versions gain the exclude as soon as they are
+watched — the same reasoning the PR context artifact already uses.
 
 ```json
 {

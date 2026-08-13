@@ -11,6 +11,7 @@ import { createChokidarWatcher } from "../projects/chokidar-watcher-adapter";
 import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manager";
 import { sessionsOwningCheckpoint } from "../projects/checkpoint-session-routing";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
+import { createSessionHandoffWatchManager } from "../projects/session-handoff-watch-manager";
 import { createSessionRegistry } from "../projects/session-registry";
 import { createSessionOrchestrator } from "../projects/session-orchestrator";
 import { createSessionRuntimeStore } from "../projects/session-runtime-store";
@@ -116,6 +117,11 @@ export async function createCoordinatorRuntime(
     },
   });
 
+  const sessionHandoffWatchManager = createSessionHandoffWatchManager({
+    createWatcher: createChokidarWatcher,
+    onHandoff: (sessionId, handoff) => sessionOrchestrator?.onHandoff(sessionId, handoff),
+  });
+
   const ptySessionManager = createPtySessionManager({ spawnPty: spawnRealPty });
   const scrollbackStore = createTerminalScrollbackStore({ dir: join(stateDir, "terminal-scrollback") });
   const screenStore = createTerminalScreenStore();
@@ -164,6 +170,7 @@ export async function createCoordinatorRuntime(
     checkpointWatchManager,
     sessionRegistry,
     sessionCheckpointWatchManager,
+    sessionHandoffWatchManager,
     sessionAgentUuidStore,
     workspaceLayoutStore,
     vcsSecretStore,
@@ -211,13 +218,12 @@ export async function createCoordinatorRuntime(
       const projects = await projectRegistry.listProjects();
       for (const project of projects) {
         const sessions = await sessionRegistry.listSessions({ projectId: project.id });
+        const workflowSessions = sessions.filter(
+          (session) => session.kind === "feature" || session.kind === "fix" || session.kind === "pr-fix",
+        );
         await Promise.all(
-          sessions
-            .filter(
-              (session) =>
-                (session.kind === "feature" || session.kind === "fix" || session.kind === "pr-fix") &&
-                session.checkpointPath === null,
-            )
+          workflowSessions
+            .filter((session) => session.checkpointPath === null)
             .map((session) =>
               sessionCheckpointWatchManager.watchSession({
                 sessionId: session.id,
@@ -227,6 +233,16 @@ export async function createCoordinatorRuntime(
                   session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
               }),
             ),
+        );
+        // Unlike the checkpoint gate, hand-offs matter for the whole life of a
+        // session, so this watches every workflow session, checkpoint or not.
+        await Promise.all(
+          workflowSessions.map((session) =>
+            sessionHandoffWatchManager.watchSession({
+              sessionId: session.id,
+              worktreePath: session.worktreePath,
+            }),
+          ),
         );
         await checkpointWatchManager.watchProject(project);
       }
@@ -241,6 +257,7 @@ export async function createCoordinatorRuntime(
       await scrollbackStore.flush();
       await checkpointWatchManager.closeAll();
       await sessionCheckpointWatchManager.closeAll();
+      await sessionHandoffWatchManager.closeAll();
     },
   };
 }

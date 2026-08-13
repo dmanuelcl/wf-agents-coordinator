@@ -65,6 +65,7 @@ import { scanProjectCheckpoints } from "../projects/checkpoint-scanner";
 import type { ProjectRecord, ProjectRegistry, ProjectUpdateInput } from "../projects/project-registry";
 import { cloneRepo, createEmptyRepo } from "../projects/project-source";
 import type { SessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
+import type { SessionHandoffWatchManager } from "../projects/session-handoff-watch-manager";
 import type { SessionRegistry } from "../projects/session-registry";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { SessionSetupCoordinator } from "../projects/session-setup-coordinator";
@@ -112,6 +113,7 @@ export function registerIpcHandlers(params: {
   checkpointWatchManager: CheckpointWatchManager;
   sessionRegistry: SessionRegistry;
   sessionCheckpointWatchManager: SessionCheckpointWatchManager;
+  sessionHandoffWatchManager: SessionHandoffWatchManager;
   sessionAgentUuidStore: SessionAgentUuidStore;
   workspaceLayoutStore: WorkspaceLayoutStore;
   vcsSecretStore: VcsSecretStore;
@@ -127,6 +129,7 @@ export function registerIpcHandlers(params: {
     checkpointWatchManager,
     sessionRegistry,
     sessionCheckpointWatchManager,
+    sessionHandoffWatchManager,
     sessionAgentUuidStore,
     workspaceLayoutStore,
     vcsSecretStore,
@@ -170,7 +173,14 @@ export function registerIpcHandlers(params: {
   }
 
   async function watchSessionCheckpoint(session: WorkSession): Promise<void> {
-    if (!hasWorkflowCheckpoint(session) || session.checkpointPath) return;
+    if (!hasWorkflowCheckpoint(session)) return;
+    // The hand-off signal matters for every turn, so unlike the checkpoint gate
+    // this stays watched even once the session has a checkpoint.
+    await sessionHandoffWatchManager.watchSession({
+      sessionId: session.id,
+      worktreePath: session.worktreePath,
+    });
+    if (session.checkpointPath) return;
     await sessionCheckpointWatchManager.watchSession({
       sessionId: session.id,
       worktreePath: session.worktreePath,
@@ -647,6 +657,7 @@ export function registerIpcHandlers(params: {
     let cleanupError: unknown = null;
     try {
       await sessionCheckpointWatchManager.unwatchSession(sessionId);
+      await sessionHandoffWatchManager.unwatchSession(sessionId);
     } catch (error) {
       cleanupError = error;
     }
@@ -688,10 +699,9 @@ export function registerIpcHandlers(params: {
 
   ipc.handle(IPC_CHANNELS.sessionsWatchCheckpoint, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
-    // Nothing to watch for once a checkpoint already exists (the gate has flipped).
-    if (!session || session.checkpointPath) {
-      return;
-    }
+    if (!session) return;
+    // A session that already has a checkpoint still needs its hand-off watch;
+    // watchSessionCheckpoint skips only the one-way checkpoint gate.
     await watchSessionCheckpoint(session);
   });
 
