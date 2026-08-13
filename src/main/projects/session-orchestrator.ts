@@ -320,6 +320,39 @@ export function createSessionOrchestrator(params: {
     liveTerminal.set(created.sessionId, { sessionId, key: record.key });
   }
 
+  /**
+   * A failed setup leaves the recovery banner telling the user to fix the
+   * worktree "in this terminal" — but the command that just exited took its PTY
+   * with it, so the pane they are pointed at is dead. Put a live shell in the
+   * worktree behind the same persist key so the instruction is true. The
+   * replacement carries no `setupSessionId`: leaving that shell would otherwise
+   * re-enter this handler and report a second setup failure.
+   */
+  async function openSetupRepairShell(sessionId: string, runtime: RunnerSessionRuntimeRecord): Promise<void> {
+    const setup = runtime.terminals.find((terminal) => terminal.kind === "setup");
+    if (!setup) return;
+    const session = await sessionFor(sessionId);
+    const created = await terminals.replace({
+      cwd: session.worktreePath,
+      cols: RUNNER_COLS,
+      rows: RUNNER_ROWS,
+      persistKey: setup.key,
+    });
+    liveTerminal.set(created.sessionId, { sessionId, key: setup.key });
+    // Views key the setup pane on this, so bumping it reattaches them to the
+    // shell instead of leaving them showing the exited process.
+    setup.generation = (setup.generation ?? 0) + 1;
+  }
+
+  /** Kill a terminal the runner owns, given the persist key it was created with. */
+  function killTerminalByKey(sessionId: string, key: string): void {
+    for (const [terminalId, live] of liveTerminal) {
+      if (live.sessionId !== sessionId || live.key !== key) continue;
+      terminals.kill(terminalId);
+      liveTerminal.delete(terminalId);
+    }
+  }
+
   async function ensureRepositoryShells(sessionId: string): Promise<RunnerSessionRuntimeRecord> {
     // `repo::<projectId>` is a deliberately synthetic session: it has shell
     // tabs but no WorkSession row. Restoring it through sessionFor() therefore
@@ -537,6 +570,14 @@ export function createSessionOrchestrator(params: {
         const runtime = await runtimeStore.get(sessionId);
         if (!runtime || runtime.phase !== "failed") throw new Error("This session does not have a failed setup to skip.");
         await sessionRegistry.markSetupDone({ sessionId });
+        // The repair shell exists only for as long as the setup pane does, and
+        // that pane goes away with this transition. Leaving it would strand one
+        // shell process per repaired session.
+        const setup = runtime.terminals.find((terminal) => terminal.kind === "setup");
+        if (setup) {
+          killTerminalByKey(sessionId, setup.key);
+          runtime.terminals = runtime.terminals.filter((terminal) => terminal !== setup);
+        }
         runtime.phase = "ready";
         runtime.error = null;
         await publish(sessionId, true, runtime);
@@ -667,6 +708,7 @@ export function createSessionOrchestrator(params: {
         if (code !== 0) {
           runtime.phase = "failed";
           runtime.error = `Setup failed (exit ${code}).`;
+          await openSetupRepairShell(sessionId, runtime);
           await publish(sessionId, false, runtime);
           return;
         }

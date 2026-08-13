@@ -1209,6 +1209,10 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               />
             )}
             <SessionTerminal
+              // A failed setup leaves a repair shell behind the same persist
+              // key. Remount on the runner's generation so this pane attaches
+              // to that shell rather than to the process that exited.
+              key={`setup:${runnerRuntime?.terminals.find((terminal) => terminal.kind === "setup")?.generation ?? 0}`}
               session={session}
               role="setup"
               persistKey={`${session.id}::setup`}

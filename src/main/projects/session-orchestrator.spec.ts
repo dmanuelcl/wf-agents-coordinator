@@ -424,6 +424,62 @@ describe("createSessionOrchestrator", () => {
     expect(launchedRoles).toEqual(["architect"]);
   });
 
+  // The recovery banner tells the user to fix the worktree "in this terminal",
+  // so that terminal has to still be alive once the setup command has died.
+  it("leaves a live shell in the worktree when setup fails", async () => {
+    const current = session({ kind: "feature", branch: "feature/auth", checkpointPath: null });
+    const store = memoryStore();
+    const replace = vi.fn(async (_input: Parameters<RunnerTerminalController["replace"]>[0]) => ({
+      sessionId: "repair-shell-pty",
+      reused: false,
+    }));
+    const kill = vi.fn();
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project("pnpm worktree:setup")],
+        addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current,
+        listSessions: vi.fn(),
+        markSetupDone: vi.fn(async () => { current.setupDone = true; }),
+      } as unknown as SessionRegistry,
+      runtimeStore: store,
+      terminals: {
+        create: async () => ({ sessionId: "setup-pty", reused: false }),
+        replace, attach: vi.fn(async () => null), kill, write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async () => ({
+      agentCommand: "codex", agentKind: "codex", environment: {},
+      wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
+    }));
+
+    await orchestrator.ensure(current.id);
+    await orchestrator.onSetupExit({ sessionId: current.id, code: 1 });
+
+    const failed = await orchestrator.runtime(current.id);
+    expect(failed?.phase).toBe("failed");
+    // A plain shell in the worktree: no launch command, and crucially no
+    // setupSessionId, which would report a second setup failure when it exits.
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace.mock.calls[0]?.[0]).toMatchObject({ cwd: current.worktreePath, persistKey: `${current.id}::setup` });
+    expect(replace.mock.calls[0]?.[0].launchCommand).toBeUndefined();
+    expect(replace.mock.calls[0]?.[0].setupSessionId).toBeUndefined();
+    // Views key the setup pane on this, so it reattaches to the shell.
+    expect(failed?.terminals.find((terminal) => terminal.kind === "setup")?.generation).toBe(1);
+
+    // Continuing past the repair takes the pane away, so the shell goes with it
+    // instead of being stranded for the life of the runner.
+    await orchestrator.skipFailedSetup(current.id);
+    expect(kill).toHaveBeenCalledWith("repair-shell-pty");
+    expect((await orchestrator.runtime(current.id))?.terminals.some((terminal) => terminal.kind === "setup"))
+      .toBe(false);
+  });
+
   it("waits for the next hand-off before launching the role the checkpoint moved to", async () => {
     const checkpointPath = "docs/workflow/checkpoints/auth-checkpoint.md";
     const checkpointFor = (role: string, lane: string) => parseCheckpointMarkdown({
