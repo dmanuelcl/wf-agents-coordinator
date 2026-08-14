@@ -23,7 +23,7 @@ import {
   prFixCompletionCheckpointPath,
 } from "../../shared/workflow/pr-fix-kickoff";
 import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
-import { truncateSessionName } from "../../shared/workflow/work-session";
+import { REPO_SESSION_PREFIX, truncateSessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
@@ -100,6 +100,7 @@ function resolveTokenPath(pathToken: string, cwd: string): string {
 
 export interface RegisteredIpcServices {
   buildRoleLaunch(sessionId: string, role: SessionAgentRole, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
+  buildRepoAgentLaunch(sessionId: string, lane: string, mode: AgentLaunchMode): Promise<SessionRoleLaunch>;
   buildRoleAutopilot(
     sessionId: string,
     role: SessionAgentRole,
@@ -800,6 +801,48 @@ export function registerIpcHandlers(params: {
     buildRoleLaunchForRunner(sessionId, role, mode),
   );
 
+  /**
+   * A loose agent in a project's repo workspace. It has no worktree, no role and
+   * no workflow: it runs in the repo root and is pre-typed nothing. What it does
+   * share with a role tab is the durable lane, which is what lets its provider
+   * conversation survive closing the app.
+   *
+   * The stage config it borrows is the architect's — the project's "thinking"
+   * agent — because a workspace outside any workflow has no stage of its own.
+   */
+  async function buildRepoAgentLaunchForRunner(
+    sessionId: string,
+    lane: string,
+    mode: AgentLaunchMode,
+  ): Promise<SessionRoleLaunch> {
+    const project = await findProject(projectRegistry, sessionId.slice(REPO_SESSION_PREFIX.length));
+    const agentConfig = project.runtimeConfig.architect;
+    let sessionDirective = await agentSessionLaneResolver.resolve({
+      sessionId,
+      sessionLane: lane,
+      cwd: project.rootPath,
+      agentConfig,
+      forceFresh: mode === "fresh",
+    });
+    if (
+      sessionDirective?.mode === "resume" &&
+      agentConfig.kind === "claude" &&
+      !(await claudeConversationExists(sessionDirective.id))
+    ) {
+      sessionDirective = { ...sessionDirective, mode: "fresh" };
+    }
+    const launch = buildAgentLaunchCommand(agentConfig, sessionDirective);
+    return {
+      agentCommand: launch.command,
+      agentKind: agentConfig.kind,
+      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      wfCommand: null,
+      cwd: project.rootPath,
+      sessionUuid: sessionDirective?.id ?? null,
+      warnings: launch.warnings,
+    };
+  }
+
   // Auto-pilot: build the INTERACTIVE launch that runs `wfPrompt` for a role,
   // using the project's current per-stage config. The lane decides whether the
   // provider conversation is created or resumed; switching provider replaces
@@ -875,6 +918,7 @@ export function registerIpcHandlers(params: {
 
   return {
     buildRoleLaunch: buildRoleLaunchForRunner,
+    buildRepoAgentLaunch: buildRepoAgentLaunchForRunner,
     buildRoleAutopilot: buildRoleAutopilotForRunner,
   };
 }

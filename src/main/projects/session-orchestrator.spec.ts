@@ -424,6 +424,78 @@ describe("createSessionOrchestrator", () => {
     expect(launchedRoles).toEqual(["architect"]);
   });
 
+  // The whole point of a loose agent: closing the app must not lose the
+  // conversation, which needs the runner to own its launch rather than it being
+  // something the user typed into a shell.
+  it("relaunches a repo workspace's agent on its own lane after a runner restart", async () => {
+    const repoSessionId = "repo::project";
+    const store = memoryStore();
+    const live = new Map<string, string>();
+    const launches: { sessionId: string; lane: string; mode: string }[] = [];
+    let nextId = 0;
+    const terminals: RunnerTerminalController = {
+      create: async (input) => {
+        const sessionId = String(++nextId);
+        if (input.persistKey) live.set(input.persistKey, sessionId);
+        return { sessionId, reused: false };
+      },
+      replace: vi.fn(),
+      attach: async (key) => {
+        const sessionId = live.get(key);
+        return sessionId ? { sessionId, reused: true } : null;
+      },
+      kill: vi.fn(),
+      write: vi.fn(),
+    };
+    const makeOrchestrator = () => {
+      const orchestrator = createSessionOrchestrator({
+        projectRegistry: {
+          listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+        } as unknown as ProjectRegistry,
+        sessionRegistry: {
+          // A repo workspace has no WorkSession row at all.
+          getSession: async () => null, listSessions: vi.fn(), markSetupDone: vi.fn(),
+        } as unknown as SessionRegistry,
+        runtimeStore: store,
+        terminals,
+        sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+        readCheckpoint: vi.fn(async () => null),
+        broadcast: vi.fn(),
+      });
+      orchestrator.setRepoAgentLaunchBuilder(async (sessionId, lane, mode) => {
+        launches.push({ sessionId, lane, mode });
+        return {
+          agentCommand: "codex", agentKind: "codex", environment: {},
+          wfCommand: null, cwd: "/repo", sessionUuid: null, warnings: [],
+        };
+      });
+      return orchestrator;
+    };
+
+    const first = makeOrchestrator();
+    const opened = await first.openRepoAgent({ sessionId: repoSessionId });
+    expect(opened).toMatchObject({ kind: "agent", title: "Agent 1" });
+    expect(opened.lane).toMatch(/^repo\//);
+    expect(launches).toEqual([{ sessionId: repoSessionId, lane: opened.lane, mode: "fresh" }]);
+
+    // A live runner just reattaches; nothing is relaunched.
+    await makeOrchestrator().resume();
+    expect(launches).toHaveLength(1);
+
+    // A runner that lost its PTYs relaunches on the same durable lane, which is
+    // what resumes the provider conversation instead of starting a new one.
+    live.clear();
+    await makeOrchestrator().resume();
+    expect(launches).toEqual([
+      { sessionId: repoSessionId, lane: opened.lane, mode: "fresh" },
+      { sessionId: repoSessionId, lane: opened.lane, mode: "fresh" },
+    ]);
+
+    const restored = await store.get(repoSessionId);
+    expect(restored?.terminals).toHaveLength(1);
+    expect(restored?.terminals[0]).toMatchObject({ kind: "agent", lane: opened.lane });
+  });
+
   // The recovery banner tells the user to fix the worktree "in this terminal",
   // so that terminal has to still be alive once the setup command has died.
   it("leaves a live shell in the worktree when setup fails", async () => {

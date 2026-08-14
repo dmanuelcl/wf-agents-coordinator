@@ -56,6 +56,7 @@ export interface SessionRuntimeChangedEvent {
 
 export interface SessionOrchestrator {
   setRoleLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
+  setRepoAgentLaunchBuilder(builder: (sessionId: string, lane: string, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
   setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string) => Promise<{
     command: string;
     agentKind: AgentKind;
@@ -67,6 +68,7 @@ export interface SessionOrchestrator {
   ensure(sessionId: string): Promise<RunnerSessionRuntimeRecord>;
   openRole(sessionId: string, role: SessionAgentRole): Promise<RunnerTerminalRecord>;
   openShell(params: { sessionId: string; root: boolean }): Promise<RunnerTerminalRecord>;
+  openRepoAgent(params: { sessionId: string }): Promise<RunnerTerminalRecord>;
   closeTerminal(sessionId: string, key: string): Promise<void>;
   runtime(sessionId: string): Promise<RunnerSessionRuntimeRecord | null>;
   skipFailedSetup(sessionId: string): Promise<void>;
@@ -134,6 +136,7 @@ export function createSessionOrchestrator(params: {
     typePrompt: string | null;
   }>;
   let buildRoleLaunch: RoleLaunchBuilder | null = null;
+  let buildRepoAgentLaunch: ((sessionId: string, lane: string, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>) | null = null;
   let buildAutopilotLaunch: AutopilotLaunchBuilder | null = null;
   const liveTerminal = new Map<string, {
     sessionId: string;
@@ -373,9 +376,43 @@ export function createSessionOrchestrator(params: {
     }
   }
 
-  async function ensureRepositoryShells(sessionId: string): Promise<RunnerSessionRuntimeRecord> {
-    // `repo::<projectId>` is a deliberately synthetic session: it has shell
-    // tabs but no WorkSession row. Restoring it through sessionFor() therefore
+  /**
+   * Bring back one of the repo workspace's own agents. Attaching first keeps a
+   * browser reconnect on the live process; only a runner that lost its PTYs
+   * relaunches, and then through the terminal's durable lane so the provider
+   * conversation is resumed rather than started over.
+   */
+  async function ensureRepoAgent(sessionId: string, cwd: string, terminal: RunnerTerminalRecord): Promise<void> {
+    if (!terminal.lane) return;
+    const attached = await terminals.attach(terminal.key);
+    if (attached) {
+      liveTerminal.set(attached.sessionId, { sessionId, key: terminal.key, sessionLane: terminal.lane });
+      return;
+    }
+    if (!buildRepoAgentLaunch) {
+      throw new Error("Session orchestrator was started before its repo agent launch builder was registered.");
+    }
+    const launch = await buildRepoAgentLaunch(sessionId, terminal.lane, terminal.mode ?? "fresh");
+    const created = await terminals.create({
+      cwd,
+      cols: RUNNER_COLS,
+      rows: RUNNER_ROWS,
+      launchCommand: launch.agentCommand,
+      environment: launch.environment,
+      persistKey: terminal.key,
+    });
+    liveTerminal.set(created.sessionId, {
+      sessionId,
+      key: terminal.key,
+      agentKind: launch.agentKind,
+      sessionLane: terminal.lane,
+    });
+    if (!created.reused) terminal.generation = (terminal.generation ?? 0) + 1;
+  }
+
+  async function ensureRepositoryTerminals(sessionId: string): Promise<RunnerSessionRuntimeRecord> {
+    // `repo::<projectId>` is a deliberately synthetic session: it has terminals
+    // but no WorkSession row. Restoring it through sessionFor() therefore
     // made every runner restart fail as soon as a root workspace was open.
     const project = await projectFor(sessionId.slice("repo::".length));
     const current = (await runtimeStore.get(sessionId)) ?? blankRuntime(sessionId, true);
@@ -385,6 +422,8 @@ export function createSessionOrchestrator(params: {
     for (const terminal of current.terminals) {
       if (terminal.kind === "shell") {
         await ensureShell(terminal, sessionId, project.rootPath);
+      } else if (terminal.kind === "agent") {
+        await ensureRepoAgent(sessionId, project.rootPath, terminal);
       }
     }
     await publish(sessionId, true, current);
@@ -539,6 +578,9 @@ export function createSessionOrchestrator(params: {
     setRoleLaunchBuilder(builder) {
       buildRoleLaunch = builder;
     },
+    setRepoAgentLaunchBuilder(builder) {
+      buildRepoAgentLaunch = builder;
+    },
     setAutopilotLaunchBuilder(builder) {
       buildAutopilotLaunch = builder;
     },
@@ -548,7 +590,7 @@ export function createSessionOrchestrator(params: {
         try {
           await serial(record.sessionId, () => (
             isRepoSessionId(record.sessionId)
-              ? ensureRepositoryShells(record.sessionId)
+              ? ensureRepositoryTerminals(record.sessionId)
               : ensureSetupOrPrimary(record.sessionId)
           ));
         } catch (error) {
@@ -605,6 +647,32 @@ export function createSessionOrchestrator(params: {
         runtime.terminals.push(terminal);
         await ensureShell(terminal, sessionId, root || repo ? project.rootPath : session!.worktreePath);
         await publish(sessionId, repo || session!.setupDone, runtime);
+        return terminal;
+      });
+    },
+    openRepoAgent({ sessionId }) {
+      return serial(sessionId, async () => {
+        if (!isRepoSessionId(sessionId)) {
+          throw new Error("Loose agents belong to a project's repo workspace; a session uses its role tabs.");
+        }
+        const project = await projectFor(sessionId.slice("repo::".length));
+        const runtime = (await runtimeStore.get(sessionId)) ?? blankRuntime(sessionId, true);
+        const id = randomUUID();
+        const ordinal = runtime.terminals.filter((terminal) => terminal.kind === "agent").length + 1;
+        const terminal: RunnerTerminalRecord = {
+          key: `${sessionId}::agent::${id}`,
+          kind: "agent",
+          title: `Agent ${ordinal}`,
+          // The lane is this tab's identity for the provider conversation, and
+          // it is durable, which is the whole point: the same lane after a
+          // restart resumes the same conversation.
+          lane: `repo/${id}`,
+          mode: "fresh",
+          generation: 0,
+        };
+        runtime.terminals.push(terminal);
+        await ensureRepoAgent(sessionId, project.rootPath, terminal);
+        await publish(sessionId, true, runtime);
         return terminal;
       });
     },

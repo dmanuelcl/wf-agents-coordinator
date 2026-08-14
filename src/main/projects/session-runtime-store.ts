@@ -17,6 +17,10 @@ export interface RunnerTerminalRecord {
   root?: boolean;
   // Agent terminals keep their intended durable conversation lane. The PTY id
   // is deliberately absent: it is process-local and must never be restored.
+  // Role tabs derive their lane from the role; a repo workspace's agents have
+  // no role, so they carry their own here — it is the key their provider
+  // conversation is stored under, and what lets them resume after a restart.
+  lane?: string;
   mode?: "fresh" | "resume";
   generation?: number;
 }

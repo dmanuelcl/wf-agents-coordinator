@@ -183,6 +183,7 @@ export async function createCoordinatorRuntime(
   });
   sessionOrchestrator.setRoleLaunchBuilder(ipcServices.buildRoleLaunch);
   sessionOrchestrator.setAutopilotLaunchBuilder(ipcServices.buildRoleAutopilot);
+  sessionOrchestrator.setRepoAgentLaunchBuilder(ipcServices.buildRepoAgentLaunch);
 
   transport.handle(IPC_CHANNELS.sessionsEnsureRuntime, (_event, sessionId: string) => sessionOrchestrator!.ensure(sessionId));
   transport.handle(IPC_CHANNELS.sessionsGetRuntime, (_event, sessionId: string) => sessionOrchestrator!.runtime(sessionId));
@@ -191,6 +192,9 @@ export async function createCoordinatorRuntime(
   );
   transport.handle(IPC_CHANNELS.sessionsOpenShell, (_event, sessionId: string, root: boolean) =>
     sessionOrchestrator!.openShell({ sessionId, root }),
+  );
+  transport.handle(IPC_CHANNELS.sessionsOpenRepoAgent, (_event, sessionId: string) =>
+    sessionOrchestrator!.openRepoAgent({ sessionId }),
   );
   transport.handle(IPC_CHANNELS.sessionsCloseTerminal, (_event, sessionId: string, key: string) =>
     sessionOrchestrator!.closeTerminal(sessionId, key),

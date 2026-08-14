@@ -84,6 +84,7 @@ export function createAgentCoordinatorApi(
       getRuntime: (sessionId) => invoke(IPC_CHANNELS.sessionsGetRuntime, sessionId) as ReturnType<AgentCoordinatorApi["sessions"]["getRuntime"]>,
       openRole: (sessionId, role) => invoke(IPC_CHANNELS.sessionsOpenRole, sessionId, role) as ReturnType<AgentCoordinatorApi["sessions"]["openRole"]>,
       openShell: (sessionId, root) => invoke(IPC_CHANNELS.sessionsOpenShell, sessionId, root) as ReturnType<AgentCoordinatorApi["sessions"]["openShell"]>,
+      openRepoAgent: (sessionId) => invoke(IPC_CHANNELS.sessionsOpenRepoAgent, sessionId) as ReturnType<AgentCoordinatorApi["sessions"]["openRepoAgent"]>,
       closeTerminal: (sessionId, key) => invoke(IPC_CHANNELS.sessionsCloseTerminal, sessionId, key) as ReturnType<AgentCoordinatorApi["sessions"]["closeTerminal"]>,
       skipFailedSetup: (sessionId) => invoke(IPC_CHANNELS.sessionsSkipFailedSetup, sessionId) as ReturnType<AgentCoordinatorApi["sessions"]["skipFailedSetup"]>,
       setAutopilot: (sessionId, enabled) => invoke(IPC_CHANNELS.sessionsSetAutopilot, sessionId, enabled) as ReturnType<AgentCoordinatorApi["sessions"]["setAutopilot"]>,

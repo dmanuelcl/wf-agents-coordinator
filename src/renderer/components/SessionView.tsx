@@ -499,6 +499,12 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // the feedback strip.
   const [runnerRuntime, setRunnerRuntime] = useState<RunnerSessionRuntimeRecord | null>(null);
   const autoPilotEnabled = runnerRuntime?.autoPilot.enabled === true;
+  // Loose agents live only in a repo workspace, and their tabs are derived from
+  // the runner's durable records rather than from view state — that record is
+  // exactly what brings the conversation back after the app is closed.
+  const repoAgentTabs = repoMode
+    ? (runnerRuntime?.terminals ?? []).filter((terminal) => terminal.kind === "agent")
+    : [];
   const [posting, setPosting] = useState(false);
   const [reviewPostMsg, setReviewPostMsg] = useState<string | null>(null);
   // No role or shell PTY is mounted until the one dedicated setup PTY confirms
@@ -650,6 +656,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     );
   }
 
+  function addRepoAgentTab(): void {
+    void window.agentCoordinator.sessions
+      .openRepoAgent(session.id)
+      .then((terminal) => setActiveTab(terminal.key))
+      .catch((error: unknown) => setSetupCompletionError(String(error)));
+  }
+
   function addShellTab(root: boolean): void {
     void window.agentCoordinator.sessions.openShell(session.id, root).then(
       (terminal) => {
@@ -661,10 +674,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     );
   }
 
-  function closeShellTab(id: string): void {
+  // Closes any tab backed by a runner terminal: a shell, or a repo workspace's
+  // loose agent.
+  function closeTerminalTab(id: string): void {
     const remaining = [
       ...Array.from(openedRoleTabs),
       ...shellTabs.filter((tab) => tab.id !== id).map((tab) => tab.id),
+      ...repoAgentTabs.filter((terminal) => terminal.key !== id).map((terminal) => terminal.key),
       ...fileTabs.map((tab) => tab.id),
       ...(diffOpen ? ["diff"] : []),
     ];
@@ -1133,7 +1149,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                 className="session-view-tab-close"
                 aria-label={`Close ${tab.title}`}
                 title="Close shell"
-                onClick={() => closeShellTab(tab.id)}
+                onClick={() => closeTerminalTab(tab.id)}
               >
                 ×
               </button>
@@ -1172,6 +1188,33 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           );
         })}
 
+        {repoAgentTabs.map((terminal) => {
+          const active = activeTab === terminal.key;
+          return (
+            <div key={terminal.key} className={`session-view-tab-wrap${active ? " active" : ""}`}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`session-view-tab${active ? " active" : ""}`}
+                onClick={() => setActiveTab(terminal.key)}
+                title="Loose agent in the repo root · its conversation survives a restart"
+              >
+                {terminal.title ?? "Agent"}
+              </button>
+              <button
+                type="button"
+                className="session-view-tab-close"
+                aria-label={`Close ${terminal.title ?? "agent"}`}
+                title="Close agent"
+                onClick={() => closeTerminalTab(terminal.key)}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+
         <button
           type="button"
           className="session-view-tab-add"
@@ -1181,6 +1224,22 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         >
           +
         </button>
+        {repoMode && (
+          <button
+            type="button"
+            className="session-view-tab-add"
+            aria-label="New agent"
+            title="New agent in the repo root"
+            onClick={addRepoAgentTab}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="4" y="8" width="16" height="12" rx="2" />
+              <path d="M12 4v4" />
+              <path d="M9 13h.01" />
+              <path d="M15 13h.01" />
+            </svg>
+          </button>
+        )}
         {hasSeparateRoot && (
           <button
             type="button"
@@ -1279,6 +1338,21 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               onOpenPath={handleOpenPath}
               cwdOverride={tab.root ? repoRoot : undefined}
               hint={repoMode ? SHELL_HINT_REPO : tab.root ? SHELL_HINT_ROOT : SHELL_HINT}
+            />
+          </div>
+        ))}
+        {repoAgentTabs.map((terminal) => (
+          <div key={terminal.key} className="session-terminal-host" hidden={activeTab !== terminal.key}>
+            <SessionTerminal
+              // Remount when the runner replaces this PTY, so the pane follows
+              // the new process rather than the one that went away.
+              key={`${terminal.key}:${terminal.generation ?? 0}`}
+              ref={(handle) => registerTerminalHandle(terminal.key, handle)}
+              session={session}
+              role="architect"
+              persistKey={terminal.key}
+              onOpenPath={handleOpenPath}
+              cwdOverride={repoRoot}
             />
           </div>
         ))}
