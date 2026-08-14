@@ -10,7 +10,9 @@ export interface PendingHandoff {
 
 export type HandoffGateDecision =
   | { kind: "run"; viaHandoff: boolean }
-  | { kind: "wait"; reason: string; retryInMs: number };
+  // `awaiting` separates "no agent has handed off" — which can go on forever and
+  // is what stall detection watches — from the bounded post-hand-off settle.
+  | { kind: "wait"; reason: string; retryInMs: number; awaiting: "handoff" | "settle" };
 
 /**
  * Whether the auto-pilot may launch the step the conductor decided on.
@@ -41,7 +43,12 @@ export function decideHandoffGate(params: {
   if (!handoffModeActive) return { kind: "run", viaHandoff: false };
 
   if (!pending) {
-    return { kind: "wait", reason: "waiting · the current agent has not handed off yet", retryInMs: retryMs };
+    return {
+      kind: "wait",
+      reason: "waiting · the current agent has not handed off yet",
+      retryInMs: retryMs,
+      awaiting: "handoff",
+    };
   }
 
   if (pending.role !== step.role || pending.sessionLane !== step.lane) {
@@ -49,6 +56,7 @@ export function decideHandoffGate(params: {
       kind: "wait",
       reason: "waiting · hand-off does not match the checkpoint's NEXT yet",
       retryInMs: retryMs,
+      awaiting: "handoff",
     };
   }
 
@@ -56,7 +64,12 @@ export function decideHandoffGate(params: {
   // nor stretch the wait beyond the delay the project actually configured.
   const settledFor = Math.min(Math.max(nowEpochMs - pending.seenAtEpochMs, 0), settleDelayMs);
   if (settledFor < settleDelayMs) {
-    return { kind: "wait", reason: "hand-off received · settling", retryInMs: settleDelayMs - settledFor };
+    return {
+      kind: "wait",
+      reason: "hand-off received · settling",
+      retryInMs: settleDelayMs - settledFor,
+      awaiting: "settle",
+    };
   }
 
   return { kind: "run", viaHandoff: true };

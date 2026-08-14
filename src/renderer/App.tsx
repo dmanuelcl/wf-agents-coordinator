@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { ProjectModal } from "./components/ProjectModal";
 import { ProjectRail } from "./components/ProjectRail";
+import { AutopilotAlertBar } from "./components/AutopilotAlertBar";
+import { useAutopilotAlerts } from "./components/useAutopilotAlerts";
 import { SessionView } from "./components/SessionView";
 import type { SessionLayout, ShellTab } from "./components/SessionView";
 import type { PersistedSessionLayout, ProjectRecord, WorkSession, WorkspaceLayout } from "../shared/ipc/contract";
@@ -268,6 +270,18 @@ export function App(): JSX.Element {
     );
   }
 
+  // Alerts and notifications know a session only by id.
+  function selectSessionById(sessionId: string): void {
+    const session = allSessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return;
+    setSelectedProjectId(session.projectId);
+    handleSelectSession(session);
+  }
+
+  function nameOfSession(sessionId: string): string {
+    return allSessions.find((candidate) => candidate.id === sessionId)?.name ?? "Sesión";
+  }
+
   // Open a project's synthetic repo-root workspace.
   function handleSelectRepo(projectId: string): void {
     setSelectedProjectId(projectId);
@@ -307,6 +321,8 @@ export function App(): JSX.Element {
     }
   }
 
+  const alerts = useAutopilotAlerts({ sessionName: nameOfSession, onSelectSession: selectSessionById });
+
   return (
     <div className="app">
       <ProjectRail
@@ -325,6 +341,15 @@ export function App(): JSX.Element {
         onRequestRemoveSession={(session) => setSessionToRemove(session)}
       />
       <main className="main-area">
+        <AutopilotAlertBar
+          alerts={alerts.alerts}
+          enabled={alerts.enabled}
+          sessionName={nameOfSession}
+          onSelectSession={selectSessionById}
+          onAcknowledge={alerts.acknowledge}
+          onAcknowledgeAll={alerts.acknowledgeAll}
+          onToggleEnabled={alerts.setEnabled}
+        />
         {error && <p className="error-banner">{error}</p>}
         {openedSessions.map((session) => (
           <div key={session.id} className="session-view-host" hidden={session.id !== selectedSessionId}>

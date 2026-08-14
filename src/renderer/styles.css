@@ -3202,3 +3202,92 @@ textarea:focus,
 .vcs-test-result.err {
   color: #e5766b;
 }
+
+/* Auto-pilot alerts. The chime repeats until acknowledged, so this bar is the
+   one place to silence it from, whichever session happens to be on screen. */
+.autopilot-alert-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(212, 168, 75, 0.48);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius-md);
+  background: rgba(212, 168, 75, 0.08);
+  animation: notice-enter 0.28s ease-out both;
+}
+.autopilot-alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.autopilot-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.autopilot-alert-open {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.autopilot-alert-open:hover {
+  background: rgba(212, 168, 75, 0.14);
+}
+.autopilot-alert-session {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.autopilot-alert-reason {
+  color: var(--muted-fg);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A finished workflow is not a problem, so it does not borrow the alarm color. */
+.autopilot-alert-done .autopilot-alert-session {
+  color: var(--gold);
+}
+.autopilot-alert-ack {
+  padding: 4px 10px;
+  border: 1px solid rgba(212, 168, 75, 0.5);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--gold);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.autopilot-alert-ack:hover {
+  background: rgba(212, 168, 75, 0.16);
+}
+.autopilot-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.autopilot-alert-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted-fg);
+  cursor: pointer;
+}

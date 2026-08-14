@@ -266,7 +266,7 @@ describe("createSessionOrchestrator", () => {
       phase: "ready",
       terminals: [],
       error: null,
-      autoPilot: { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null },
+      autoPilot: { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null, attention: null },
     });
     const orchestrator = createSessionOrchestrator({
       projectRegistry: {
@@ -558,6 +558,89 @@ describe("createSessionOrchestrator", () => {
       await orchestrator.remove(current.id);
     }
   }, 20_000);
+
+  it("calls for a human only once the agent it waits on has actually gone quiet", async () => {
+    const checkpointPath = "docs/workflow/checkpoints/auth-checkpoint.md";
+    const checkpointFor = (role: string, lane: string) => parseCheckpointMarkdown({
+      checkpointPath,
+      markdown: [
+        "---", "feature: Auth", "slug: auth", "kind: feature", "status: IN_PROGRESS", "active: none", "---",
+        "",
+        "# ▶ NEXT",
+        `- **Rol:** ${role}`,
+        `- **Corre:** \`wf ${role === "implementer" ? "implement" : "review"} ${checkpointPath}\``,
+        `- **Session lane:** \`${lane}\``,
+      ].join("\n"),
+    });
+    const toImplementer = checkpointFor("implementer", "plan-1/implementer");
+    const toReviewer = checkpointFor("reviewer", "plan-1/reviewer");
+
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/auth", checkpointPath });
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        // The clock is frozen to drive the stall rule, so a settle delay would
+        // never elapse. This test is about silence, not about the delay.
+        listProjects: async () => [{ ...project(), autoPilot: { reloopLimit: 3, settleDelayMs: 0 } }],
+        addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: {
+        getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn(),
+      } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async () => ({ sessionId: "agent-pty", reused: false }),
+        replace: async () => ({ sessionId: "implementer-pty", reused: false }),
+        attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => toImplementer),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async () => ({
+      agentCommand: "codex", agentKind: "codex", environment: {},
+      wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
+    }));
+    orchestrator.setAutopilotLaunchBuilder(async () => ({
+      command: "codex", agentKind: "codex", cwd: current.worktreePath, environment: {}, typePrompt: "wf step",
+    }));
+
+    const startedAt = 5_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    try {
+      await orchestrator.ensure(current.id);
+      orchestrator.onHandoff(current.id, {
+        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer",
+      });
+      await orchestrator.setAutopilot(current.id, true);
+      await vi.waitFor(async () => {
+        expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf implement ${checkpointPath}`);
+      }, { timeout: 5_000 });
+
+      // The implementer moves NEXT and then spends a long time verifying. That
+      // wait is normal, and printing throughout is what proves it.
+      orchestrator.onCheckpoint(current.id, toReviewer);
+      clock.mockReturnValue(startedAt + 10 * 60_000);
+      orchestrator.onTerminalData({ terminalId: "implementer-pty", data: "still checking…" });
+      orchestrator.onCheckpoint(current.id, toReviewer);
+      await vi.waitFor(async () => {
+        expect((await orchestrator.runtime(current.id))?.autoPilot.message)
+          .toBe("waiting · the current agent has not handed off yet");
+      }, { timeout: 5_000 });
+      expect((await orchestrator.runtime(current.id))?.autoPilot.attention).toBeNull();
+
+      // Now it stops printing entirely: hung, out of quota, or waiting on an
+      // answer nobody is there to give.
+      clock.mockReturnValue(startedAt + 20 * 60_000);
+      orchestrator.onCheckpoint(current.id, toReviewer);
+      await vi.waitFor(async () => {
+        expect((await orchestrator.runtime(current.id))?.autoPilot.attention)
+          .toMatchObject({ kind: "stalled" });
+      }, { timeout: 5_000 });
+    } finally {
+      clock.mockRestore();
+      await orchestrator.remove(current.id);
+    }
+  }, 30_000);
 
   // A workflow that does not emit hand-offs keeps the behavior it had before the
   // gate existed, and says so, rather than never advancing again.

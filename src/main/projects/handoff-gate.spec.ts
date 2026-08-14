@@ -23,7 +23,7 @@ describe("decideHandoffGate", () => {
 
   it("waits out the remainder of the settle delay, measured from the hand-off", () => {
     expect(gate({ pending: { turn: 7, role: "reviewer", sessionLane: "plan-1/reviewer", seenAtEpochMs: NOW - 8_000 } }))
-      .toEqual({ kind: "wait", reason: "hand-off received · settling", retryInMs: 22_000 });
+      .toEqual({ kind: "wait", reason: "hand-off received · settling", retryInMs: 22_000, awaiting: "settle" });
   });
 
   it("waits when the outgoing agent has not handed off yet", () => {
@@ -31,6 +31,7 @@ describe("decideHandoffGate", () => {
       kind: "wait",
       reason: "waiting · the current agent has not handed off yet",
       retryInMs: 3_000,
+      awaiting: "handoff",
     });
   });
 
@@ -41,6 +42,7 @@ describe("decideHandoffGate", () => {
       kind: "wait",
       reason: "waiting · hand-off does not match the checkpoint's NEXT yet",
       retryInMs: 3_000,
+      awaiting: "handoff",
     });
   });
 
@@ -49,6 +51,7 @@ describe("decideHandoffGate", () => {
       kind: "wait",
       reason: "waiting · hand-off does not match the checkpoint's NEXT yet",
       retryInMs: 3_000,
+      awaiting: "handoff",
     });
   });
 
@@ -65,7 +68,7 @@ describe("decideHandoffGate", () => {
   // A clock that jumps backwards must not read as "the delay already elapsed".
   it("waits the full delay when the hand-off timestamp is in the future", () => {
     expect(gate({ pending: { turn: 7, role: "reviewer", sessionLane: "plan-1/reviewer", seenAtEpochMs: NOW + 5_000 } }))
-      .toEqual({ kind: "wait", reason: "hand-off received · settling", retryInMs: 30_000 });
+      .toEqual({ kind: "wait", reason: "hand-off received · settling", retryInMs: 30_000, awaiting: "settle" });
   });
 
   it("runs immediately when the project configured no settle delay", () => {

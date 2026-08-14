@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { ConductorState } from "../../shared/workflow/conductor";
 import { INITIAL_CONDUCTOR_STATE } from "../../shared/workflow/conductor";
+import type { AutoPilotAttention } from "../../shared/workflow/autopilot-attention";
 
 export type RunnerSessionPhase = "setup-pending" | "setup-running" | "ready" | "failed";
 export type RunnerTerminalKind = "setup" | "agent" | "shell";
@@ -29,6 +30,8 @@ export interface RunnerSessionRuntimeRecord {
     enabled: boolean;
     state: ConductorState;
     message: string | null;
+    /** Non-null while the session has stopped advancing and wants a human. */
+    attention: AutoPilotAttention | null;
   };
 }
 
@@ -57,10 +60,10 @@ export function createSessionRuntimeStore(params: { storeFilePath: string }): Se
   }
 
   function normalize(record: RunnerSessionRuntimeRecord): RunnerSessionRuntimeRecord {
-    return {
-      ...record,
-      autoPilot: record.autoPilot ?? { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null },
-    };
+    const autoPilot = record.autoPilot ?? { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null, attention: null };
+    // Records written before attention existed carry none. Absent reads as "no
+    // call for help", which is also the right state after a runner restart.
+    return { ...record, autoPilot: { ...autoPilot, attention: autoPilot.attention ?? null } };
   }
 
   return {

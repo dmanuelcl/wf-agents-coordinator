@@ -8,6 +8,7 @@ import { decideConductor } from "../../shared/workflow/conductor";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
 import type { SessionHandoff } from "../../shared/workflow/session-handoff";
+import type { AutoPilotAttentionKind } from "../../shared/workflow/autopilot-attention";
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { isRepoSessionId } from "../../shared/workflow/work-session";
@@ -15,6 +16,7 @@ import type { WorkSession } from "../../shared/workflow/work-session";
 import type { RunnerTerminalController } from "../ipc/register-terminal-ipc-handlers";
 import { decideHandoffGate } from "./handoff-gate";
 import type { PendingHandoff } from "./handoff-gate";
+import { isHandoffStalled } from "./handoff-stall";
 import type { ProjectRecord, ProjectRegistry } from "./project-registry";
 import type {
   RunnerSessionRuntimeRecord,
@@ -30,12 +32,21 @@ import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-stor
 const RUNNER_COLS = 160;
 const RUNNER_ROWS = 44;
 
-// How soon to re-evaluate the hand-off gate when it is waiting on something
-// other than the settle delay. Short on purpose: the project's settle delay runs
-// *after* the hand-off arrives, so getting to that point must add no delay of
-// its own. When the gate is waiting out the delay it asks for the exact
-// remainder instead of this.
-const HANDOFF_RECHECK_MS = 1_000;
+// How soon to re-evaluate after an event that could change the answer — a
+// hand-off landing, or a checkpoint write. Short on purpose: the project's
+// settle delay runs *after* the hand-off arrives, so getting to that point must
+// add no delay of its own.
+const HANDOFF_EVENT_DELAY_MS = 1_000;
+// The gate's own safety net while it waits for a hand-off that has not come.
+// Every event that could change the answer already schedules its own check, so
+// this only catches a missed watcher event — and paces stall detection. Polling
+// this at second granularity would re-read the runtime store 1800 times across
+// one thirty-minute agent turn.
+const HANDOFF_IDLE_RECHECK_MS = 30_000;
+// Silence on an agent's own terminal that means it is no longer working. An
+// agent that updates NEXT and then verifies for a long time prints throughout,
+// so only real silence counts. See `handoff-stall.ts`.
+const AGENT_SILENCE_MS = 120_000;
 
 export interface SessionRuntimeChangedEvent {
   sessionId: string;
@@ -95,7 +106,7 @@ function blankRuntime(sessionId: string, setupDone: boolean): RunnerSessionRunti
     phase: setupDone ? "ready" : "setup-pending",
     terminals: [],
     error: null,
-    autoPilot: { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null },
+    autoPilot: { enabled: false, state: INITIAL_CONDUCTOR_STATE, message: null, attention: null },
   };
 }
 
@@ -143,6 +154,11 @@ export function createSessionOrchestrator(params: {
   // Sessions whose workflow emits hand-offs. Sticky: once a session has produced
   // one, a later absence means "still working", never "drop to the fallback".
   const handoffSessions = new Set<string>();
+  // Since when the gate has been waiting for a hand-off, per session, and when
+  // any of the session's agents last wrote to its terminal. Together these say
+  // whether a long wait is an agent working or an agent that died.
+  const handoffWaitingSince = new Map<string, number>();
+  const lastAgentOutputAt = new Map<string, number>();
   // Kimi exposes the durable conversation id in terminal output. Keep the
   // small rolling window on the runner: a browser reconnect must not decide
   // whether an agent can later be resumed.
@@ -201,6 +217,9 @@ export function createSessionOrchestrator(params: {
         agentKind: undefined,
         sessionLane: terminal.role,
       });
+      // A terminal that just came up has printed nothing yet, which would read
+      // as silence. Start its clock now.
+      if (!lastAgentOutputAt.has(session.id)) lastAgentOutputAt.set(session.id, Date.now());
       return;
     }
     if (!buildRoleLaunch) throw new Error("Session orchestrator was started before its role launch builder was registered.");
@@ -226,6 +245,7 @@ export function createSessionOrchestrator(params: {
       agentKind: launch.agentKind,
       sessionLane: terminal.role,
     });
+    lastAgentOutputAt.set(session.id, Date.now());
     if (!created.reused) terminal.generation = (terminal.generation ?? 0) + 1;
   }
 
@@ -389,6 +409,10 @@ export function createSessionOrchestrator(params: {
       if (action.kind === "pause") {
         runtime.autoPilot.state = next;
         runtime.autoPilot.message = `paused · ${action.reason}`;
+        handoffWaitingSince.delete(sessionId);
+        // DONE is not trouble, but it is the other moment the auto-pilot stops
+        // and the turn passes back to a person, so it calls for them too.
+        setAttention(runtime, action.reason === "workflow DONE" ? "done" : "paused", action.reason);
         if (action.role && action.command) {
           const terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === action.role);
           if (terminal) {
@@ -414,10 +438,24 @@ export function createSessionOrchestrator(params: {
         step: { role: action.role, lane: action.lane },
         settleDelayMs: config.settleDelayMs,
         nowEpochMs: Date.now(),
-        retryMs: HANDOFF_RECHECK_MS,
+        retryMs: HANDOFF_IDLE_RECHECK_MS,
       });
       if (gate.kind === "wait") {
-        if (runtime.autoPilot.message !== gate.reason) {
+        // Only an open-ended wait for a hand-off can stall; the settle is
+        // bounded by the delay the project configured.
+        if (gate.awaiting !== "handoff") handoffWaitingSince.delete(sessionId);
+        else if (!handoffWaitingSince.has(sessionId)) handoffWaitingSince.set(sessionId, Date.now());
+
+        const stalled = isHandoffStalled({
+          waitingSinceEpochMs: handoffWaitingSince.get(sessionId) ?? null,
+          lastAgentOutputAtEpochMs: lastAgentOutputAt.get(sessionId) ?? null,
+          nowEpochMs: Date.now(),
+          silenceMs: AGENT_SILENCE_MS,
+        });
+        const attentionChanged = stalled
+          ? setAttention(runtime, "stalled", gate.reason)
+          : clearAttention(runtime);
+        if (runtime.autoPilot.message !== gate.reason || attentionChanged) {
           runtime.autoPilot.message = gate.reason;
           await publish(sessionId, runtime.phase === "ready", runtime);
         }
@@ -425,6 +463,8 @@ export function createSessionOrchestrator(params: {
         return;
       }
       pendingHandoff.delete(sessionId);
+      handoffWaitingSince.delete(sessionId);
+      clearAttention(runtime);
 
       if (!buildAutopilotLaunch) throw new Error("Session orchestrator was started before its auto-pilot launch builder was registered.");
       const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command);
@@ -448,6 +488,7 @@ export function createSessionOrchestrator(params: {
         agentKind: launch.agentKind,
         sessionLane: action.lane,
       });
+      lastAgentOutputAt.set(sessionId, Date.now());
       terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
       terminal.generation = (terminal.generation ?? 0) + 1;
       runtime.autoPilot.state = next;
@@ -458,9 +499,29 @@ export function createSessionOrchestrator(params: {
     });
   }
 
+  /**
+   * Record why a session wants a human. `sinceEpochMs` is only stamped when the
+   * call for help is genuinely new: the runner republishes a runtime on every
+   * terminal and phase change, and a viewer keys its alert on this, so a fresh
+   * timestamp on each republish would make the alert sound restart forever.
+   * Returns whether anything changed.
+   */
+  function setAttention(runtime: RunnerSessionRuntimeRecord, kind: AutoPilotAttentionKind, reason: string): boolean {
+    const current = runtime.autoPilot.attention;
+    if (current && current.kind === kind && current.reason === reason) return false;
+    runtime.autoPilot.attention = { kind, reason, sinceEpochMs: Date.now() };
+    return true;
+  }
+
+  function clearAttention(runtime: RunnerSessionRuntimeRecord): boolean {
+    if (!runtime.autoPilot.attention) return false;
+    runtime.autoPilot.attention = null;
+    return true;
+  }
+
   /** Wait out the settle delay only where it is the runner's own clock to keep. */
   function scheduleGateCheck(sessionId: string, settleDelayMs: number): void {
-    scheduleAutopilot(sessionId, handoffSessions.has(sessionId) ? HANDOFF_RECHECK_MS : settleDelayMs);
+    scheduleAutopilot(sessionId, handoffSessions.has(sessionId) ? HANDOFF_EVENT_DELAY_MS : settleDelayMs);
   }
 
   function scheduleAutopilot(sessionId: string, delayMs: number): void {
@@ -591,6 +652,8 @@ export function createSessionOrchestrator(params: {
         runtime.autoPilot.message = enabled ? "Auto-pilot enabled" : "Auto-pilot disabled";
         if (!enabled) {
           runtime.autoPilot.state = INITIAL_CONDUCTOR_STATE;
+          clearAttention(runtime);
+          handoffWaitingSince.delete(sessionId);
           const timer = autoPilotTimers.get(sessionId);
           if (timer) clearTimeout(timer);
           autoPilotTimers.delete(sessionId);
@@ -632,6 +695,7 @@ export function createSessionOrchestrator(params: {
           agentKind: launch.agentKind,
           sessionLane: lane,
         });
+        lastAgentOutputAt.set(sessionId, Date.now());
         terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
         terminal.generation = (terminal.generation ?? 0) + 1;
         await publish(sessionId, session.setupDone, runtime);
@@ -697,7 +761,7 @@ export function createSessionOrchestrator(params: {
       });
       void runtimeStore.get(sessionId).then(async (runtime) => {
         if (!runtime?.autoPilot.enabled) return;
-        scheduleAutopilot(sessionId, HANDOFF_RECHECK_MS);
+        scheduleAutopilot(sessionId, HANDOFF_EVENT_DELAY_MS);
       }).catch((error: unknown) => {
         console.error(`Could not schedule auto-pilot for ${sessionId}:`, error);
       });
@@ -708,6 +772,7 @@ export function createSessionOrchestrator(params: {
         if (code !== 0) {
           runtime.phase = "failed";
           runtime.error = `Setup failed (exit ${code}).`;
+          setAttention(runtime, "setup-failed", runtime.error);
           await openSetupRepairShell(sessionId, runtime);
           await publish(sessionId, false, runtime);
           return;
@@ -725,7 +790,12 @@ export function createSessionOrchestrator(params: {
     },
     onTerminalData({ terminalId, data }) {
       const live = liveTerminal.get(terminalId);
-      if (!live || live.agentKind !== "kimi" || !live.sessionLane) return;
+      if (!live) return;
+      // Any byte an agent prints is proof it is still going. Only agent
+      // terminals carry a lane; a shell the user typed in says nothing about
+      // whether the workflow is advancing.
+      if (live.sessionLane) lastAgentOutputAt.set(live.sessionId, Date.now());
+      if (live.agentKind !== "kimi" || !live.sessionLane) return;
       const text = `${kimiOutputByTerminal.get(terminalId) ?? ""}${data}`.slice(-16_384);
       kimiOutputByTerminal.set(terminalId, text);
       const sessionUuid = findKimiSessionId(text);
@@ -756,6 +826,8 @@ export function createSessionOrchestrator(params: {
       pendingHandoff.delete(sessionId);
       lastHandoffTurn.delete(sessionId);
       handoffSessions.delete(sessionId);
+      handoffWaitingSince.delete(sessionId);
+      lastAgentOutputAt.delete(sessionId);
       await runtimeStore.remove(sessionId);
       for (const [terminalId, live] of liveTerminal) {
         if (live.sessionId !== sessionId) continue;
