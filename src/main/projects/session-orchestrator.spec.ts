@@ -494,6 +494,15 @@ describe("createSessionOrchestrator", () => {
     const restored = await store.get(repoSessionId);
     expect(restored?.terminals).toHaveLength(1);
     expect(restored?.terminals[0]).toMatchObject({ kind: "agent", lane: opened.lane });
+
+    // A shell's name is view state, but this tab is read off the record, so its
+    // name has to be stored there to survive closing the app.
+    const renamer = makeOrchestrator();
+    await renamer.renameTerminal(repoSessionId, opened.key, "  Refactor  ");
+    expect((await store.get(repoSessionId))?.terminals[0]?.title).toBe("Refactor");
+
+    await renamer.renameTerminal(repoSessionId, opened.key, "   ");
+    expect((await store.get(repoSessionId))?.terminals[0]?.title).toBe("Refactor");
   });
 
   // The recovery banner tells the user to fix the worktree "in this terminal",

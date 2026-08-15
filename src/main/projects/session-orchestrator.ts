@@ -69,6 +69,7 @@ export interface SessionOrchestrator {
   openRole(sessionId: string, role: SessionAgentRole): Promise<RunnerTerminalRecord>;
   openShell(params: { sessionId: string; root: boolean }): Promise<RunnerTerminalRecord>;
   openRepoAgent(params: { sessionId: string }): Promise<RunnerTerminalRecord>;
+  renameTerminal(sessionId: string, key: string, title: string): Promise<void>;
   closeTerminal(sessionId: string, key: string): Promise<void>;
   runtime(sessionId: string): Promise<RunnerSessionRuntimeRecord | null>;
   skipFailedSetup(sessionId: string): Promise<void>;
@@ -674,6 +675,19 @@ export function createSessionOrchestrator(params: {
         await ensureRepoAgent(sessionId, project.rootPath, terminal);
         await publish(sessionId, true, runtime);
         return terminal;
+      });
+    },
+    renameTerminal(sessionId, key, title) {
+      return serial(sessionId, async () => {
+        const runtime = await runtimeStore.get(sessionId);
+        const terminal = runtime?.terminals.find((candidate) => candidate.key === key);
+        const trimmed = title.trim();
+        if (!runtime || !terminal || !trimmed) return;
+        terminal.title = trimmed;
+        // A repo workspace's tabs are read straight off this record, so the name
+        // has to live here to survive closing the app.
+        const repo = isRepoSessionId(sessionId);
+        await publish(sessionId, repo || (await sessionFor(sessionId)).setupDone, runtime);
       });
     },
     closeTerminal(sessionId, key) {

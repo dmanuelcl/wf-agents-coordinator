@@ -196,6 +196,9 @@ export async function createCoordinatorRuntime(
   transport.handle(IPC_CHANNELS.sessionsOpenRepoAgent, (_event, sessionId: string) =>
     sessionOrchestrator!.openRepoAgent({ sessionId }),
   );
+  transport.handle(IPC_CHANNELS.sessionsRenameTerminal, (_event, sessionId: string, key: string, title: string) =>
+    sessionOrchestrator!.renameTerminal(sessionId, key, title),
+  );
   transport.handle(IPC_CHANNELS.sessionsCloseTerminal, (_event, sessionId: string, key: string) =>
     sessionOrchestrator!.closeTerminal(sessionId, key),
   );

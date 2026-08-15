@@ -6,6 +6,7 @@ import { GitDiffView } from "./GitDiffView";
 import type { SendTarget } from "./Composer";
 import { MarkdownFileView } from "./MarkdownFileView";
 import { MarkdownContent } from "./MarkdownContent";
+import { repoTabIsOpen } from "./repo-open-tab";
 import { SessionTerminal } from "./SessionTerminal";
 import type { SessionTerminalHandle } from "./SessionTerminal";
 import { SetupRecoveryBanner } from "./setup-recovery";
@@ -765,9 +766,9 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     setDirtyFileTabs((current) => (current[id] === dirty ? current : { ...current, [id]: dirty }));
   }
 
-  function startRename(tab: ShellTab): void {
-    setRenamingId(tab.id);
-    setRenameDraft(tab.title);
+  function startRename(id: string, title: string): void {
+    setRenamingId(id);
+    setRenameDraft(title);
   }
 
   function commitRename(): void {
@@ -775,7 +776,14 @@ export function SessionView(props: SessionViewProps): JSX.Element {
     if (!id) return;
     const title = renameDraft.trim();
     if (title) {
-      setShellTabs((current) => current.map((tab) => (tab.id === id ? { ...tab, title } : tab)));
+      // A shell's name is a view preference kept in the workspace layout. A repo
+      // agent's tab is read off the runner's record, so its name has to be
+      // stored there or it would not survive closing the app.
+      if (repoAgentTabs.some((terminal) => terminal.key === id)) {
+        void window.agentCoordinator.sessions.renameTerminal(session.id, id, title);
+      } else {
+        setShellTabs((current) => current.map((tab) => (tab.id === id ? { ...tab, title } : tab)));
+      }
     }
     setRenamingId(null);
   }
@@ -856,12 +864,13 @@ export function SessionView(props: SessionViewProps): JSX.Element {
       );
   }
 
-  // In repo mode there are no agent/Log tabs; if the active tab isn't a shell,
-  // file, or the diff, nothing is open (show an empty state instead of a blank).
-  const repoActiveTabExists =
-    (activeTab === "diff" && diffOpen) ||
-    shellTabs.some((tab) => tab.id === activeTab) ||
-    fileTabs.some((tab) => tab.id === activeTab);
+  const repoActiveTabExists = repoTabIsOpen({
+    activeTab,
+    diffOpen,
+    shellTabIds: shellTabs.map((tab) => tab.id),
+    agentTabKeys: repoAgentTabs.map((terminal) => terminal.key),
+    fileTabIds: fileTabs.map((tab) => tab.id),
+  });
 
   return (
     <section className="session-view">
@@ -1137,7 +1146,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
                   aria-selected={active}
                   className={`session-view-tab${active ? " active" : ""}`}
                   onClick={() => setActiveTab(tab.id)}
-                  onDoubleClick={() => startRename(tab)}
+                  onDoubleClick={() => startRename(tab.id, tab.title)}
                   title={tab.root ? "Repo-root shell · double-click to rename" : "Double-click to rename"}
                 >
                   {tab.root && <span className="tab-root-badge">root</span>}
@@ -1192,16 +1201,31 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           const active = activeTab === terminal.key;
           return (
             <div key={terminal.key} className={`session-view-tab-wrap${active ? " active" : ""}`}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                className={`session-view-tab${active ? " active" : ""}`}
-                onClick={() => setActiveTab(terminal.key)}
-                title="Loose agent in the repo root · its conversation survives a restart"
-              >
-                {terminal.title ?? "Agent"}
-              </button>
+              {renamingId === terminal.key ? (
+                <input
+                  className="session-view-tab-rename"
+                  value={renameDraft}
+                  autoFocus
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitRename();
+                    if (event.key === "Escape") setRenamingId(null);
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`session-view-tab${active ? " active" : ""}`}
+                  onClick={() => setActiveTab(terminal.key)}
+                  onDoubleClick={() => startRename(terminal.key, terminal.title ?? "Agent")}
+                  title="Loose agent in the repo root · double-click to rename"
+                >
+                  {terminal.title ?? "Agent"}
+                </button>
+              )}
               <button
                 type="button"
                 className="session-view-tab-close"
@@ -1291,7 +1315,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
           <div className="pane-empty">
             <p className="pane-empty-title">No tab open</p>
             <p className="pane-empty-hint">
-              Use <span className="pane-empty-plus">+</span> to open a shell — or the Files / Diff buttons above.
+              Use <span className="pane-empty-plus">+</span> to open a shell or an agent — or the Files / Diff buttons above.
             </p>
           </div>
         )}

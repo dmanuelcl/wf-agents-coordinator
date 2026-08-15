@@ -169,6 +169,7 @@ export const IPC_CHANNELS = {
   sessionsOpenRole: "sessions:open-role",
   sessionsOpenShell: "sessions:open-shell",
   sessionsOpenRepoAgent: "sessions:open-repo-agent",
+  sessionsRenameTerminal: "sessions:rename-terminal",
   sessionsCloseTerminal: "sessions:close-terminal",
   sessionsSkipFailedSetup: "sessions:skip-failed-setup",
   sessionsSetAutopilot: "sessions:set-autopilot",
@@ -365,6 +366,7 @@ export interface AgentCoordinatorApi {
     openShell(sessionId: string, root: boolean): Promise<RunnerTerminalRecord>;
     /** A loose agent in a project's repo workspace, outside any worktree. */
     openRepoAgent(sessionId: string): Promise<RunnerTerminalRecord>;
+    renameTerminal(sessionId: string, key: string, title: string): Promise<void>;
     closeTerminal(sessionId: string, key: string): Promise<void>;
     skipFailedSetup(sessionId: string): Promise<void>;
     setAutopilot(sessionId: string, enabled: boolean): Promise<RunnerSessionRuntimeRecord>;
