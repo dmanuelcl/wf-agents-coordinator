@@ -15,6 +15,7 @@ function createFakePty(): FakePty {
   let exitCb: ((e: { exitCode: number }) => void) | null = null;
 
   const fake: FakePty = {
+    pid: 4242,
     writeCalls: [],
     resizeCalls: [],
     killCalled: false,
@@ -45,6 +46,22 @@ function createFakePty(): FakePty {
 }
 
 const SHELL = { file: "/bin/bash", args: ["-l"] };
+
+describe("createPtySessionManager · spawned groups", () => {
+  it("records a terminal's process group on creation and drops it when it exits", () => {
+    const fake = createFakePty();
+    const spawnedGroups = { track: vi.fn(), release: vi.fn() };
+    const manager = createPtySessionManager({ spawnPty: () => fake, spawnedGroups });
+
+    manager.create({ cwd: "/repo", shell: { file: "/bin/zsh", args: [] }, cols: 80, rows: 24 });
+    expect(spawnedGroups.track).toHaveBeenCalledWith(4242);
+    expect(spawnedGroups.release).not.toHaveBeenCalled();
+
+    // A terminal that ended on its own leaves nothing to reap next start.
+    fake.emitExit(0);
+    expect(spawnedGroups.release).toHaveBeenCalledWith(4242);
+  });
+});
 
 describe("createPtySessionManager", () => {
   it("forwards provider environment overrides to the PTY", () => {

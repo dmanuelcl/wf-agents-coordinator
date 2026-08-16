@@ -1,6 +1,8 @@
 import type { ShellSpec } from "./shell-resolver";
 
 export interface PtySpawn {
+  /** The shell's pid, which is also the id of the group its children inherit. */
+  pid: number;
   onData(cb: (data: string) => void): void;
   onExit(cb: (e: { exitCode: number }) => void): void;
   write(data: string): void;
@@ -18,6 +20,12 @@ export interface PtyCreateParams {
 
 export type SpawnPty = (params: PtyCreateParams) => PtySpawn;
 
+/** Records the process groups this app started, so a crashed run can be reaped. */
+export interface SpawnedGroupTracker {
+  track(pgid: number): void;
+  release(pgid: number): void;
+}
+
 export interface PtySessionManager {
   create(params: PtyCreateParams): string;
   write(sessionId: string, data: string): void;
@@ -31,8 +39,11 @@ export interface PtySessionManager {
   onExit(sessionId: string, cb: (code: number) => void): void;
 }
 
-export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySessionManager {
-  const { spawnPty } = params;
+export function createPtySessionManager(params: {
+  spawnPty: SpawnPty;
+  spawnedGroups?: SpawnedGroupTracker;
+}): PtySessionManager {
+  const { spawnPty, spawnedGroups } = params;
   const sessions = new Map<string, PtySpawn>();
   const sessionCwds = new Map<string, string>();
   const exitCallbacks = new Map<string, Set<(code: number) => void>>();
@@ -52,10 +63,14 @@ export function createPtySessionManager(params: { spawnPty: SpawnPty }): PtySess
     const session = spawnPty(createParams);
     sessions.set(sessionId, session);
     sessionCwds.set(sessionId, createParams.cwd);
+    // Recorded before anything can go wrong with it: the run this guards
+    // against is the one that never gets to clean up after itself.
+    spawnedGroups?.track(session.pid);
 
     session.onExit((e) => {
       sessions.delete(sessionId);
       sessionCwds.delete(sessionId);
+      spawnedGroups?.release(session.pid);
       const callbacks = exitCallbacks.get(sessionId);
       exitCallbacks.delete(sessionId);
       if (callbacks) {

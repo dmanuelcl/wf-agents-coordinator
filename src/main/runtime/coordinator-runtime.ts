@@ -18,6 +18,7 @@ import { createSessionRuntimeStore } from "../projects/session-runtime-store";
 import { createSessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import { createSqliteProjectRegistry } from "../projects/sqlite-project-registry";
 import { createWorkspaceLayoutStore } from "../projects/workspace-layout-store";
+import { createOrphanReaper } from "../terminals/orphan-reaper";
 import { createPtySessionManager } from "../terminals/pty-session-manager";
 import { spawnRealPty } from "../terminals/node-pty-adapter";
 import { createSessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
@@ -122,7 +123,15 @@ export async function createCoordinatorRuntime(
     onHandoff: (sessionId, handoff) => sessionOrchestrator?.onHandoff(sessionId, handoff),
   });
 
-  const ptySessionManager = createPtySessionManager({ spawnPty: spawnRealPty });
+  // Reap first, then start: anything still standing belongs to a run that is
+  // already gone, and a build pipeline left that way holds gigabytes for as
+  // long as the machine is up.
+  const orphanReaper = createOrphanReaper({ storeFilePath: join(stateDir, "spawned-groups.json") });
+  const reaped = orphanReaper.sweep();
+  if (reaped.length > 0) {
+    console.warn(`Killed ${reaped.length} process group(s) orphaned by a previous run: ${reaped.join(", ")}`);
+  }
+  const ptySessionManager = createPtySessionManager({ spawnPty: spawnRealPty, spawnedGroups: orphanReaper });
   const scrollbackStore = createTerminalScrollbackStore({ dir: join(stateDir, "terminal-scrollback") });
   const screenStore = createTerminalScreenStore();
   const sessionSetupCoordinator = createSessionSetupCoordinator();

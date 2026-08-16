@@ -17,6 +17,7 @@ describe("registerTerminalIpcHandlers", () => {
   it("reattaches a reconnecting client to a persistent terminal instead of spawning a second PTY", async () => {
     let dataCallback: ((data: string) => void) | undefined;
     const fakePty: PtySpawn = {
+      pid: 4242,
       onData: (callback) => {
         dataCallback = callback;
       },
@@ -63,6 +64,7 @@ describe("registerTerminalIpcHandlers", () => {
   it("can attach to a live persistent setup terminal without creating a setup command", async () => {
     let dataCallback: ((data: string) => void) | undefined;
     const fakePty: PtySpawn = {
+      pid: 4242,
       onData: (callback) => {
         dataCallback = callback;
       },
@@ -112,6 +114,7 @@ describe("registerTerminalIpcHandlers", () => {
   it("finalizes setup in the runner when its PTY exits after the browser disconnects", async () => {
     let exitCallback: ((event: { exitCode: number }) => void) | undefined;
     const fakePty: PtySpawn = {
+      pid: 4242,
       onData: () => {},
       onExit: (callback) => {
         exitCallback = callback;
@@ -148,7 +151,7 @@ describe("registerTerminalIpcHandlers", () => {
 
   it("continues routing terminal input through the transport", () => {
     const write = vi.fn();
-    const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };
+    const fakePty: PtySpawn = { pid: 4242, onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };
     const transport = createIpcHandlerRegistry();
     registerTerminalIpcHandlers({
       transport,
@@ -170,7 +173,7 @@ describe("registerTerminalIpcHandlers", () => {
 
   it("updates the existing PTY display grid without creating a new process", async () => {
     const resize = vi.fn();
-    const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write: vi.fn(), resize, kill: vi.fn() };
+    const fakePty: PtySpawn = { pid: 4242, onData: () => {}, onExit: () => {}, write: vi.fn(), resize, kill: vi.fn() };
     const transport = createIpcHandlerRegistry();
     registerTerminalIpcHandlers({
       transport,
@@ -198,7 +201,7 @@ describe("registerTerminalIpcHandlers", () => {
   it("delivers a launch prompt in the runner even when its requesting browser is gone", async () => {
     vi.useFakeTimers();
     const write = vi.fn();
-    const fakePty: PtySpawn = { onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };
+    const fakePty: PtySpawn = { pid: 4242, onData: () => {}, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn() };
     const broadcast = vi.fn();
     const transport = createIpcHandlerRegistry();
     registerTerminalIpcHandlers({
