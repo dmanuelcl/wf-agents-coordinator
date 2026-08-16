@@ -3,6 +3,8 @@ import type { ShellSpec } from "./shell-resolver";
 export interface PtySpawn {
   /** The shell's pid, which is also the id of the group its children inherit. */
   pid: number;
+  /** Signal the whole group, including after the shell itself has gone. */
+  killGroup(): void;
   onData(cb: (data: string) => void): void;
   onExit(cb: (e: { exitCode: number }) => void): void;
   write(data: string): void;
@@ -23,7 +25,6 @@ export type SpawnPty = (params: PtyCreateParams) => PtySpawn;
 /** Records the process groups this app started, so a crashed run can be reaped. */
 export interface SpawnedGroupTracker {
   track(pgid: number): void;
-  release(pgid: number): void;
 }
 
 export interface PtySessionManager {
@@ -70,7 +71,12 @@ export function createPtySessionManager(params: {
     session.onExit((e) => {
       sessions.delete(sessionId);
       sessionCwds.delete(sessionId);
-      spawnedGroups?.release(session.pid);
+      // The shell ending is not the same as its work ending. A setup command
+      // that fails, or any command that simply finishes, leaves behind whatever
+      // it had started — reparented to init, invisible to this app, and with
+      // nobody left to stop it. Nothing was closed and nothing crashed, which is
+      // why neither the close path nor the crash sweep would ever reach it.
+      session.killGroup();
       const callbacks = exitCallbacks.get(sessionId);
       exitCallbacks.delete(sessionId);
       if (callbacks) {

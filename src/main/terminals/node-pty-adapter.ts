@@ -44,21 +44,23 @@ export const spawnRealPty: SpawnPty = ({ cwd, shell, cols, rows, environment }) 
     }
   }
 
+  function reapGroup(): void {
+    killGroup("SIGTERM");
+    // Whatever ignored SIGTERM — a build orchestrator mid-task, a dev server
+    // draining — gets no say a few seconds later.
+    setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS).unref?.();
+  }
+
   const spawned: PtySpawn = {
     pid: proc.pid,
+    killGroup: reapGroup,
     onData: (cb) => proc.onData(cb),
     onExit: (cb) => proc.onExit((e) => cb({ exitCode: e.exitCode })),
     write: (data) => proc.write(data),
     resize: (cols, rows) => proc.resize(cols, rows),
     kill: () => {
-      killGroup("SIGTERM");
-      proc.kill();
-      // Whatever ignored SIGTERM — a build orchestrator mid-task, a dev server
-      // draining — gets no say a few seconds later.
-      const forceKill = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
-      if (exited) clearTimeout(forceKill);
-      else proc.onExit(() => clearTimeout(forceKill));
-      forceKill.unref?.();
+      reapGroup();
+      if (!exited) proc.kill();
     },
   };
 

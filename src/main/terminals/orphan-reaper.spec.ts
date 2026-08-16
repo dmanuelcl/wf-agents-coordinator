@@ -67,15 +67,15 @@ describe("createOrphanReaper", () => {
     expect(killGroup).not.toHaveBeenCalled();
   });
 
-  it("forgets a group whose terminal exited normally", () => {
-    const reaper = makeReaper({ ownerPid: 100 });
-    reaper.track(555);
-    reaper.release(555);
+  // A terminal ending does not mean its work ended, so an entry is dropped only
+  // once a sweep has seen the group has no live member left.
+  it("still reaps a group whose terminal exited but whose children did not", () => {
+    makeReaper({ ownerPid: 100 }).track(555);
 
     const killGroup = vi.fn();
     makeReaper({ ownerPid: 200, liveGroups: [555], alivePids: [200], killGroup }).sweep();
 
-    expect(killGroup).not.toHaveBeenCalled();
+    expect(killGroup).toHaveBeenCalledWith(555);
   });
 
   it("drops swept and dead entries so the file cannot grow without bound", () => {

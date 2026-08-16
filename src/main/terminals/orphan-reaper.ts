@@ -11,7 +11,6 @@ interface TrackedGroup {
 
 export interface OrphanReaper {
   track(pgid: number): void;
-  release(pgid: number): void;
   /** Kill every tracked group whose owning run is gone. Returns what it killed. */
   sweep(): number[];
 }
@@ -24,8 +23,10 @@ export interface OrphanReaper {
  * running, reparented to init, with nothing left that knows it exists. A build
  * pipeline left that way holds gigabytes for as long as the machine is up.
  *
- * So each terminal's group id is written to disk the moment it is created, and
- * the next run kills whatever is still standing. Groups are identified by pgid
+ * So each terminal's group id is written to disk the moment it is created and
+ * left there: an entry is only ever dropped by a sweep that has confirmed the
+ * group has no live member, so a group that outlived its shell can never be
+ * forgotten while it is still running. Groups are identified by pgid
  * rather than by working directory: this only ever signals processes this app
  * started, never something the user happened to run in the same folder.
  */
@@ -75,12 +76,6 @@ export function createOrphanReaper(params: {
       const entries = read().filter((entry) => entry.pgid !== pgid);
       entries.push({ pgid, ownerPid });
       write(entries);
-    },
-
-    release(pgid) {
-      const entries = read();
-      const remaining = entries.filter((entry) => !(entry.pgid === pgid && entry.ownerPid === ownerPid));
-      if (remaining.length !== entries.length) write(remaining);
     },
 
     sweep() {

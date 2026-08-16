@@ -8,6 +8,7 @@ interface FakePty extends PtySpawn {
   writeCalls: string[];
   resizeCalls: Array<[number, number]>;
   killCalled: boolean;
+  killGroupCalled: boolean;
 }
 
 function createFakePty(): FakePty {
@@ -16,6 +17,10 @@ function createFakePty(): FakePty {
 
   const fake: FakePty = {
     pid: 4242,
+    killGroupCalled: false,
+    killGroup() {
+      fake.killGroupCalled = true;
+    },
     writeCalls: [],
     resizeCalls: [],
     killCalled: false,
@@ -48,18 +53,28 @@ function createFakePty(): FakePty {
 const SHELL = { file: "/bin/bash", args: ["-l"] };
 
 describe("createPtySessionManager · spawned groups", () => {
-  it("records a terminal's process group on creation and drops it when it exits", () => {
+  it("records a terminal's process group as soon as it is created", () => {
     const fake = createFakePty();
-    const spawnedGroups = { track: vi.fn(), release: vi.fn() };
+    const spawnedGroups = { track: vi.fn() };
     const manager = createPtySessionManager({ spawnPty: () => fake, spawnedGroups });
 
     manager.create({ cwd: "/repo", shell: { file: "/bin/zsh", args: [] }, cols: 80, rows: 24 });
-    expect(spawnedGroups.track).toHaveBeenCalledWith(4242);
-    expect(spawnedGroups.release).not.toHaveBeenCalled();
 
-    // A terminal that ended on its own leaves nothing to reap next start.
-    fake.emitExit(0);
-    expect(spawnedGroups.release).toHaveBeenCalledWith(4242);
+    expect(spawnedGroups.track).toHaveBeenCalledWith(4242);
+  });
+
+  // The case that leaked: a setup command fails, so the shell ends on its own.
+  // Nothing was closed and nothing crashed, yet whatever it had started is now
+  // parentless — so the exit itself has to reap the group.
+  it("reaps the process group when a terminal ends on its own", () => {
+    const fake = createFakePty();
+    const manager = createPtySessionManager({ spawnPty: () => fake, spawnedGroups: { track: vi.fn() } });
+    manager.create({ cwd: "/repo", shell: { file: "/bin/zsh", args: [] }, cols: 80, rows: 24 });
+    expect(fake.killGroupCalled).toBe(false);
+
+    fake.emitExit(2);
+
+    expect(fake.killGroupCalled).toBe(true);
   });
 });
 
