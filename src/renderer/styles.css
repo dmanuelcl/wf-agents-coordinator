@@ -529,9 +529,14 @@ button:disabled {
 }
 
 /* ── Main area ──────────────────────────────────────────────── */
+/* Column, not the default row: the alert bar and the error banner are banners
+   stacked above the session. As row items they stretch on the cross axis, which
+   is vertical — each one filled the whole height of the app beside the session
+   instead of sitting on top of it. */
 .main-area {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -921,6 +926,10 @@ button:disabled {
 .session-view-host {
   flex: 1;
   min-width: 0;
+  /* Now that .main-area stacks vertically, the session is the item that absorbs
+     the leftover height, and it has to be allowed to shrink past its content so
+     the terminals scroll instead of pushing the banners off screen. */
+  min-height: 0;
   display: flex;
 }
 .session-view-host[hidden] {
