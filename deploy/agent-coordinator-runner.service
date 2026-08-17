@@ -6,11 +6,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Copy this file into ~/.config/systemd/user/ and adjust every absolute path.
-# Use node directly: a user service does not load nvm, and pnpm's shebang uses
-# /usr/bin/env node, which would otherwise fail before the runner starts.
+# ExecStart runs scripts/run-remote-runner.sh rather than node or pnpm: a user
+# service loads neither nvm nor your shell profile, and the runner must use the
+# exact Node pinned in .nvmrc (the one that built the native addons). The script
+# resolves that version itself, so this file never names it and cannot drift.
 WorkingDirectory=/srv/agent-coordinator/app
 EnvironmentFile=/srv/agent-coordinator/runner.env
-ExecStart=/usr/bin/node /srv/agent-coordinator/app/out/main/remote-runner.js
+ExecStart=/srv/agent-coordinator/app/scripts/run-remote-runner.sh
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM

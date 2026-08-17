@@ -163,6 +163,27 @@ npx electron-rebuild -f -w node-pty,better-sqlite3
 # or just run `pnpm dev` / `pnpm build`, which do it for you
 ```
 
+#### The remote runner pins its Node version
+
+The runner (`pnpm remote:build`) is pinned to the Node version in `.nvmrc`, and
+`scripts/build-remote-native.mjs` re-executes itself under that Node no matter
+which one you invoke it with.
+
+The pin exists because `node::ObjectWrap` is a header-only class baked into each
+addon. Node 24.19.0 ([nodejs/node#63642](https://github.com/nodejs/node/releases/tag/v24.19.0))
+made its destructor call `RemoveEnvironmentCleanupHook()`. `better-sqlite3`'s
+`Statement` derives from it, so when V8 collects a dead statement during a GC
+driven by a platform task — no entered `v8::Context` — Node aborts the whole
+process with `Assertion failed: (env) != nullptr` (`src/api/hooks.cc:142`).
+
+So the service starts via `scripts/run-remote-runner.sh`, which resolves the
+pinned Node itself and refuses to boot on a mismatch — the systemd/launchd unit
+never names a version and cannot drift from the one that did the build.
+
+One thing to watch: `pnpm test` and `pnpm install` rebuild these addons with
+*your default* Node. Run `pnpm remote:build` again afterwards before restarting
+the runner; the build fails loudly if it ever compiles against affected headers.
+
 ---
 
 ## Scripts

@@ -84,8 +84,38 @@ pnpm remote:build
 
 El runner remoto usa Node directamente: no descarga, no arranca ni necesita el
 binario de Electron. `pnpm remote:build` fuerza la compilación nativa de
-`node-pty` y `better-sqlite3` para la versión de Node de esa máquina, y produce
-`out/main/remote-runner.js` junto a la interfaz web que éste sirve.
+`node-pty` y `better-sqlite3` para la versión de Node fijada en `.nvmrc`, y
+produce `out/main/remote-runner.js` junto a la interfaz web que éste sirve.
+
+### Por qué el runner fija su versión de Node
+
+`node::ObjectWrap` es una clase *header-only*: su código se compila **dentro**
+de cada módulo nativo. Node 24.19.0
+([nodejs/node#63642](https://github.com/nodejs/node/releases/tag/v24.19.0)) hizo
+que su destructor llame a `RemoveEnvironmentCleanupHook()`. La clase `Statement`
+de `better-sqlite3` hereda de ella, así que cuando el GC recolecta un statement
+muerto desde una *task* de plataforma —sin `v8::Context` activo—
+`Environment::GetCurrent()` devuelve `nullptr` y Node aborta el proceso entero:
+
+```
+node::RemoveEnvironmentCleanupHook(...) at ../src/api/hooks.cc:142
+Assertion failed: (env) != nullptr
+```
+
+Con `Restart=on-failure` eso se convierte en un bucle de reinicios. Por eso:
+
+- `.nvmrc` es la única fuente de verdad de la versión del runner. No hace falta
+  cambiar tu Node por defecto.
+- `scripts/build-remote-native.mjs` (el build) se re-ejecuta bajo esa versión
+  aunque lo invoques con otro Node, y aborta con un mensaje explícito si alguna
+  vez compila contra unas cabeceras afectadas.
+- `scripts/run-remote-runner.sh` (la ejecución) resuelve la misma versión y se
+  niega a arrancar si no coincide. Es lo que debe invocar `ExecStart`, para que
+  compilar y ejecutar no puedan divergir.
+
+Ojo: `pnpm install` y `pnpm test` recompilan estos módulos con tu Node **por
+defecto**. Después de cualquiera de los dos, vuelve a ejecutar
+`pnpm remote:build` antes de reiniciar el servicio.
 
 No sustituyas ese paso por `pnpm rebuild`: después de una instalación con
 `--ignore-scripts`, pnpm puede omitir la reconstrucción aunque los binarios
@@ -295,23 +325,25 @@ Para detenerlo: `launchctl bootout "gui/$(id -u)" com.agent-coordinator.runner`.
 
 1. Copia `agent-coordinator-runner.service` a
    `~/.config/systemd/user/`.
-2. Edita `WorkingDirectory`, `EnvironmentFile` y la ruta absoluta de `node` en
-   `ExecStart`. Obtén esa ruta desde tu terminal normal con `command -v node`.
-   Usa `node .../out/main/remote-runner.js` directamente, no `pnpm`: un
-   servicio de systemd no carga NVM ni tu `.bashrc`, y el ejecutable de pnpm
-   busca `node` usando su `PATH`.
+2. Edita `WorkingDirectory`, `EnvironmentFile` y la ruta absoluta de
+   `scripts/run-remote-runner.sh` en `ExecStart`.
 
-   Por ejemplo, si usas NVM y `command -v node` devuelve
-   `/home/dani/.nvm/versions/node/v24.11.0/bin/node`, las líneas quedan así:
+   **No pongas aquí una ruta de `node`.** Ese script resuelve por sí solo la
+   versión fijada en `.nvmrc` —la misma que compiló los módulos nativos— y
+   aborta con un mensaje claro si no está instalada o no coincide. Así `.nvmrc`
+   es la única fuente de verdad y la unidad no puede desincronizarse. Tampoco
+   uses `pnpm`: un servicio de systemd no carga NVM ni tu `.bashrc`.
+
+   Las líneas quedan así:
 
    ```ini
    WorkingDirectory=/home/dani/biznex-project/wf-agents-coordinator
    EnvironmentFile=/home/dani/.config/agent-coordinator/runner.env
-   ExecStart=/home/dani/.nvm/versions/node/v24.11.0/bin/node /home/dani/biznex-project/wf-agents-coordinator/out/main/remote-runner.js
+   ExecStart=/home/dani/biznex-project/wf-agents-coordinator/scripts/run-remote-runner.sh
    ```
 
-   Si actualizas Node, ejecuta `pnpm remote:build` con ese Node y reemplaza la
-   ruta de `ExecStart` por la nueva.
+   Si cambias la versión de `.nvmrc`, basta con `pnpm remote:build` y reiniciar
+   el servicio: `ExecStart` no se toca.
 3. Actívalo:
 
    ```sh
