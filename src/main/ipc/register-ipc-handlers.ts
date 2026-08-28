@@ -106,6 +106,7 @@ export interface RegisteredIpcServices {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
+    options?: { forceFresh: boolean },
   ): Promise<SessionRoleAutopilot>;
 }
 
@@ -852,6 +853,7 @@ export function registerIpcHandlers(params: {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
+    options?: { forceFresh: boolean },
   ): Promise<SessionRoleAutopilot> {
       assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
@@ -865,7 +867,7 @@ export function registerIpcHandlers(params: {
         sessionLane,
         cwd: session.worktreePath,
         agentConfig,
-        forceFresh: false,
+        forceFresh: options?.forceFresh === true,
       });
       if (
         sessionDirective?.mode === "resume" &&

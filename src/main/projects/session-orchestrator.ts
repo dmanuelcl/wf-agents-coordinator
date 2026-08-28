@@ -8,6 +8,7 @@ import { decideConductor } from "../../shared/workflow/conductor";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
 import type { SessionHandoff } from "../../shared/workflow/session-handoff";
+import { shouldForceFreshContext } from "../../shared/workflow/session-handoff";
 import type { AutoPilotAttentionKind } from "../../shared/workflow/autopilot-attention";
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
@@ -57,7 +58,7 @@ export interface SessionRuntimeChangedEvent {
 export interface SessionOrchestrator {
   setRoleLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
   setRepoAgentLaunchBuilder(builder: (sessionId: string, lane: string, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
-  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string) => Promise<{
+  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { forceFresh: boolean }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -129,7 +130,7 @@ export function createSessionOrchestrator(params: {
 }): SessionOrchestrator {
   const { projectRegistry, sessionRegistry, runtimeStore, terminals, sessionAgentUuidStore, readCheckpoint, broadcast } = params;
   type RoleLaunchBuilder = (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>;
-  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string) => Promise<{
+  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { forceFresh: boolean }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -502,12 +503,16 @@ export function createSessionOrchestrator(params: {
         scheduleAutopilot(sessionId, gate.retryInMs);
         return;
       }
+      // Above the context ceiling the SAME lane still gets a FRESH session:
+      // measured, every confessed error in a real architect session happened
+      // over ~300k of context (SKILL.md → el contexto es un PRESUPUESTO).
+      const forceFresh = shouldForceFreshContext(pendingHandoff.get(sessionId)?.contextTokens ?? null);
       pendingHandoff.delete(sessionId);
       handoffWaitingSince.delete(sessionId);
       clearAttention(runtime);
 
       if (!buildAutopilotLaunch) throw new Error("Session orchestrator was started before its auto-pilot launch builder was registered.");
-      const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command);
+      const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command, { forceFresh });
       let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === action.role);
       if (!terminal) {
         terminal = { key: roleKey(sessionId, action.role), kind: "agent", role: action.role, mode: "resume", generation: 0 };
@@ -840,6 +845,7 @@ export function createSessionOrchestrator(params: {
         role: handoff.role,
         sessionLane: handoff.sessionLane,
         seenAtEpochMs: Date.now(),
+        contextTokens: handoff.contextTokens,
       });
       void runtimeStore.get(sessionId).then(async (runtime) => {
         if (!runtime?.autoPilot.enabled) return;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import { createSessionOrchestrator } from "./session-orchestrator";
 import type { ProjectRecord, ProjectRegistry } from "./project-registry";
@@ -603,15 +604,19 @@ describe("createSessionOrchestrator", () => {
       agentCommand: "codex", agentKind: "codex", environment: {},
       wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
     }));
-    orchestrator.setAutopilotLaunchBuilder(async () => ({
-      command: "codex", agentKind: "codex", cwd: current.worktreePath, environment: {}, typePrompt: "wf step",
-    }));
+    const autopilotBuilder = vi.fn(
+      async (_sessionId: string, _role: SessionAgentRole, _lane: string, _prompt: string, _options?: { forceFresh: boolean }) => ({
+        command: "codex", agentKind: "codex" as const, cwd: current.worktreePath, environment: {} as Record<string, string>, typePrompt: "wf step" as string | null,
+      }),
+    );
+    orchestrator.setAutopilotLaunchBuilder(autopilotBuilder);
 
     try {
       await orchestrator.ensure(current.id);
-      // The architect's `wf done`: turn over, handing to the implementer.
+      // The architect's `wf done`: turn over, handing to the implementer. Below
+      // the context ceiling, so the lane may reuse its recorded session.
       orchestrator.onHandoff(current.id, {
-        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer",
+        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer", contextTokens: 120_000,
       });
       await orchestrator.setAutopilot(current.id, true);
 
@@ -627,13 +632,17 @@ describe("createSessionOrchestrator", () => {
       }, { timeout: 5_000 });
       expect(replace).toHaveBeenCalledTimes(1);
 
-      // Now the implementer's turn actually ends.
+      // Now the implementer's turn actually ends — ABOVE the context ceiling,
+      // so the coordinator must launch the next step in a FRESH session even in
+      // the same lane (SKILL.md → el contexto es un PRESUPUESTO).
       orchestrator.onHandoff(current.id, {
-        turn: 2, checkpointPath, role: "reviewer", sessionLane: "plan-1/reviewer",
+        turn: 2, checkpointPath, role: "reviewer", sessionLane: "plan-1/reviewer", contextTokens: 900_000,
       });
 
       await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(2), { timeout: 5_000 });
       expect(replace.mock.calls[1]?.[0]).toMatchObject({ persistKey: `${current.id}::role::reviewer` });
+      expect(autopilotBuilder.mock.calls[0]?.[4]).toEqual({ forceFresh: false });
+      expect(autopilotBuilder.mock.calls[1]?.[4]).toEqual({ forceFresh: true });
       expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf review ${checkpointPath}`);
     } finally {
       await orchestrator.remove(current.id);
@@ -690,7 +699,7 @@ describe("createSessionOrchestrator", () => {
     try {
       await orchestrator.ensure(current.id);
       orchestrator.onHandoff(current.id, {
-        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer",
+        turn: 1, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer", contextTokens: null,
       });
       await orchestrator.setAutopilot(current.id, true);
       await vi.waitFor(async () => {

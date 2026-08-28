@@ -24,6 +24,21 @@ export interface SessionHandoff {
   /** Identity of the step being handed to — never the command to run. */
   role: SessionAgentRole;
   sessionLane: string;
+  /** Context tokens of the PUBLISHING session, recorded by `wf:done`. Above the
+   *  ceiling the coordinator launches the next step in a FRESH session even in
+   *  the same lane. `null` = not recorded (older wf:done, or not measurable). */
+  contextTokens: number | null;
+}
+
+/** Working ceiling from the workflow rules (SKILL.md → el contexto es un PRESUPUESTO):
+ *  measured, 0 confessed errors below ~300k of context and all of them above. */
+export const HANDOFF_CONTEXT_FRESH_TOKENS = 300_000;
+
+/** True when the hand-off's recorded context is at or above the ceiling. Unknown
+ *  (null) reads as "reuse is fine" — punishing sessions that cannot measure would
+ *  force fresh launches everywhere the older wf:done still runs. */
+export function shouldForceFreshContext(contextTokens: number | null): boolean {
+  return contextTokens !== null && contextTokens >= HANDOFF_CONTEXT_FRESH_TOKENS;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -60,10 +75,15 @@ export function parseSessionHandoff(json: string): SessionHandoff | null {
 
   const checkpoint = record.checkpoint;
 
+  const rawTokens = record.contextTokens;
+  const contextTokens =
+    typeof rawTokens === "number" && Number.isFinite(rawTokens) && rawTokens >= 0 ? rawTokens : null;
+
   return {
     turn,
     checkpointPath: typeof checkpoint === "string" && checkpoint !== "" ? checkpoint : null,
     role,
     sessionLane,
+    contextTokens,
   };
 }

@@ -6,6 +6,8 @@ export interface PendingHandoff {
   sessionLane: string;
   /** When the runner first saw this turn. The settle delay runs from here. */
   seenAtEpochMs: number;
+  /** Context tokens the publishing session recorded via `wf:done`; null/absent = unknown. */
+  contextTokens?: number | null;
 }
 
 export type HandoffGateDecision =

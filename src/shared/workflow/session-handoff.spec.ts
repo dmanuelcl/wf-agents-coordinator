@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSessionHandoff } from "./session-handoff";
+import { HANDOFF_CONTEXT_FRESH_TOKENS, parseSessionHandoff, shouldForceFreshContext } from "./session-handoff";
 
 function handoff(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -17,7 +17,24 @@ describe("parseSessionHandoff", () => {
       checkpointPath: "docs/workflow/checkpoints/auth-checkpoint.md",
       role: "reviewer",
       sessionLane: "plan-1/reviewer",
+      contextTokens: null,
     });
+  });
+
+  it("reads the publisher's context tokens when wf:done recorded them", () => {
+    expect(parseSessionHandoff(handoff({ contextTokens: 630_826 }))?.contextTokens).toBe(630_826);
+  });
+
+  it("treats a malformed or negative contextTokens as unknown", () => {
+    expect(parseSessionHandoff(handoff({ contextTokens: "big" }))?.contextTokens).toBeNull();
+    expect(parseSessionHandoff(handoff({ contextTokens: -5 }))?.contextTokens).toBeNull();
+  });
+
+  it("forces a fresh session only above the context ceiling", () => {
+    expect(shouldForceFreshContext(null)).toBe(false);
+    expect(shouldForceFreshContext(HANDOFF_CONTEXT_FRESH_TOKENS - 1)).toBe(false);
+    expect(shouldForceFreshContext(HANDOFF_CONTEXT_FRESH_TOKENS)).toBe(true);
+    expect(shouldForceFreshContext(900_000)).toBe(true);
   });
 
   it("accepts a hand-off that names no checkpoint", () => {
