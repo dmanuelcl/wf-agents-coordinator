@@ -8,7 +8,6 @@ import { decideConductor } from "../../shared/workflow/conductor";
 import type { AutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
 import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
 import type { SessionHandoff } from "../../shared/workflow/session-handoff";
-import { shouldForceFreshContext } from "../../shared/workflow/session-handoff";
 import type { AutoPilotAttentionKind } from "../../shared/workflow/autopilot-attention";
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 import { findKimiSessionId } from "../../shared/workflow/kimi-session-id";
@@ -58,7 +57,7 @@ export interface SessionRuntimeChangedEvent {
 export interface SessionOrchestrator {
   setRoleLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
   setRepoAgentLaunchBuilder(builder: (sessionId: string, lane: string, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
-  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { forceFresh: boolean }) => Promise<{
+  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -130,7 +129,7 @@ export function createSessionOrchestrator(params: {
 }): SessionOrchestrator {
   const { projectRegistry, sessionRegistry, runtimeStore, terminals, sessionAgentUuidStore, readCheckpoint, broadcast } = params;
   type RoleLaunchBuilder = (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>;
-  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { forceFresh: boolean }) => Promise<{
+  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -153,6 +152,11 @@ export function createSessionOrchestrator(params: {
   // project's settle delay is measured from when it was seen, not from the
   // checkpoint write that preceded it.
   const pendingHandoff = new Map<string, PendingHandoff>();
+  /** Último lane lanzado por sesión — el próximo hand-off lo publica ESE lane. */
+  const lastLaunchedLane = new Map<string, string>();
+  /** Contexto (tokens) que cada lane reportó en su último wf:done — provider-neutral:
+   *  lo escribe la propia sesión al publicar (auto-detect en Claude, `--tokens` en el resto). */
+  const laneContextTokens = new Map<string, number>();
   // Highest hand-off turn ever seen per session, so re-reading the same file
   // (a watch restart, a touch) cannot replay a turn already acted on.
   const lastHandoffTurn = new Map<string, number>();
@@ -503,16 +507,16 @@ export function createSessionOrchestrator(params: {
         scheduleAutopilot(sessionId, gate.retryInMs);
         return;
       }
-      // Above the context ceiling the SAME lane still gets a FRESH session:
-      // measured, every confessed error in a real architect session happened
-      // over ~300k of context (SKILL.md → el contexto es un PRESUPUESTO).
-      const forceFresh = shouldForceFreshContext(pendingHandoff.get(sessionId)?.contextTokens ?? null);
       pendingHandoff.delete(sessionId);
       handoffWaitingSince.delete(sessionId);
       clearAttention(runtime);
 
+      // El techo se decide sobre el LANE DESTINO: lo que ese lane reportó en su
+      // último wf:done (provider-neutral); el lector de transcript de Claude
+      // refina en el builder cuando existe.
+      const targetTokens = laneContextTokens.get(`${sessionId}::${action.lane}`) ?? null;
       if (!buildAutopilotLaunch) throw new Error("Session orchestrator was started before its auto-pilot launch builder was registered.");
-      const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command, { forceFresh });
+      const launch = await buildAutopilotLaunch(sessionId, action.role, action.lane, action.command, { targetTokens });
       let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === action.role);
       if (!terminal) {
         terminal = { key: roleKey(sessionId, action.role), kind: "agent", role: action.role, mode: "resume", generation: 0 };
@@ -536,6 +540,8 @@ export function createSessionOrchestrator(params: {
       lastAgentOutputAt.set(sessionId, Date.now());
       terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
       terminal.generation = (terminal.generation ?? 0) + 1;
+      lastLaunchedLane.set(sessionId, action.lane);
+      if (terminal.mode === "fresh") laneContextTokens.delete(`${sessionId}::${action.lane}`);
       runtime.autoPilot.state = next;
       // Name the weaker signal when it is the one in use, so a session running
       // on the pre-hand-off behavior is visible rather than assumed safe.
@@ -761,7 +767,9 @@ export function createSessionOrchestrator(params: {
         const session = await sessionFor(sessionId);
         const runtime = await ensureSetupOrPrimary(sessionId);
         if (runtime.phase !== "ready") throw new Error("Worktree setup has not completed.");
-        const launch = await buildAutopilotLaunch(sessionId, role, lane, command);
+        const launch = await buildAutopilotLaunch(sessionId, role, lane, command, {
+          targetTokens: laneContextTokens.get(`${sessionId}::${lane}`) ?? null,
+        });
         let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === role);
         if (!terminal) {
           terminal = { key: roleKey(sessionId, role), kind: "agent", role, mode: "resume", generation: 0 };
@@ -782,6 +790,7 @@ export function createSessionOrchestrator(params: {
           agentKind: launch.agentKind,
           sessionLane: lane,
         });
+      lastLaunchedLane.set(sessionId, lane);
         lastAgentOutputAt.set(sessionId, Date.now());
         terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
         terminal.generation = (terminal.generation ?? 0) + 1;
@@ -847,6 +856,13 @@ export function createSessionOrchestrator(params: {
         seenAtEpochMs: Date.now(),
         contextTokens: handoff.contextTokens,
       });
+      // El contextTokens describe al PUBLICADOR — el paso que este runner lanzó
+      // último para la sesión. Se guarda contra SU lane, para consultarlo cuando
+      // el flujo vuelva a ese lane (null = desconocido ⇒ se conserva el previo).
+      const publisherLane = lastLaunchedLane.get(sessionId);
+      if (publisherLane && typeof handoff.contextTokens === "number") {
+        laneContextTokens.set(`${sessionId}::${publisherLane}`, handoff.contextTokens);
+      }
       void runtimeStore.get(sessionId).then(async (runtime) => {
         if (!runtime?.autoPilot.enabled) return;
         scheduleAutopilot(sessionId, HANDOFF_EVENT_DELAY_MS);
@@ -913,6 +929,8 @@ export function createSessionOrchestrator(params: {
       latestCheckpoint.delete(sessionId);
       pendingHandoff.delete(sessionId);
       lastHandoffTurn.delete(sessionId);
+      lastLaunchedLane.delete(sessionId);
+      for (const key of [...laneContextTokens.keys()]) if (key.startsWith(`${sessionId}::`)) laneContextTokens.delete(key);
       handoffSessions.delete(sessionId);
       handoffWaitingSince.delete(sessionId);
       lastAgentOutputAt.delete(sessionId);

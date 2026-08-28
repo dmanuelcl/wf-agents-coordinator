@@ -605,7 +605,7 @@ describe("createSessionOrchestrator", () => {
       wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
     }));
     const autopilotBuilder = vi.fn(
-      async (_sessionId: string, _role: SessionAgentRole, _lane: string, _prompt: string, _options?: { forceFresh: boolean }) => ({
+      async (_sessionId: string, _role: SessionAgentRole, _lane: string, _prompt: string, _options?: { targetTokens: number | null }) => ({
         command: "codex", agentKind: "codex" as const, cwd: current.worktreePath, environment: {} as Record<string, string>, typePrompt: "wf step" as string | null,
       }),
     );
@@ -632,18 +632,41 @@ describe("createSessionOrchestrator", () => {
       }, { timeout: 5_000 });
       expect(replace).toHaveBeenCalledTimes(1);
 
-      // Now the implementer's turn actually ends — ABOVE the context ceiling,
-      // so the coordinator must launch the next step in a FRESH session even in
-      // the same lane (SKILL.md → el contexto es un PRESUPUESTO).
+      // Now the implementer's turn actually ends, reporting ITS OWN context:
+      // 900k, over the ceiling. That number describes the PUBLISHER's lane
+      // (plan-1/implementer), never the lane being launched next.
       orchestrator.onHandoff(current.id, {
         turn: 2, checkpointPath, role: "reviewer", sessionLane: "plan-1/reviewer", contextTokens: 900_000,
       });
 
       await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(2), { timeout: 5_000 });
       expect(replace.mock.calls[1]?.[0]).toMatchObject({ persistKey: `${current.id}::role::reviewer` });
-      expect(autopilotBuilder.mock.calls[0]?.[4]).toEqual({ forceFresh: false });
-      expect(autopilotBuilder.mock.calls[1]?.[4]).toEqual({ forceFresh: true });
-      expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf review ${checkpointPath}`);
+
+      // The reviewer bounces it back: a fix round for the SAME implementer lane.
+      const toImplementerFix = parseCheckpointMarkdown({
+        checkpointPath,
+        markdown: [
+          "---", "feature: Auth", "slug: auth", "kind: feature", "status: IN_PROGRESS", "active: none", "---",
+          "",
+          "# ▶ NEXT",
+          "- **Rol:** implementer",
+          `- **Corre:** \`wf implement ${checkpointPath} · fix V1\``,
+          "- **Session lane:** `plan-1/implementer`",
+        ].join("\n"),
+      });
+      orchestrator.onCheckpoint(current.id, toImplementerFix);
+      orchestrator.onHandoff(current.id, {
+        turn: 3, checkpointPath, role: "implementer", sessionLane: "plan-1/implementer", contextTokens: 120_000,
+      });
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(3), { timeout: 5_000 });
+
+      // Context ceiling data is PER LANE: the fix launch back into
+      // plan-1/implementer consults what THAT lane last reported (900k, turn 2)
+      // — never the 120k the reviewer just published from its own lane.
+      expect(autopilotBuilder.mock.calls[0]?.[4]).toEqual({ targetTokens: null });
+      expect(autopilotBuilder.mock.calls[1]?.[4]).toEqual({ targetTokens: null });
+      expect(autopilotBuilder.mock.calls[2]?.[4]).toEqual({ targetTokens: 900_000 });
+      expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe(`→ wf implement ${checkpointPath} · fix V1`);
     } finally {
       await orchestrator.remove(current.id);
     }

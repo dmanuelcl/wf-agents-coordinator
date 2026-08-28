@@ -73,6 +73,8 @@ import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspac
 import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
 import { missingAgentExecutableMessage, resolveAgentExecutable } from "../terminals/agent-executable-resolver";
 import { claudeConversationExists } from "../terminals/claude-session-store";
+import { agentSessionContextTokens } from "../terminals/agent-context-usage";
+import { shouldForceFreshContext } from "../../shared/workflow/session-handoff";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
 import { getWorktreeDiff } from "../projects/worktree-diff";
 import { addWorktreeExclude } from "../projects/worktree-exclude";
@@ -106,7 +108,7 @@ export interface RegisteredIpcServices {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
-    options?: { forceFresh: boolean },
+    options?: { targetTokens: number | null },
   ): Promise<SessionRoleAutopilot>;
 }
 
@@ -853,7 +855,7 @@ export function registerIpcHandlers(params: {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
-    options?: { forceFresh: boolean },
+    options?: { targetTokens: number | null },
   ): Promise<SessionRoleAutopilot> {
       assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
@@ -867,7 +869,8 @@ export function registerIpcHandlers(params: {
         sessionLane,
         cwd: session.worktreePath,
         agentConfig,
-        forceFresh: options?.forceFresh === true,
+        // Provider-neutral: lo que ESTE lane reportó en su último wf:done.
+        forceFresh: shouldForceFreshContext(options?.targetTokens ?? null),
       });
       if (
         sessionDirective?.mode === "resume" &&
@@ -875,6 +878,24 @@ export function registerIpcHandlers(params: {
         !(await claudeConversationExists(sessionDirective.id))
       ) {
         sessionDirective = { ...sessionDirective, mode: "fresh" };
+      }
+      // Ceiling check on the TARGET: the session about to be resumed is the one
+      // whose context matters — the hand-off's contextTokens describe the
+      // PUBLISHER and say nothing about this lane. Provider-neutral: each kind
+      // brings its own reader; unknown reads as null = reuse allowed. Above the
+      // ceiling, mint a fresh lane session (measured: every confessed error in
+      // a real architect session happened above ~300k; below it, none).
+      if (sessionDirective?.mode === "resume") {
+        const targetTokens = await agentSessionContextTokens(agentConfig.kind, sessionDirective.id);
+        if (shouldForceFreshContext(targetTokens)) {
+          sessionDirective = await agentSessionLaneResolver.resolve({
+            sessionId,
+            sessionLane,
+            cwd: session.worktreePath,
+            agentConfig,
+            forceFresh: true,
+          });
+        }
       }
       const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt, sessionDirective);
     return {
