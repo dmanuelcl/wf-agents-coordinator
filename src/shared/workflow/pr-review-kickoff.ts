@@ -7,40 +7,33 @@ export interface PrReviewKickoffParams {
   branch: string;
   /** Base ref to diff against (e.g. origin/develop). */
   base: string;
-  /** Gitignored markdown file containing the complete PR conversation. */
-  contextFile: string;
   /** Source SHA of the last posted review; null on first run. */
   lastReviewedSha: string | null;
-  /** The gitignored file the reviewer must write its report to. */
-  artifactFile: string;
 }
 
 /**
- * Assemble the reviewer kickoff for a PR-link review. The potentially large PR
- * conversation lives in contextFile so the terminal prompt cannot truncate it.
- * The diff is scoped to what changed since the last review.
+ * Assemble the reviewer kickoff for a PR-link review.
+ *
+ * The kickoff carries the project's template and nothing else procedural: the
+ * template names the review protocol (for Biznex, the `biznex-pr-review` skill),
+ * and that protocol owns how the context file is read, which diff is run and how
+ * the report is written and verified. Injecting our own version of those steps
+ * produced a review that only RESEMBLED the protocol — so the app stopped.
+ *
+ * The one thing we still pass is `lastReviewedSha`, and it goes as DATA, not as
+ * an instruction: the published report never records the HEAD it reviewed, so
+ * the session cannot recover the previous round's head from the context file.
+ * The registry is the only authoritative source for it.
  */
 export function buildPrReviewKickoff(p: PrReviewKickoffParams): string {
   const parts: string[] = [substituteReviewKickoff(p.template, { branch: p.branch, base: p.base })];
 
-  parts.push(
-    `Antes de comenzar, lee COMPLETO el archivo \`${p.contextFile}\` en la raíz del worktree. ` +
-      "Contiene toda la conversación del PR en orden cronológico y marca los reportes previos de Agent Coordinator. " +
-      "Tenlos en cuenta: identifica lo resuelto, conserva lo pendiente y no repitas hallazgos ya corregidos. " +
-      "Si una lectura se trunca, continúa leyéndolo por partes hasta llegar al final del archivo. " +
-      "No empieces el review hasta haber leído el archivo hasta el final.",
-  );
-
   if (p.lastReviewedSha) {
-    parts.push(`Analiza SOLO los cambios nuevos desde el último review: \`git diff ${p.lastReviewedSha}..HEAD\`.`);
-  } else {
-    parts.push(`Analiza el diff completo del PR: \`git diff ${p.base}...HEAD\`.`);
+    parts.push(
+      "Dato del coordinador (no es una instrucción): el último commit ya revisado y publicado " +
+        `en este PR es \`${p.lastReviewedSha}\`.`,
+    );
   }
-
-  parts.push(
-    `Escribe el review COMPLETO en markdown al archivo \`${p.artifactFile}\` en la raíz del worktree ` +
-      `(está gitignored — no lo commitees). Ese archivo es lo que se publicará como comentario del PR.`,
-  );
 
   return parts.join("\n\n");
 }

@@ -301,9 +301,7 @@ export function registerIpcHandlers(params: {
       template: project.review.kickoff,
       branch: session.branch,
       base: session.baseBranch ?? "",
-      contextFile: PR_CONTEXT_ARTIFACT,
       lastReviewedSha: session.pr.lastReviewedSha,
-      artifactFile: REVIEW_ARTIFACT,
     });
   }
 
