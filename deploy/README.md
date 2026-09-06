@@ -384,6 +384,20 @@ desktop no pasará: Access espera la cookie del navegador (ver Paso 4B).
 
 ## Actualizaciones y límites actuales
 
+Para desplegar un cambio de código en el runner:
+
+```sh
+cd /home/dani/biznex-project/wf-agents-coordinator
+pnpm remote:build                                   # nativos para Node + bundle a out/
+systemctl --user restart agent-coordinator-runner   # macOS: launchctl kickstart -k "gui/$(id -u)/com.agent-coordinator.runner"
+systemctl --user status agent-coordinator-runner --no-pager
+```
+
+`pnpm remote:build`, nunca `pnpm build`: este último compila los módulos
+nativos para Electron y el runner es Node puro. Lo mismo después de `pnpm test`
+o `pnpm install`, que los recompilan con tu Node por defecto.
+
+
 - Actualizar el navegador o la app desktop no toca los agentes del runner.
 - Cerrar o recargar un cliente vuelve a adjuntarse a las terminales persistidas;
   no vuelve a ejecutar worktree setup ni reenvía prompts.

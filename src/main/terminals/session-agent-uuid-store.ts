@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 
 export interface AgentSessionBinding {
@@ -34,7 +34,7 @@ export function createSessionAgentUuidStore(params: { storeFilePath: string }): 
   async function readAll(): Promise<Store> {
     try {
       const raw = await readFile(storeFilePath, "utf8");
-      return JSON.parse(raw) as Store;
+      return parseStateFile(raw, storeFilePath) as Store;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return {};
@@ -44,8 +44,7 @@ export function createSessionAgentUuidStore(params: { storeFilePath: string }): 
   }
 
   async function writeAll(records: Store): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(records, null, 2), "utf8");
+    await writeStateFile(storeFilePath, JSON.stringify(records, null, 2));
   }
 
   return {

@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 
 export interface PersistedShellTab {
   id: string;
@@ -41,7 +41,7 @@ export function createWorkspaceLayoutStore(params: { storeFilePath: string }): W
     async get() {
       try {
         const raw = await readFile(storeFilePath, "utf8");
-        return JSON.parse(raw) as WorkspaceLayout;
+        return parseStateFile(raw, storeFilePath) as WorkspaceLayout;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return null;
@@ -51,8 +51,7 @@ export function createWorkspaceLayoutStore(params: { storeFilePath: string }): W
     },
 
     async set(layout) {
-      await mkdir(dirname(storeFilePath), { recursive: true });
-      await writeFile(storeFilePath, JSON.stringify(layout, null, 2), "utf8");
+      await writeStateFile(storeFilePath, JSON.stringify(layout, null, 2));
     },
   };
 }

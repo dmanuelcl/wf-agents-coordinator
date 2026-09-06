@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 import { createDefaultProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import type { ProjectRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import { createDefaultAutoPilotConfig } from "../../shared/workflow/auto-pilot-config";
@@ -61,7 +62,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
   async function readAll(): Promise<ProjectRecord[]> {
     try {
       const raw = await readFile(storeFilePath, "utf8");
-      return JSON.parse(raw) as ProjectRecord[];
+      return parseStateFile(raw, storeFilePath) as ProjectRecord[];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -71,8 +72,7 @@ export function createProjectRegistry(params: { storeFilePath: string }): Projec
   }
 
   async function writeAll(records: ProjectRecord[]): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(records, null, 2), "utf8");
+    await writeStateFile(storeFilePath, JSON.stringify(records, null, 2));
   }
 
   return {

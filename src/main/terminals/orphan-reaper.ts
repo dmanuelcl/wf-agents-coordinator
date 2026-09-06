@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { writeStateFileSync } from "../state/state-file";
 
 interface TrackedGroup {
   /** Process-group id of a terminal this app started. */
@@ -64,8 +64,7 @@ export function createOrphanReaper(params: {
   // the moment there is no chance to flush anything later.
   function write(entries: TrackedGroup[]): void {
     try {
-      mkdirSync(dirname(storeFilePath), { recursive: true });
-      writeFileSync(storeFilePath, JSON.stringify({ entries }), "utf8");
+      writeStateFileSync(storeFilePath, JSON.stringify({ entries }));
     } catch {
       // Best effort. A terminal must still open when its bookkeeping cannot.
     }

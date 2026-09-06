@@ -149,6 +149,52 @@ pnpm package          # package for the host OS
 The app icon is `build/icon.png` (macOS-squircle template; `build/icon-source.png`
 is the original square art). electron-builder generates the platform icons from it.
 
+### Rebuild & restart after a code change
+
+Nothing you edit under `src/` is live until `out/` is rebuilt — the desktop app
+and the runner both execute the compiled bundle, never the sources.
+
+**Remote runner** (the systemd/launchd service):
+
+```bash
+cd /path/to/agent-coordinator
+git pull                                   # only if the change came from elsewhere
+pnpm install --ignore-scripts              # only if dependencies changed
+pnpm remote:build                          # native addons for Node + bundle to out/
+
+# Linux (systemd user service)
+systemctl --user restart agent-coordinator-runner
+
+# macOS (launchd)
+launchctl kickstart -k "gui/$(id -u)/com.agent-coordinator.runner"
+```
+
+Confirm it came back before trusting it:
+
+```bash
+systemctl --user status agent-coordinator-runner --no-pager   # Linux
+journalctl --user -u agent-coordinator-runner -n 40 --no-pager
+```
+
+Use **`pnpm remote:build`, never `pnpm build`**, for the runner: `pnpm build`
+compiles the native addons for *Electron*, and the runner is plain Node — it
+will not load them. `pnpm test` and `pnpm install` rebuild them for your
+*default* Node, which is wrong for both; run `pnpm remote:build` again
+afterwards. See [Native-module gotcha](#native-module-gotcha-important).
+
+Restarting the runner kills every PTY. Terminals, agents and Auto Pilot come
+back from persisted intent (`deploy/README.md` → *Actualizaciones*), but
+whatever a command was half-way through does not — so restart when no build,
+migration or agent turn is in flight.
+
+**Local desktop app:**
+
+```bash
+pnpm build            # or pnpm dev for hot reload
+```
+
+Then relaunch the app window; the running one keeps the old bundle.
+
 ### Native-module gotcha (important)
 
 `node-pty` and `better-sqlite3` are compiled against a specific ABI:
@@ -192,6 +238,8 @@ the runner; the build fails loudly if it ever compiles against affected headers.
 | --- | --- |
 | `pnpm dev` | Rebuild native (Electron) + `electron-vite dev` with hot reload |
 | `pnpm build` | Rebuild native (Electron) + production bundle to `out/` |
+| `pnpm remote:build` | Rebuild native (**Node**, pinned by `.nvmrc`) + production bundle to `out/` — use this before restarting the runner |
+| `pnpm remote:runner` | Run the headless runner in the foreground (the service uses `scripts/run-remote-runner.sh`) |
 | `pnpm typecheck` | `tsc --noEmit` (strict) |
 | `pnpm test` | Vitest (rebuilds `better-sqlite3` for Node first) |
 | `pnpm package[:mac\|:win\|:linux]` | Build + electron-builder |

@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 
 const execFileAsync = promisify(execFile);
 import {
@@ -340,7 +341,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
   async function readAll(): Promise<WorkSession[]> {
     try {
       const raw = await readFile(storeFilePath, "utf8");
-      return JSON.parse(raw) as WorkSession[];
+      return parseStateFile(raw, storeFilePath) as WorkSession[];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -350,17 +351,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
   }
 
   async function writeAll(records: WorkSession[]): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    // Rename a complete sibling file into place so a crash cannot leave a
-    // truncated sessions.json that makes every session disappear on restart.
-    const tempFilePath = `${storeFilePath}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(tempFilePath, JSON.stringify(records, null, 2), "utf8");
-      await rename(tempFilePath, storeFilePath);
-    } catch (error) {
-      await rm(tempFilePath, { force: true }).catch(() => {});
-      throw error;
-    }
+    await writeStateFile(storeFilePath, JSON.stringify(records, null, 2));
   }
 
   async function appendRecord(record: WorkSession): Promise<void> {

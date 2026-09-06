@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 
 /**
  * Stores per-project VCS API tokens ENCRYPTED via Electron `safeStorage` (OS
@@ -25,7 +25,7 @@ export function createVcsSecretStore(params: { storeFilePath: string; cipher: Se
 
   async function readAll(): Promise<Record<string, string>> {
     try {
-      return JSON.parse(await readFile(storeFilePath, "utf8")) as Record<string, string>;
+      return parseStateFile(await readFile(storeFilePath, "utf8"), storeFilePath) as Record<string, string>;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
       throw error;
@@ -33,8 +33,7 @@ export function createVcsSecretStore(params: { storeFilePath: string; cipher: Se
   }
 
   async function writeAll(map: Record<string, string>): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(map, null, 2), "utf8");
+    await writeStateFile(storeFilePath, JSON.stringify(map, null, 2));
   }
 
   return {

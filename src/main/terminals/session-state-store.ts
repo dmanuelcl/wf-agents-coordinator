@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 import type { LaunchRole } from "../../shared/workflow/role-launch-plan";
 
 export interface ProjectSessionState {
@@ -19,7 +19,7 @@ export function createSessionStateStore(params: { storeFilePath: string }): Sess
   async function readAll(): Promise<Record<string, ProjectSessionState>> {
     try {
       const raw = await readFile(storeFilePath, "utf8");
-      return JSON.parse(raw) as Record<string, ProjectSessionState>;
+      return parseStateFile(raw, storeFilePath) as Record<string, ProjectSessionState>;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return {};
@@ -29,8 +29,7 @@ export function createSessionStateStore(params: { storeFilePath: string }): Sess
   }
 
   async function writeAll(records: Record<string, ProjectSessionState>): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(records, null, 2), "utf8");
+    await writeStateFile(storeFilePath, JSON.stringify(records, null, 2));
   }
 
   return {

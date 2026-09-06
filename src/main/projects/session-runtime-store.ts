@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { parseStateFile, writeStateFile } from "../state/state-file";
 import type { SessionAgentRole } from "../../shared/workflow/session-role-launch";
 import type { ConductorState } from "../../shared/workflow/conductor";
 import { INITIAL_CONDUCTOR_STATE } from "../../shared/workflow/conductor";
@@ -51,7 +51,7 @@ export function createSessionRuntimeStore(params: { storeFilePath: string }): Se
 
   async function readAll(): Promise<Record<string, RunnerSessionRuntimeRecord>> {
     try {
-      return JSON.parse(await readFile(storeFilePath, "utf8")) as Record<string, RunnerSessionRuntimeRecord>;
+      return parseStateFile(await readFile(storeFilePath, "utf8"), storeFilePath) as Record<string, RunnerSessionRuntimeRecord>;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
       throw error;
@@ -59,8 +59,7 @@ export function createSessionRuntimeStore(params: { storeFilePath: string }): Se
   }
 
   async function writeAll(records: Record<string, RunnerSessionRuntimeRecord>): Promise<void> {
-    await mkdir(dirname(storeFilePath), { recursive: true });
-    await writeFile(storeFilePath, JSON.stringify(records, null, 2), "utf8");
+    await writeStateFile(storeFilePath, JSON.stringify(records, null, 2));
   }
 
   function normalize(record: RunnerSessionRuntimeRecord): RunnerSessionRuntimeRecord {
