@@ -28,6 +28,8 @@ import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
 import { listRefCheckpoints } from "../projects/ref-checkpoints";
+import { listRefPrograms } from "../projects/ref-programs";
+import { withStageDefaults } from "../../shared/workflow/agent-runtime-config";
 import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
 import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
@@ -291,7 +293,7 @@ export function registerIpcHandlers(params: {
     }
 
     if (session.kind !== "review" || role !== "reviewer") {
-      return wfCommandForSessionRole(role, session.checkpointPath);
+      return wfCommandForSessionRole(role, session.checkpointPath, session.initialPrompt ?? null);
     }
     if (!session.pr) {
       return substituteReviewKickoff(project.review.kickoff, { branch: session.branch, base: session.baseBranch ?? "" });
@@ -437,6 +439,7 @@ export function registerIpcHandlers(params: {
       copyEnv: input.copyEnv,
       reuseBuildArtifacts: input.reuseBuildArtifacts,
       startFrom: input.startFrom,
+      initialPrompt: input.initialPrompt,
     });
     // Establish both watchers before the renderer can launch an architect.
     await watchSessionCheckpoint(session);
@@ -469,6 +472,11 @@ export function registerIpcHandlers(params: {
   ipc.handle(IPC_CHANNELS.gitListRefCheckpoints, async (_event, projectId: string, ref: string) => {
     const project = await findProject(projectRegistry, projectId);
     return listRefCheckpoints({ projectRoot: project.rootPath, ref, globs: project.checkpointGlobs });
+  });
+
+  ipc.handle(IPC_CHANNELS.gitListRefPrograms, async (_event, projectId: string, ref: string) => {
+    const project = await findProject(projectRegistry, projectId);
+    return listRefPrograms({ projectRoot: project.rootPath, ref });
   });
 
   ipc.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {
@@ -726,7 +734,7 @@ export function registerIpcHandlers(params: {
         throw new Error(`Session not found: ${sessionId}`);
       }
       const project = await findProject(projectRegistry, session.projectId);
-      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const agentConfig = withStageDefaults(project.runtimeConfig[stageForSessionRole(role)], stageForSessionRole(role));
       if (agentConfig.kind !== "kimi") {
         throw new Error(`Cannot record a Kimi session id for ${agentConfig.kind}`);
       }
@@ -751,7 +759,7 @@ export function registerIpcHandlers(params: {
         throw new Error(`Session not found: ${sessionId}`);
       }
       const project = await findProject(projectRegistry, session.projectId);
-      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const agentConfig = withStageDefaults(project.runtimeConfig[stageForSessionRole(role)], stageForSessionRole(role));
       const sessionLane = role;
 
       // Manual tabs retain their legacy role-sized lane. A fresh open replaces
@@ -817,7 +825,7 @@ export function registerIpcHandlers(params: {
     mode: AgentLaunchMode,
   ): Promise<SessionRoleLaunch> {
     const project = await findProject(projectRegistry, sessionId.slice(REPO_SESSION_PREFIX.length));
-    const agentConfig = project.runtimeConfig.architect;
+    const agentConfig = withStageDefaults(project.runtimeConfig.architect, "architect");
     let sessionDirective = await agentSessionLaneResolver.resolve({
       sessionId,
       sessionLane: lane,
@@ -861,7 +869,7 @@ export function registerIpcHandlers(params: {
         throw new Error(`Session not found: ${sessionId}`);
       }
       const project = await findProject(projectRegistry, session.projectId);
-      const agentConfig = project.runtimeConfig[stageForSessionRole(role)];
+      const agentConfig = withStageDefaults(project.runtimeConfig[stageForSessionRole(role)], stageForSessionRole(role));
       let sessionDirective = await agentSessionLaneResolver.resolve({
         sessionId,
         sessionLane,

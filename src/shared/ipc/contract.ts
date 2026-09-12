@@ -98,9 +98,31 @@ export interface SessionCreateInput {
   // the setup satisfied. Obvious revision mismatches fail instead of being copied.
   reuseBuildArtifacts?: boolean;
   startFrom?: SessionStartFromInput;
+  // Pre-typed into the Architect tab instead of the default (e.g. `wf next <programa>`
+  // when the session opens the next child of a program). Only meaningful without a checkpoint.
+  initialPrompt?: string;
 }
 
 // A checkpoint committed on a ref, read without checking that ref out.
+// A program spec committed on a ref (a `# Hijos` table), with each child's
+// state read from its own checkpoint. `next` is the child `wf next` would open.
+export interface RefProgramChild {
+  index: number;
+  name: string;
+  spec: string | null;
+  checkpoint: string | null;
+  dependsOn: number[];
+  state: "PENDING" | "IN_PROGRESS" | "BLOCKED" | "DONE" | "UNKNOWN";
+}
+
+export interface RefProgramSummary {
+  path: string;
+  title: string;
+  children: RefProgramChild[];
+  next: RefProgramChild | null;
+  complete: boolean;
+}
+
 export interface RefCheckpointSummary {
   path: string;
   feature: string | null;
@@ -154,6 +176,7 @@ export const IPC_CHANNELS = {
   sessionsRemove: "sessions:remove",
   gitListBranches: "git:list-branches",
   gitListRefCheckpoints: "git:list-ref-checkpoints",
+  gitListRefPrograms: "git:list-ref-programs",
   gitResolvePrUrl: "git:resolve-pr-url",
   gitTestVcs: "git:test-vcs",
   projectsSetVcsToken: "projects:set-vcs-token",
@@ -342,6 +365,8 @@ export interface AgentCoordinatorApi {
     // Checkpoints committed on `ref`, read without checking it out. An
     // unresolvable ref yields an empty list rather than an error.
     listRefCheckpoints(projectId: string, ref: string): Promise<RefCheckpointSummary[]>;
+    // Program specs committed on `ref` (a `# Hijos` table), children resolved from their checkpoints.
+    listRefPrograms(projectId: string, ref: string): Promise<RefProgramSummary[]>;
     resolvePrUrl(projectId: string, url: string): Promise<ResolvedPr>;
     // Verify VCS creds/host/repo. token is the just-typed value (or null to use
     // the stored one for projectId). Resolves with the repo's full name, rejects

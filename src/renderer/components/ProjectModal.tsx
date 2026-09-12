@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { resolveStageEffort } from "../../shared/workflow/agent-runtime-config";
 import type { ChangeEvent, FormEvent } from "react";
 import {
   createAgentRuntimeConfig,
@@ -484,7 +485,9 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                             onChange={(event) => updateStage(stage, { effort: event.target.value || null })}
                           >
                             <option value="">
-                              {optionCatalog.effortOptions.length > 0 ? "Provider default" : "Not supported"}
+                              {optionCatalog.effortOptions.length > 0
+                                ? `Role default (${resolveStageEffort({ ...config, effort: null }, stage) ?? "provider"})`
+                                : "Not supported"}
                             </option>
                             {unsupportedCurrentEffort && (
                               <option value={config.effort ?? ""}>{config.effort} (current, unsupported)</option>

@@ -4,6 +4,8 @@ import {
   buildAutopilotLaunchCommand,
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
+  resolveStageEffort,
+  withStageDefaults,
 } from "./agent-runtime-config";
 import type { AgentRuntimeConfig } from "./agent-runtime-config";
 
@@ -296,5 +298,23 @@ describe("buildAutopilotLaunchCommand — interactive, watchable, seeded with th
     expect(buildAutopilotLaunchCommand(makeConfig({ kind: "claude", model: "" }), "wf 'weird' arg").command).toBe(
       "claude 'wf '\\''weird'\\'' arg'",
     );
+  });
+});
+
+describe("stage effort defaults", () => {
+  it("gives the architect the hardest effort the provider accepts, the implementer the lightest, the reviewer the middle", () => {
+    const claude = createAgentRuntimeConfig("claude");
+    expect(resolveStageEffort(claude, "architect")).toBe("max");
+    expect(resolveStageEffort(claude, "implementer")).toBe("low");
+    expect(resolveStageEffort(claude, "reviewer")).toBe("high");
+    const codex = createAgentRuntimeConfig("codex");
+    expect(resolveStageEffort(codex, "architect")).toBe("xhigh"); // codex has no "max"
+    const gemini = createAgentRuntimeConfig("gemini");
+    expect(resolveStageEffort(gemini, "architect")).toBeNull(); // no effort flag at all
+  });
+
+  it("never overrides an effort the project set explicitly, and lands in the launch command", () => {
+    expect(resolveStageEffort({ ...createAgentRuntimeConfig("claude"), effort: "medium" }, "architect")).toBe("medium");
+    expect(buildAgentLaunchCommand(withStageDefaults(createAgentRuntimeConfig("claude"), "architect")).command).toBe("claude --model opus --effort max");
   });
 });

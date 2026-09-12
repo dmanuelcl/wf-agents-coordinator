@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCheckpointMarkdown } from "./checkpoint-parser";
+import { parseCheckpointMarkdown, parseProgramPointer } from "./checkpoint-parser";
 
 const FEATURE_CHECKPOINT = `---
 feature: Frontend rich-text editor
@@ -737,5 +737,14 @@ describe("escaped pipes inside table cells", () => {
     const result = parseCheckpointMarkdown({ checkpointPath: "checkpoint.md", markdown: ESCAPED_PIPE_CHECKPOINT });
 
     expect(result.followUpCounts).toEqual({ total: 3, open: 1, keep: 0, promoted: 1, done: 1, dropped: 0 });
+  });
+});
+
+describe("program pointer", () => {
+  it("reads `- **Programa:** <spec>` from the Architect memory section and stays null otherwise", () => {
+    expect(parseProgramPointer("# Architect memory\n- **Manifest:** docs/workflow/memory/x/manifest.md\n- **Programa:** docs/workflow/specs/x-programa.md\n")).toBe("docs/workflow/specs/x-programa.md");
+    expect(parseProgramPointer("# Architect memory\n- **Manifest:** docs/workflow/memory/x/manifest.md\n")).toBeNull();
+    const parsed = parseCheckpointMarkdown({ checkpointPath: "x-checkpoint.md", markdown: "---\nstatus: IN_PROGRESS\n---\n# ▶ NEXT\n- x\n\n# Architect memory\n- **Programa:** docs/workflow/specs/x-programa.md\n\n# Plans ledger\n\n# Log\n" });
+    expect(parsed.program).toBe("docs/workflow/specs/x-programa.md");
   });
 });

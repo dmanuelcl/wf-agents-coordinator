@@ -50,6 +50,7 @@ export interface SessionRegistry {
      * at creation. Absent means today's behavior.
      */
     startFrom?: SessionStartFrom;
+    initialPrompt?: string;
   }): Promise<WorkSession>;
   createReviewSession(params: {
     projectId: string;
@@ -396,7 +397,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       return records.find((record) => record.id === sessionId) ?? null;
     },
 
-    createSession({ projectId, projectRoot, name, kind, copyEnv, reuseBuildArtifacts, startFrom }) {
+    createSession({ projectId, projectRoot, name, kind, copyEnv, reuseBuildArtifacts, startFrom, initialPrompt }) {
       return runExclusive(async () => {
         const { sessionName, baseSlug } = sessionIdentity(name);
 
@@ -477,6 +478,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
             // watcher (which ignores files inherited from the checkout) is
             // never consulted for this session.
             checkpointPath: startFrom?.checkpointPath ?? null,
+            ...(initialPrompt ? { initialPrompt } : {}),
             setupDone: false,
             // Git has finished checking out inherited files before this value is
             // captured. The checkpoint watcher uses the boundary to ignore them.

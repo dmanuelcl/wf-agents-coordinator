@@ -90,3 +90,15 @@ describe("wfCommandForSessionRole", () => {
     expect(wfCommandForSessionRole("architect", null)).toBeNull();
   });
 });
+
+describe("wfCommandForSessionRole with an initial prompt", () => {
+  it("pre-types the initial prompt for an architect without a checkpoint (a program's `wf next`), and nothing for other roles", () => {
+    expect(wfCommandForSessionRole("architect", null, "wf next docs/workflow/specs/x-programa.md")).toBe("wf next docs/workflow/specs/x-programa.md");
+    expect(wfCommandForSessionRole("implementer", null, "wf next docs/workflow/specs/x-programa.md")).toBeNull();
+    expect(wfCommandForSessionRole("architect", null)).toBeNull();
+  });
+
+  it("keeps the checkpoint verb once a checkpoint exists, ignoring the initial prompt", () => {
+    expect(wfCommandForSessionRole("architect", "docs/workflow/checkpoints/x-checkpoint.md", "wf next …")).toBe("wf verify docs/workflow/checkpoints/x-checkpoint.md");
+  });
+});

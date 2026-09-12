@@ -71,6 +71,8 @@ export interface ParsedCheckpoint {
   kind: WorkflowKind;
   branch: string | null;
   worktree: string | null;
+  // `- **Programa:** <spec>` in `# Architect memory`: this checkpoint is a child of that program.
+  program: string | null;
   status: WorkflowStatus;
   activeRole: WorkflowRole | "none" | "unknown";
   next: WorkflowNext | null;

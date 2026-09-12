@@ -30,7 +30,7 @@ describe("createSqliteProjectRegistry autoPilot", () => {
   it("defaults autoPilot on add and round-trips an updated value across instances", async () => {
     const registry = createSqliteProjectRegistry({ sqliteFilePath });
     const created = await registry.addProject({ rootPath: "/repo/auto-pilot" });
-    expect(created.autoPilot).toEqual({ reloopLimit: 3, settleDelayMs: 4000 });
+    expect(created.autoPilot).toEqual({ reloopLimit: 10, settleDelayMs: 4000 });
 
     const updated = await registry.updateProject(created.id, {
       autoPilot: { reloopLimit: 5, settleDelayMs: 6000 },

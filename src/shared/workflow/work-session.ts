@@ -53,6 +53,8 @@ export interface WorkSession {
   prFixDiagnoseFirst?: boolean;
   worktreePath: string;
   checkpointPath: string | null;
+  // Pre-typed into the Architect tab while there is no checkpoint (a program's `wf next …`).
+  initialPrompt?: string;
   // Whether the project's setup command has already run, or its build artifacts
   // were explicitly reused, so setup does not run again before every tab.
   setupDone: boolean;

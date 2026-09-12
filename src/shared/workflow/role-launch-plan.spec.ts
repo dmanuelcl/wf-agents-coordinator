@@ -28,6 +28,7 @@ function makeCheckpoint(
     kind: "feature",
     branch: "feature/example",
     worktree: ".worktrees/example",
+    program: null,
     status: "IN_PROGRESS",
     activeRole: "none",
     next: makeNext(),

@@ -470,6 +470,11 @@ function parseFindings(sectionText: string): { findings: WorkflowFinding[]; coun
   return { findings, counts: { open, closed, total: findings.length } };
 }
 
+/** The program a child checkpoint belongs to, from the `# Architect memory` bullet; outside the machine contract, so a plain regex. */
+export function parseProgramPointer(body: string): string | null {
+  return body.match(/^[ \t]*[-*][ \t]*\*\*Programa:\*\*[ \t]*(\S+)/m)?.[1] ?? null;
+}
+
 export function parseCheckpointMarkdown(params: { checkpointPath: string; markdown: string }): ParsedCheckpoint {
   const { checkpointPath, markdown } = params;
   const warnings: string[] = [];
@@ -542,6 +547,7 @@ export function parseCheckpointMarkdown(params: { checkpointPath: string; markdo
     kind,
     branch: frontmatter["branch"] ?? null,
     worktree: frontmatter["worktree"] ?? null,
+    program: parseProgramPointer(body),
     status,
     activeRole,
     next,

@@ -65,6 +65,7 @@ export function createAgentCoordinatorApi(
     git: {
       listBranches: (projectId) => invoke(IPC_CHANNELS.gitListBranches, projectId) as ReturnType<AgentCoordinatorApi["git"]["listBranches"]>,
       listRefCheckpoints: (projectId, ref) => invoke(IPC_CHANNELS.gitListRefCheckpoints, projectId, ref) as ReturnType<AgentCoordinatorApi["git"]["listRefCheckpoints"]>,
+      listRefPrograms: (projectId, ref) => invoke(IPC_CHANNELS.gitListRefPrograms, projectId, ref) as ReturnType<AgentCoordinatorApi["git"]["listRefPrograms"]>,
       resolvePrUrl: (projectId, url) => invoke(IPC_CHANNELS.gitResolvePrUrl, projectId, url) as ReturnType<AgentCoordinatorApi["git"]["resolvePrUrl"]>,
       testVcs: (input) => invoke(IPC_CHANNELS.gitTestVcs, input) as ReturnType<AgentCoordinatorApi["git"]["testVcs"]>,
     },

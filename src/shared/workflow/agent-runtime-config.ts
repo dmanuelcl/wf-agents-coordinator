@@ -1,3 +1,5 @@
+import { AGENT_RUNTIME_OPTION_CATALOG } from "./agent-runtime-options";
+
 export type AgentKind = "claude" | "codex" | "kimi" | "opencode" | "copilot" | "gemini" | "antigravity";
 
 export interface AgentRuntimeConfig {
@@ -36,6 +38,32 @@ export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
     implementer: createAgentRuntimeConfig(),
     reviewer: createAgentRuntimeConfig(),
   };
+}
+
+/**
+ * Effort a stage runs at when the project leaves it on "provider default": the
+ * architect is the role that has to reason the hardest (it guarantees the spec
+ * and the plans a weaker implementer executes), the implementer executes a
+ * plan that already decided everything, the reviewer judges. Per stage, an
+ * ordered preference; the first value the provider's CLI accepts wins, and a
+ * provider with no effort flag keeps null. A value set in the project modal
+ * always overrides this.
+ */
+export const DEFAULT_STAGE_EFFORT: Readonly<Record<WorkflowStage, readonly string[]>> = {
+  architect: ["max", "xhigh", "high"],
+  implementer: ["low", "medium"],
+  reviewer: ["high", "medium"],
+};
+
+export function resolveStageEffort(config: AgentRuntimeConfig, stage: WorkflowStage): string | null {
+  if (config.effort) return config.effort;
+  const supported = AGENT_RUNTIME_OPTION_CATALOG[config.kind].effortOptions;
+  return DEFAULT_STAGE_EFFORT[stage].find((effort) => supported.includes(effort)) ?? null;
+}
+
+/** The stage's config with the role default applied where the project left effort empty. */
+export function withStageDefaults(config: AgentRuntimeConfig, stage: WorkflowStage): AgentRuntimeConfig {
+  return { ...config, effort: resolveStageEffort(config, stage) };
 }
 
 /** Which agent CLIs accept a per-launch "skip all permission prompts" flag. */

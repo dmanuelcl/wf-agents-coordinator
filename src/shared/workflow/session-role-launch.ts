@@ -77,7 +77,13 @@ const WF_VERB: Record<SessionAgentRole, string> = {
  * in that state (implementer/reviewer tabs are gated off until a checkpoint
  * exists), and a brainstorming architect has nothing to point `wf` at.
  */
-export function wfCommandForSessionRole(role: SessionAgentRole, checkpointPath: string | null): string | null {
-  if (!checkpointPath) return null;
+export function wfCommandForSessionRole(
+  role: SessionAgentRole,
+  checkpointPath: string | null,
+  initialPrompt: string | null = null,
+): string | null {
+  // A session opened to start the next child of a program has no checkpoint yet
+  // but does know its first message (`wf next <programa>`): pre-type that.
+  if (!checkpointPath) return role === "architect" && initialPrompt ? initialPrompt : null;
   return `${WF_VERB[role]} ${checkpointPath}`;
 }

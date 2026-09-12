@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { SESSION_NAME_MAX_LENGTH, truncateSessionName } from "../../shared/workflow/work-session";
+import { programChildFeatureName, wfNextCommand } from "../../shared/workflow/program-spec";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { BranchList, RefCheckpointSummary, ResolvedPr } from "../../shared/ipc/contract";
+import type { BranchList, RefCheckpointSummary, RefProgramSummary, ResolvedPr } from "../../shared/ipc/contract";
 import { BranchCombobox } from "./BranchCombobox";
 import { CheckpointCombobox } from "./CheckpointCombobox";
 import {
@@ -52,6 +53,9 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [startRef, setStartRef] = useState("");
   const [startCheckpoint, setStartCheckpoint] = useState("");
   const [refCheckpoints, setRefCheckpoints] = useState<RefCheckpointSummary[] | null>(null);
+  const [refPrograms, setRefPrograms] = useState<RefProgramSummary[] | null>(null);
+  // Set by "Start child N": the first message the Architect tab pre-types (`wf next <programa>`).
+  const [initialPrompt, setInitialPrompt] = useState("");
   const [loadingCheckpoints, setLoadingCheckpoints] = useState(false);
   const [prUrl, setPrUrl] = useState("");
   const [prFixDiagnoseFirst, setPrFixDiagnoseFirst] = useState(false);
@@ -88,7 +92,18 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   useEffect(() => {
     if (startFrom === "new" || !startRef) {
       setRefCheckpoints(null);
+      setRefPrograms(null);
+      setInitialPrompt("");
       return;
+    }
+    // Programs on the ref: offered only when continuing (a program lives on its branch).
+    if (startFrom === "continue" && kind === "feature") {
+      window.agentCoordinator.git
+        .listRefPrograms(projectId, startRef)
+        .then((found) => setRefPrograms(found))
+        .catch(() => setRefPrograms([]));
+    } else {
+      setRefPrograms(null);
     }
     let cancelled = false;
     setLoadingCheckpoints(true);
@@ -107,7 +122,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [projectId, startFrom, startRef]);
+  }, [projectId, startFrom, startRef, kind]);
 
   function chooseBranch(branch: string): void {
     setReviewBranch(branch);
@@ -117,6 +132,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   function chooseStartRef(branch: string): void {
     setStartRef(branch);
     setStartCheckpoint("");
+    setInitialPrompt("");
     if (!nameTouched) setName(suggestSessionName(startFrom, branch));
   }
 
@@ -178,6 +194,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
           copyEnv,
           reuseBuildArtifacts,
           startFrom: buildStartFromInput({ mode: startFrom, ref: startRef, checkpointPath: startCheckpoint }),
+          initialPrompt: initialPrompt || undefined,
         });
       }
       onCreated(session);
@@ -403,6 +420,50 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                         })}
                       </p>
                     </div>
+
+                    {refPrograms && refPrograms.length > 0 && (
+                      <div className="new-session-field">
+                        <span className="field-label">Programa</span>
+                        {refPrograms.map((program) => (
+                          <div key={program.path} className="new-session-program">
+                            <p className="field-preview">
+                              <strong>{program.title}</strong> · {program.children.filter((child) => child.state === "DONE").length}/
+                              {program.children.length} hijos DONE
+                            </p>
+                            <ul className="new-session-program-children">
+                              {program.children.map((child) => (
+                                <li key={child.index}>
+                                  {child.index}. {child.name} · <code>{child.state}</code>
+                                  {child.dependsOn.length > 0 && <> · depende de {child.dependsOn.join(", ")}</>}
+                                </li>
+                              ))}
+                            </ul>
+                            {program.next ? (
+                              <button
+                                type="button"
+                                className={initialPrompt === wfNextCommand(program.path) ? "selected" : undefined}
+                                onClick={() => {
+                                  const next = program.next;
+                                  if (!next) return;
+                                  setStartCheckpoint("");
+                                  setInitialPrompt(wfNextCommand(program.path));
+                                  if (!nameTouched) setName(truncateSessionName(programChildFeatureName(program, next)));
+                                }}
+                              >
+                                Iniciar hijo {program.next.index}: {program.next.name}
+                              </button>
+                            ) : (
+                              <p className="field-hint">{program.complete ? "Programa completo." : "Ningún hijo listo: sus dependencias no están DONE."}</p>
+                            )}
+                            {initialPrompt === wfNextCommand(program.path) && (
+                              <p className="field-hint">
+                                Sin checkpoint: el Architect abre con <code>{initialPrompt}</code> pre-escrito y crea el checkpoint del hijo.
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
 

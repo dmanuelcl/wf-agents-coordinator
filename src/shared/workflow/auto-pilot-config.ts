@@ -1,15 +1,15 @@
 /** Per-project auto-pilot conductor settings. */
 export interface AutoPilotConfig {
-  /** Max reviewer→implementer fix-loops auto-run per task before pausing. 1..10. */
+  /** Max reviewer→implementer fix-loops auto-run per task before pausing. 1..50 — the workflow rules put no cap on review rounds (a round only closes clean), so this is a safety valve, not a policy. */
   reloopLimit: number;
   /** Quiescence-debounce window (ms) before acting on a checkpoint change. */
   settleDelayMs: number;
 }
 
-const DEFAULT_RELOOP_LIMIT = 3;
+const DEFAULT_RELOOP_LIMIT = 10;
 const DEFAULT_SETTLE_DELAY_MS = 4000;
 const MIN_RELOOP_LIMIT = 1;
-const MAX_RELOOP_LIMIT = 10;
+const MAX_RELOOP_LIMIT = 50;
 const MIN_SETTLE_DELAY_MS = 500;
 
 export function createDefaultAutoPilotConfig(): AutoPilotConfig {

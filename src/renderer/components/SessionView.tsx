@@ -231,8 +231,8 @@ function findingCountLabel(count: number, singular: string, plural: string): str
 // closed findings, and the feature/tier/branch context — all already parsed but
 // previously not surfaced in the Log tab.
 function CheckpointStatusHeader(props: { checkpoint: ParsedCheckpoint }): JSX.Element {
-  const { status, activeRole, findingCounts, followUpCounts, feature, slug, kind, branch, next } = props.checkpoint;
-  const context = [feature ?? slug, kind !== "unknown" ? kind : null, next?.tier ? `tier ${next.tier}` : null, branch]
+  const { status, activeRole, findingCounts, followUpCounts, feature, slug, kind, branch, next, program } = props.checkpoint;
+  const context = [feature ?? slug, kind !== "unknown" ? kind : null, next?.tier ? `tier ${next.tier}` : null, branch, program ? `programa ${program.split("/").pop()}` : null]
     .filter((part): part is string => Boolean(part))
     .join(" · ");
   return (

@@ -34,6 +34,7 @@ function checkpoint(params: {
     frontmatter: {},
     feature: null,
     slug: "x",
+    program: null,
     kind: "feature",
     branch: null,
     worktree: null,
