@@ -564,7 +564,7 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
       });
     },
 
-    createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, diagnoseFirst = false, expectedHeadSha }) {
+    createFixSession({ projectId, projectRoot, name, branch, baseBranch, pr, diagnoseFirst = true, expectedHeadSha }) {
       return runExclusive(async () => {
         const { sessionName, baseSlug } = sessionIdentity(name);
 

@@ -51,7 +51,7 @@ export function createDefaultProjectRuntimeConfig(): ProjectRuntimeConfig {
  */
 export const DEFAULT_STAGE_EFFORT: Readonly<Record<WorkflowStage, readonly string[]>> = {
   architect: ["max", "xhigh", "high"],
-  implementer: ["low", "medium"],
+  implementer: ["high", "medium"],
   reviewer: ["high", "medium"],
 };
 

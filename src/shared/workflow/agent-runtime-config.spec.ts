@@ -302,10 +302,10 @@ describe("buildAutopilotLaunchCommand — interactive, watchable, seeded with th
 });
 
 describe("stage effort defaults", () => {
-  it("gives the architect the hardest effort the provider accepts, the implementer the lightest, the reviewer the middle", () => {
+  it("gives the architect the hardest effort the provider accepts, the implementer a high tier (it is the architect of its plan; subagents inherit it), the reviewer the middle", () => {
     const claude = createAgentRuntimeConfig("claude");
     expect(resolveStageEffort(claude, "architect")).toBe("max");
-    expect(resolveStageEffort(claude, "implementer")).toBe("low");
+    expect(resolveStageEffort(claude, "implementer")).toBe("high");
     expect(resolveStageEffort(claude, "reviewer")).toBe("high");
     const codex = createAgentRuntimeConfig("codex");
     expect(resolveStageEffort(codex, "architect")).toBe("xhigh"); // codex has no "max"

@@ -478,7 +478,9 @@ export function createSessionOrchestrator(params: {
       // one. Nothing is committed to conductor state here: this step has not
       // been acted on yet.
       const gate = decideHandoffGate({
-        handoffModeActive: handoffSessions.has(sessionId),
+        // Armada siempre: un turno que nunca publica su hand-off (`wf done`) no avanza por temporizador — medido: un
+        // implementer que no corrió `wf:done` habría pasado al reviewer con un checkpoint que su propia herramienta rechazaba.
+        handoffModeActive: true,
         pending: pendingHandoff.get(sessionId) ?? null,
         step: { role: action.role, lane: action.lane },
         settleDelayMs: config.settleDelayMs,

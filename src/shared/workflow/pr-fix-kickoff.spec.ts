@@ -143,8 +143,8 @@ describe("buildPrFixRoleCommand", () => {
     const implementer = buildPrFixRoleCommand({ ...params, role: "implementer", checkpointPath: null, diagnoseFirst: true });
 
     expect(architect).toBe(buildPrFixArchitectKickoff(params));
-    expect(architect).toContain("No implementes cambios");
-    expect(architect).toContain("desbloquea al Implementer");
+    expect(architect).toContain("No implementes, no commitees código");
+    expect(architect).toContain("no arranca al implementer");
     expect(implementer).toBeNull();
   });
 

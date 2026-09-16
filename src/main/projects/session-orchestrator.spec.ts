@@ -757,7 +757,7 @@ describe("createSessionOrchestrator", () => {
 
   // A workflow that does not emit hand-offs keeps the behavior it had before the
   // gate existed, and says so, rather than never advancing again.
-  it("advances a session that has never produced a hand-off, naming the weaker signal", async () => {
+  it("waits for a hand-off even on a session that never produced one", async () => {
     const checkpointPath = "docs/workflow/checkpoints/auth-checkpoint.md";
     const checkpoint = parseCheckpointMarkdown({
       checkpointPath,
@@ -804,9 +804,12 @@ describe("createSessionOrchestrator", () => {
       await orchestrator.ensure(current.id);
       await orchestrator.setAutopilot(current.id, true);
 
-      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-      expect((await orchestrator.runtime(current.id))?.autoPilot.message)
-        .toBe(`→ wf implement ${checkpointPath} · no hand-off signal`);
+      // The hand-off gate is armed from the start: a session that never published
+      // `wf done` waits, it does not advance on a timer.
+      await vi.waitFor(async () => {
+        expect((await orchestrator.runtime(current.id))?.autoPilot.message).toBe("waiting · the current agent has not handed off yet");
+      }, { timeout: 5_000 });
+      expect(replace).not.toHaveBeenCalled();
     } finally {
       await orchestrator.remove(current.id);
     }

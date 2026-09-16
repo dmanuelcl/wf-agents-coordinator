@@ -58,7 +58,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [initialPrompt, setInitialPrompt] = useState("");
   const [loadingCheckpoints, setLoadingCheckpoints] = useState(false);
   const [prUrl, setPrUrl] = useState("");
-  const [prFixDiagnoseFirst, setPrFixDiagnoseFirst] = useState(false);
+  const [prFixDiagnoseFirst, setPrFixDiagnoseFirst] = useState(true);
   const [preview, setPreview] = useState<ResolvedPr | null>(null);
   const [resolving, setResolving] = useState(false);
   const [hasVcsCreds, setHasVcsCreds] = useState(false);

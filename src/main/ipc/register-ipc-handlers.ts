@@ -568,7 +568,7 @@ export function registerIpcHandlers(params: {
         lastReviewedSha: null,
         fixBaseSha: resolved.headSha,
       },
-      diagnoseFirst: input.diagnoseFirst === true,
+      diagnoseFirst: input.diagnoseFirst !== false,
       expectedHeadSha: resolved.headSha,
     });
     // The reviewer remains gated until the implementer writes this session's

@@ -91,7 +91,7 @@ function roleHint(role: SessionAgentRole, kind: WorkSessionKind, hasCheckpoint: 
   }
   if (kind === "pr-fix") {
     if (role === "architect") {
-      return "Architect reads the PR discussion and writes the correction-plan checkpoint. It does not edit, commit, or push; that checkpoint unlocks Implementer.";
+      return "Architect runs the workflow INIT over the PR review report: ≤ 3 plans with inventories, PLAN_REVIEW, then `wf done`. It does not edit, commit, or push; its hand-off starts the Implementer.";
     }
     if (role === "implementer") {
       if (hasCheckpoint) {

@@ -136,27 +136,26 @@ El Architect leyó \`${params.contextFile}\`, inspeccionó el código y convirti
 }
 
 /**
- * The Architect has the PR discussion but must not edit the branch. Its only
- * output is the durable plan/checkpoint that makes the Implementer available.
+ * The Architect runs the canonical workflow INIT over the PR review report: it
+ * must not edit the branch; its output is the checkpoint (published with
+ * `wf done`) that makes the Implementer available.
  */
 export function buildPrFixArchitectKickoff(p: PrFixKickoffParams): string {
-  const header = `Vas a diagnosticar los comentarios del PR «${p.title}» (${p.source} → ${p.target}) antes de implementar.`;
+  const header =
+    `Sos el ARCHITECT del workflow para el PR «${p.title}» (${p.source} → ${p.target}). ` +
+    "Corré la entrada **PR fix** de tu manual (skill `*-workflow` → `architect.md`): es una sesión de feature normal que arranca con el reporte del PR review ya hecho.";
   const context =
-    `Lee COMPLETO \`${p.contextFile}\` en la raíz del worktree; contiene la conversación completa del PR, incluidos comentarios inline. ` +
-    "Si se trunca, léelo por partes hasta llegar al final. Después inspecciona el código y el diff necesario para entender cada comentario.";
+    `Lee COMPLETO \`${p.contextFile}\` en la raíz del worktree: la conversación del PR con el reporte del PR review y su Plan de corrección. ` +
+    "Si se trunca, seguí por partes hasta el final. Ese reporte es tu diagnóstico: no lo re-derives; verificá contra el código lo que cites.";
   const scope =
-    "No implementes cambios, no hagas commit y no hagas push. Convierte los comentarios aplicables en un plan concreto y ordenado, " +
-    "con archivos, cambios, pruebas y criterios de aceptación. Marca explícitamente los comentarios ya resueltos u obsoletos con evidencia.";
-  const checkpoint = buildPrFixDiagnosisCheckpoint({
-    ...p,
-    branch: p.source,
-  });
+    "No implementes, no commitees código, no pushees. Convertí el Plan de corrección en planes al contrato (≤ 3 por checkpoint, explorador por tarea con `Inventario:`, " +
+    `writer limpio por plan, \`pnpm wf:check-plan --init\`, PLAN_REVIEW) y escribí el checkpoint en \`${p.completionCheckpoint}\` con este frontmatter exacto (el coordinador lo parsea):\n\n` +
+    `\`\`\`yaml\nfeature: PR fix\nslug: ${p.slug}\nkind: fix\nbranch: ${p.source}\nworktree: ${p.worktreePath}\nstatus: IN_PROGRESS\nactive: none\n\`\`\`\n\n` +
+    "Ledger con una fila por plan (la ruta real del fichero), INIT con `Plan sufficiency: PASS` y `Planes: <n>`, " +
+    `\`▶ NEXT\` → implementer con \`Session lane: \\\`fix/implementer\\\`\` y \`Corre: \\\`wf implement ${p.completionCheckpoint}\\\`\`.`;
   const handoff =
-    `Como último paso escribe el checkpoint \`${p.completionCheckpoint}\` usando esta plantilla. Reemplaza todo \`<...>\` con información observada ` +
-    "y conserva los encabezados, el ledger y el bloque ▶ NEXT exactamente: su creación desbloquea al Implementer. " +
-    "El archivo es gitignored; no lo añadas al commit.\n\n" +
-    `\`\`\`markdown\n${checkpoint}\n\`\`\``;
-
+    `Último paso, siempre: \`pnpm wf:done --role implementer --lane fix/implementer --checkpoint ${p.completionCheckpoint}\` — sin ese hand-off el coordinador no arranca al implementer. ` +
+    `Baseline del PR: ${p.fixBaseSha ?? "<SHA de HEAD del PR>"}.`;
   return [header, context, scope, handoff].join("\n\n");
 }
 
