@@ -148,8 +148,8 @@ export function buildPrFixArchitectKickoff(p: PrFixKickoffParams): string {
     `Lee COMPLETO \`${p.contextFile}\` en la raíz del worktree: la conversación del PR con el reporte del PR review y su Plan de corrección. ` +
     "Si se trunca, seguí por partes hasta el final. Ese reporte es tu diagnóstico: no lo re-derives; verificá contra el código lo que cites.";
   const scope =
-    "No implementes, no commitees código, no pushees. Convertí el Plan de corrección en planes al contrato (≤ 3 por checkpoint, explorador por tarea con `Inventario:`, " +
-    `writer limpio por plan, \`pnpm wf:check-plan --init\`, PLAN_REVIEW) y escribí el checkpoint en \`${p.completionCheckpoint}\` con este frontmatter exacto (el coordinador lo parsea):\n\n` +
+    "No implementes, no commitees código, no pushees. Convertí el Plan de corrección en planes al contrato (≤ 3 por checkpoint, writer limpio por plan con `Inventario:`, " +
+    `\`pnpm wf:check-plan --init\`; PLAN_REVIEW sólo si el reporte no trae su recibo de auditoría) y escribí el checkpoint en \`${p.completionCheckpoint}\` con este frontmatter exacto (el coordinador lo parsea):\n\n` +
     `\`\`\`yaml\nfeature: PR fix\nslug: ${p.slug}\nkind: fix\nbranch: ${p.source}\nworktree: ${p.worktreePath}\nstatus: IN_PROGRESS\nactive: none\n\`\`\`\n\n` +
     "Ledger con una fila por plan (la ruta real del fichero), INIT con `Plan sufficiency: PASS` y `Planes: <n>`, " +
     `\`▶ NEXT\` → implementer con \`Session lane: \\\`fix/implementer\\\`\` y \`Corre: \\\`wf implement ${p.completionCheckpoint}\\\`\`.`;
