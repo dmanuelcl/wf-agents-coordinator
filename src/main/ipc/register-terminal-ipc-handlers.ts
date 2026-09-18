@@ -9,7 +9,20 @@ import type { TerminalScreenStore } from "../terminals/terminal-screen-store";
 import type { IpcTransport } from "./ipc-transport";
 
 const INITIAL_INPUT_SETTLE_MS = 1_200;
-const INITIAL_INPUT_MAX_WAIT_MS = 10_000;
+// La entrega se decide por la CAJA DE ENTRADA del agente en pantalla, no por el reloj: un CLI que carga MCPs
+// escribe su banner, se calla varios segundos y recién después acepta texto. Con una vista oculta no hay
+// redibujados que retrasen el «settle», así que antes se entregaba en ese silencio: texto en una entrada que
+// aún no procesa Enter, o perdido. El tope de espera es sólo el último recurso.
+const INITIAL_INPUT_MAX_WAIT_MS = 60_000;
+// Tras enviar: si la caja sigue mostrando el texto y la pantalla no cambia, el Enter se perdió — se reenvía.
+const INITIAL_INPUT_ECHO_MS = 1_500;
+const INITIAL_INPUT_VERIFY_MS = 3_500;
+const INITIAL_INPUT_MAX_RESUBMITS = 2;
+
+/** La caja de entrada del agente ya está en pantalla: una de las últimas filas arranca con su marcador (`>`, `❯`, `›`), con o sin borde. */
+export function hasInputPrompt(lines: string[]): boolean {
+  return lines.slice(-12).some((line) => /^[\s│┃|]*(?:>|❯|›)(?:\s|$)/.test(line));
+}
 const MIN_TERMINAL_COLS = 80;
 const MAX_TERMINAL_COLS = 400;
 const MIN_TERMINAL_ROWS = 24;
@@ -22,6 +35,9 @@ interface InitialInputDelivery {
   deadlineTimer: ReturnType<typeof setTimeout> | null;
   generation: number;
   delivered: boolean;
+  verifyTimer: ReturnType<typeof setTimeout> | null;
+  resubmits: number;
+  echoScreen: string | null;
 }
 
 export interface RunnerTerminalCreateInput {
@@ -83,8 +99,10 @@ export function registerTerminalIpcHandlers(params: {
   function clearInitialInputTimers(delivery: InitialInputDelivery): void {
     if (delivery.settledTimer) clearTimeout(delivery.settledTimer);
     if (delivery.deadlineTimer) clearTimeout(delivery.deadlineTimer);
+    if (delivery.verifyTimer) clearTimeout(delivery.verifyTimer);
     delivery.settledTimer = null;
     delivery.deadlineTimer = null;
+    delivery.verifyTimer = null;
   }
 
   function discardInitialInput(sessionId: string): void {
@@ -106,19 +124,61 @@ export function registerTerminalIpcHandlers(params: {
     // New data arrived while the snapshot was being rendered. Wait for that
     // output to settle instead of submitting into a changing startup screen.
     if (expectedGeneration !== undefined && delivery.generation !== expectedGeneration) return;
-    if (hasBlockingStartupConfirmation(snapshot?.lines.join("\n") ?? "")) return;
+    const lines = snapshot?.lines ?? [];
+    if (hasBlockingStartupConfirmation(lines.join("\n"))) return;
+    // Sin caja de entrada visible no se entrega (salvo el tope de espera, `expectedGeneration === undefined`).
+    if (expectedGeneration !== undefined && !hasInputPrompt(lines)) return;
 
     delivery.delivered = true;
     clearInitialInputTimers(delivery);
-    initialInputByTerminal.delete(sessionId);
     const paste = `\x1b[200~${delivery.text}\x1b[201~`;
     ptySessionManager.write(sessionId, delivery.submit ? `${paste}\r` : paste);
+    if (delivery.submit) scheduleSubmitVerification(sessionId);
+    else initialInputByTerminal.delete(sessionId);
     onInitialInputDelivered?.({
       terminalId: sessionId,
       persistKey: terminalPersistKeyById.get(sessionId) ?? null,
       submit: delivery.submit,
     });
     broadcast(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId });
+  }
+
+  /**
+   * Un Enter que llega mientras el TUI todavía se monta se pierde y el texto queda en la caja. Se toma la pantalla
+   * cuando el eco ya está pintado y, si pasados unos segundos no cambió nada y el texto sigue a la vista, se reenvía
+   * `\r` (dos veces como máximo). Un Enter sobre una caja vacía es inocuo; sobre una pantalla que cambió, no se manda.
+   */
+  function scheduleSubmitVerification(sessionId: string): void {
+    const delivery = initialInputByTerminal.get(sessionId);
+    if (!delivery) return;
+    if (delivery.verifyTimer) clearTimeout(delivery.verifyTimer);
+    delivery.verifyTimer = setTimeout(() => {
+      delivery.verifyTimer = null;
+      void (async () => {
+        if (!ptySessionManager.has(sessionId)) {
+          discardInitialInput(sessionId);
+          return;
+        }
+        const screen = (await screenStore.snapshot(sessionId))?.lines.join("\n") ?? "";
+        if (delivery.echoScreen === null) {
+          delivery.echoScreen = screen;
+          scheduleSubmitVerification(sessionId);
+          return;
+        }
+        const stuck = screen === delivery.echoScreen && screen.includes(delivery.text.slice(0, 24));
+        if (stuck && delivery.resubmits < INITIAL_INPUT_MAX_RESUBMITS) {
+          // Se conserva la pantalla atascada como referencia: si tras el reenvío cambia, el agente respondió.
+          delivery.resubmits += 1;
+          ptySessionManager.write(sessionId, "\r");
+          scheduleSubmitVerification(sessionId);
+          return;
+        }
+        clearInitialInputTimers(delivery);
+        initialInputByTerminal.delete(sessionId);
+      })().catch((error: unknown) => {
+        console.error(`Could not verify initial terminal input for ${sessionId}:`, error);
+      });
+    }, delivery.echoScreen === null ? INITIAL_INPUT_ECHO_MS : INITIAL_INPUT_VERIFY_MS);
   }
 
   function scheduleInitialInputAfterSettle(sessionId: string): void {
@@ -142,8 +202,11 @@ export function registerTerminalIpcHandlers(params: {
       submit: input.submit,
       settledTimer: null,
       deadlineTimer: null,
+      verifyTimer: null,
       generation: 0,
       delivered: false,
+      resubmits: 0,
+      echoScreen: null,
     };
     initialInputByTerminal.set(sessionId, delivery);
     delivery.deadlineTimer = setTimeout(() => {

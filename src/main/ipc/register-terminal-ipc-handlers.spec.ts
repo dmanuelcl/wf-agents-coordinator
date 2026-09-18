@@ -225,9 +225,75 @@ describe("registerTerminalIpcHandlers", () => {
       initialInput: { text: "review this PR", submit: true },
     }]);
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(write).toHaveBeenCalledWith("\x1b[200~review this PR\x1b[201~\r");
     expect(broadcast).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId: "1" });
+  });
+
+  /** Pantalla controlada: la lógica de entrega se prueba sin depender de los temporizadores internos de xterm. */
+  function harness(): { write: ReturnType<typeof vi.fn>; broadcast: ReturnType<typeof vi.fn>; transport: ReturnType<typeof createIpcHandlerRegistry>; emit: (data: string) => void; screen: { lines: string[] } } {
+    const write = vi.fn();
+    let listener: ((data: string) => void) | null = null;
+    const fakePty: PtySpawn = {
+      pid: 4243, killGroup: () => {}, onData: (cb) => { listener = cb; }, onExit: () => {}, write, resize: vi.fn(), kill: vi.fn(),
+    };
+    const screen = { lines: [] as string[] };
+    const broadcast = vi.fn();
+    const transport = createIpcHandlerRegistry();
+    registerTerminalIpcHandlers({
+      transport,
+      ptySessionManager: createPtySessionManager({ spawnPty: () => fakePty }),
+      sessionStateStore: { get: async () => null, set: async () => {} },
+      broadcast,
+      screenStore: {
+        create: () => {}, write: () => {}, resize: () => {}, remove: () => {},
+        snapshot: async () => ({ cols: 80, rows: 24, alternateScreen: false, lines: screen.lines, cursorX: 0, cursorY: 0 }),
+      },
+      scrollbackStore: {
+        record: () => {}, read: async () => "", isInAlternateScreen: () => false, resetAlternateScreen: () => {}, clear: async () => {}, flush: async () => {},
+      },
+    });
+    return { write, broadcast, transport, emit: (data) => listener?.(data), screen };
+  }
+
+  it("waits for the agent's input box before delivering the launch prompt, with or without an attached view", async () => {
+    vi.useFakeTimers();
+    const { write, broadcast, transport, emit, screen } = harness();
+    await transport.invoke(sender(true), TERMINAL_IPC_CHANNELS.create, [{ cwd: process.cwd(), cols: 80, rows: 24, initialInput: { text: "review this PR", submit: true } }]);
+
+    // Banner sin caja de entrada: el CLI sigue cargando. Se calma 1,2 s y NO se entrega.
+    screen.lines = ["Welcome to the agent", "Loading MCP servers..."];
+    emit("Welcome to the agent\r\nLoading MCP servers...\r\n");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(write).not.toHaveBeenCalled();
+
+    // Aparece la caja de entrada: se entrega en cuanto se calma.
+    screen.lines = ["Welcome to the agent", "│ > "];
+    emit("\r\n│ > \r\n");
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(write).toHaveBeenCalledWith("\x1b[200~review this PR\x1b[201~\r");
+    expect(broadcast).toHaveBeenCalledWith(TERMINAL_IPC_CHANNELS.initialInputDelivered, { sessionId: "1" });
+  });
+
+  it("re-sends Enter when the typed prompt sits in the input box and the screen does not move", async () => {
+    vi.useFakeTimers();
+    const { write, transport, emit, screen } = harness();
+    await transport.invoke(sender(true), TERMINAL_IPC_CHANNELS.create, [{ cwd: process.cwd(), cols: 80, rows: 24, initialInput: { text: "review this PR", submit: true } }]);
+    screen.lines = ["│ > "];
+    emit("\r\n│ > \r\n");
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // El TUI ecoa el texto en la caja pero no lo acepta: nada más cambia.
+    screen.lines = ["│ > review this PR"];
+    await vi.advanceTimersByTimeAsync(1_500 + 3_500 + 50);
+    expect(write).toHaveBeenLastCalledWith("\r");
+    expect(write).toHaveBeenCalledTimes(2);
+
+    // Ahora el agente responde: la pantalla cambia y no se reenvía más.
+    screen.lines = ["> review this PR", "⠋ Thinking…"];
+    await vi.advanceTimersByTimeAsync(1_500 + 3_500 + 50);
+    expect(write).toHaveBeenCalledTimes(2);
   });
 });
