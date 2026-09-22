@@ -17,6 +17,7 @@ import type {
 import { substituteReviewKickoff } from "../../shared/workflow/review-config";
 import { buildPrContextArtifact } from "../../shared/workflow/pr-context-artifact";
 import { buildPrReviewKickoff } from "../../shared/workflow/pr-review-kickoff";
+import { resolveLastReviewedSha } from "../../shared/workflow/pr-review-continuity";
 import { sanitizeCommentBody } from "../../shared/workflow/sanitize-comment";
 import {
   buildPrFixRoleCommand,
@@ -303,8 +304,25 @@ export function registerIpcHandlers(params: {
       template: project.review.kickoff,
       branch: session.branch,
       base: session.baseBranch ?? "",
-      lastReviewedSha: session.pr.lastReviewedSha,
+      lastReviewedSha: await liveReviewedSha(session),
     });
+  }
+
+  /**
+   * The stored anchor only if it still lives on the branch. A rebase orphans the SHA a previous
+   * round recorded — measured on PR #276, four of them at once — and emitting a dead SHA is worse
+   * than emitting nothing: the session anchors its delta to a commit git cannot resolve. When it no
+   * longer descends from the branch we omit the line and the protocol falls back to the full diff.
+   */
+  async function liveReviewedSha(session: WorkSession): Promise<string | null> {
+    const sha = session.pr?.lastReviewedSha ?? null;
+    if (sha === null) return null;
+    try {
+      await execFileAsync("git", ["merge-base", "--is-ancestor", sha, session.branch], { cwd: session.worktreePath });
+      return sha;
+    } catch {
+      return null;
+    }
   }
 
   ipc.handle(IPC_CHANNELS.projectsList, async () => {
@@ -521,6 +539,12 @@ export function registerIpcHandlers(params: {
     if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
     const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
     // Review the PR's pushed state: origin/<source> against origin/<target>.
+    // The anchor belongs to the PR, not to the session: a new round must inherit what the previous
+    // one posted, or the reviewer loses the incremental delta and re-reads the whole branch.
+    const lastReviewedSha = resolveLastReviewedSha({
+      sessions: await sessionRegistry.listSessions({ projectId }),
+      pr: { host: resolved.host, workspace: resolved.workspace, repo: resolved.repo, prId: resolved.prId },
+    });
     const session = await sessionRegistry.createReviewSession({
       projectId,
       projectRoot: project.rootPath,
@@ -533,7 +557,7 @@ export function registerIpcHandlers(params: {
         repo: resolved.repo,
         prId: resolved.prId,
         url: resolved.url,
-        lastReviewedSha: null,
+        lastReviewedSha,
       },
       fetchFirst: true,
       expectedHeadSha: resolved.headSha,
