@@ -4,6 +4,7 @@ import { ProjectContextMenu } from "./ProjectContextMenu";
 import { RemoveProjectConfirmDialog } from "./RemoveProjectConfirmDialog";
 import type { ProjectRecord, WorkSession } from "../../shared/ipc/contract";
 import { REPO_SESSION_PREFIX } from "../../shared/workflow/work-session";
+import type { RailBadge } from "./program-display";
 
 interface ProjectRailProps {
   projects: ProjectRecord[];
@@ -19,6 +20,8 @@ interface ProjectRailProps {
   onSelectRepo: (projectId: string) => void;
   onRequestCreateSession: (projectId: string) => void;
   onRequestRemoveSession: (session: WorkSession) => void;
+  // A program that needs the developer (⛔ unmerged child, ⚠ trouble, ▶ next child ready), per session id.
+  programBadges?: Record<string, RailBadge | null>;
 }
 
 function SidebarToggleIcon(): JSX.Element {
@@ -97,6 +100,7 @@ export function ProjectRail(props: ProjectRailProps): JSX.Element {
     onSelectRepo,
     onRequestCreateSession,
     onRequestRemoveSession,
+    programBadges,
   } = props;
 
   const [collapsed, setCollapsed] = useState(false);
@@ -191,6 +195,18 @@ export function ProjectRail(props: ProjectRailProps): JSX.Element {
                 <TerminalDotIcon />
               </span>
               <span className="session-row-name">{session.name}</span>
+              {(() => {
+                const badge = programBadges?.[session.id];
+                return badge ? (
+                  <span
+                    className={`session-row-program-badge session-row-program-badge-${badge.tone}`}
+                    title={badge.title}
+                    aria-label={badge.title}
+                  >
+                    {badge.symbol}
+                  </span>
+                ) : null;
+              })()}
             </button>
             <button
               type="button"

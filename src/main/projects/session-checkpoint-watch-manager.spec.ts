@@ -229,4 +229,42 @@ describe("createSessionCheckpointWatchManager", () => {
 
     expect(watchers).toHaveLength(1);
   });
+  describe("with a program filter", () => {
+    const SPEC = "docs/workflow/specs/x-programa.md";
+    const checkpointsDir = (): string => join(worktree, "docs", "workflow", "checkpoints");
+    const write = (name: string, body: string): string => {
+      mkdirSync(checkpointsDir(), { recursive: true });
+      const path = join(checkpointsDir(), name);
+      writeFileSync(path, body);
+      return path;
+    };
+    const child = (status: string): string => `---\nstatus: ${status}\n---\n# Architect memory\n- **Programa:** ${SPEC}\n`;
+    const parent = "---\nstatus: IN_PROGRESS\n---\n# Architect memory\n- nada\n";
+
+    it("ignores the parent's checkpoint and a DONE sibling, and binds the child that declares the program", async () => {
+      const { createWatcher, watchers } = makeFakeCreateWatcher();
+      const onCheckpointDetected = vi.fn();
+      const manager = createSessionCheckpointWatchManager({ createWatcher, debounceMs: 0, onCheckpointDetected });
+      await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0, programSpecPath: SPEC });
+
+      watchers[0]?.emitChange(write("parent-checkpoint.md", parent));
+      watchers[0]?.emitChange(write("x-1-checkpoint.md", child("DONE")));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(onCheckpointDetected).not.toHaveBeenCalled();
+
+      watchers[0]?.emitChange(write("x-2-checkpoint.md", child("IN_PROGRESS")));
+      await vi.waitFor(() => expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/x-2-checkpoint.md"));
+      expect(onCheckpointDetected).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies the same filter to checkpoints that already exist when the watch starts", async () => {
+      write("x-2-checkpoint.md", child("IN_PROGRESS"));
+      write("parent-checkpoint.md", parent); // newer: unfiltered, it would win
+      const onCheckpointDetected = vi.fn();
+      const { createWatcher } = makeFakeCreateWatcher();
+      const manager = createSessionCheckpointWatchManager({ createWatcher, debounceMs: 0, onCheckpointDetected });
+      await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0, programSpecPath: SPEC });
+      expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/x-2-checkpoint.md");
+    });
+  });
 });

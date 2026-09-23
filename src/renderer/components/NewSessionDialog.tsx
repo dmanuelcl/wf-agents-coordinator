@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { SESSION_NAME_MAX_LENGTH, truncateSessionName } from "../../shared/workflow/work-session";
 import { programChildFeatureName, wfNextCommand } from "../../shared/workflow/program-spec";
+import { mergeLabel, sessionHoldingBranch, verdictBadgeClass } from "./program-display";
 import type { WorkSession, WorkSessionKind } from "../../shared/workflow/work-session";
-import type { BranchList, RefCheckpointSummary, RefProgramSummary, ResolvedPr } from "../../shared/ipc/contract";
+import type { BranchList, RefCheckpointSummary, ResolvedPr } from "../../shared/ipc/contract";
+import type { ProgramVerdict } from "../../shared/workflow/program-verdict";
 import { BranchCombobox } from "./BranchCombobox";
 import { CheckpointCombobox } from "./CheckpointCombobox";
 import {
@@ -27,6 +29,9 @@ interface NewSessionDialogProps {
   projectId: string;
   onClose: () => void;
   onCreated: (session: WorkSession) => void;
+  // The project's sessions: a branch one of them holds cannot be continued (git allows one worktree per branch).
+  sessions: WorkSession[];
+  onSelectSession: (session: WorkSession) => void;
 }
 
 const KIND_OPTIONS: { value: WorkSessionKind; label: string }[] = [
@@ -37,7 +42,7 @@ const KIND_OPTIONS: { value: WorkSessionKind; label: string }[] = [
 ];
 
 export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
-  const { projectId, onClose, onCreated } = props;
+  const { projectId, onClose, onCreated, sessions, onSelectSession } = props;
 
   const [kind, setKind] = useState<WorkSessionKind>("feature");
   const [name, setName] = useState("");
@@ -53,7 +58,7 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
   const [startRef, setStartRef] = useState("");
   const [startCheckpoint, setStartCheckpoint] = useState("");
   const [refCheckpoints, setRefCheckpoints] = useState<RefCheckpointSummary[] | null>(null);
-  const [refPrograms, setRefPrograms] = useState<RefProgramSummary[] | null>(null);
+  const [refPrograms, setRefPrograms] = useState<ProgramVerdict[] | null>(null);
   // Set by "Start child N": the first message the Architect tab pre-types (`wf next <programa>`).
   const [initialPrompt, setInitialPrompt] = useState("");
   const [loadingCheckpoints, setLoadingCheckpoints] = useState(false);
@@ -424,44 +429,78 @@ export function NewSessionDialog(props: NewSessionDialogProps): JSX.Element {
                     {refPrograms && refPrograms.length > 0 && (
                       <div className="new-session-field">
                         <span className="field-label">Programa</span>
-                        {refPrograms.map((program) => (
-                          <div key={program.path} className="new-session-program">
-                            <p className="field-preview">
-                              <strong>{program.title}</strong> · {program.children.filter((child) => child.state === "DONE").length}/
-                              {program.children.length} hijos DONE
-                            </p>
-                            <ul className="new-session-program-children">
-                              {program.children.map((child) => (
-                                <li key={child.index}>
-                                  {child.index}. {child.name} · <code>{child.state}</code>
-                                  {child.dependsOn.length > 0 && <> · depende de {child.dependsOn.join(", ")}</>}
-                                </li>
-                              ))}
-                            </ul>
-                            {program.next ? (
-                              <button
-                                type="button"
-                                className={initialPrompt === wfNextCommand(program.path) ? "selected" : undefined}
-                                onClick={() => {
-                                  const next = program.next;
-                                  if (!next) return;
-                                  setStartCheckpoint("");
-                                  setInitialPrompt(wfNextCommand(program.path));
-                                  if (!nameTouched) setName(truncateSessionName(programChildFeatureName(program, next)));
-                                }}
-                              >
-                                Iniciar hijo {program.next.index}: {program.next.name}
-                              </button>
-                            ) : (
-                              <p className="field-hint">{program.complete ? "Programa completo." : "Ningún hijo listo: sus dependencias no están DONE."}</p>
-                            )}
-                            {initialPrompt === wfNextCommand(program.path) && (
-                              <p className="field-hint">
-                                Sin checkpoint: el Architect abre con <code>{initialPrompt}</code> pre-escrito y crea el checkpoint del hijo.
+                        {refPrograms.map((program) => {
+                          const heldBy = sessionHoldingBranch(sessions, startRef);
+                          const command = wfNextCommand(program.specPath);
+                          const selected = initialPrompt === command;
+                          const doneCount = program.children.filter((child) => child.state === "DONE").length;
+                          return (
+                            <div key={program.specPath} className="new-session-program">
+                              <p className="field-preview">
+                                <strong>{program.title}</strong> · {doneCount}/{program.children.length} hijos DONE ·{" "}
+                                <span className={verdictBadgeClass(program.verdict)}>{program.verdict}</span>
                               </p>
-                            )}
-                          </div>
-                        ))}
+                              <ul className="new-session-program-children">
+                                {program.children.map((child) => {
+                                  const merge = mergeLabel(child.merge);
+                                  return (
+                                    <li key={child.index}>
+                                      {child.index}. {child.name} · <code>{child.state}</code>
+                                      {merge && (
+                                        <>
+                                          {" "}
+                                          · <span className={merge.className}>{merge.text}</span>
+                                        </>
+                                      )}
+                                      {child.dependsOn.length > 0 && <> · depende de {child.dependsOn.join(", ")}</>}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                              {heldBy ? (
+                                <p className="field-hint">
+                                  La rama está en la sesión «{heldBy.name}»: avanza el programa desde ahí (tab Log → Programa).{" "}
+                                  <button type="button" onClick={() => onSelectSession(heldBy)}>
+                                    Ir a la sesión
+                                  </button>
+                                </p>
+                              ) : program.verdict === "READY" && program.next ? (
+                                <button
+                                  type="button"
+                                  className={selected ? "selected" : undefined}
+                                  onClick={() => {
+                                    const next = program.next;
+                                    if (!next) return;
+                                    setStartCheckpoint("");
+                                    setInitialPrompt(command);
+                                    if (!nameTouched) {
+                                      setName(truncateSessionName(programChildFeatureName(program.title, program.children.length, next)));
+                                    }
+                                  }}
+                                >
+                                  Iniciar hijo {program.next.index}: {program.next.name}
+                                </button>
+                              ) : program.verdict === "COMPLETE" ? (
+                                <p className="field-hint">Programa completo.</p>
+                              ) : (
+                                <div className="program-reasons" role="alert">
+                                  <strong>Bloqueado: el siguiente hijo no puede empezar.</strong>
+                                  <ul>
+                                    {program.reasons.map((reason) => (
+                                      <li key={reason}>{reason}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {program.fetchNote && <p className="field-hint">⚠ {program.fetchNote}</p>}
+                              {selected && !heldBy && (
+                                <p className="field-hint">
+                                  Sin checkpoint: el Architect abre con <code>{initialPrompt}</code> pre-escrito y crea el checkpoint del hijo.
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </>

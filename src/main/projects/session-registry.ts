@@ -77,6 +77,17 @@ export interface SessionRegistry {
     expectedHeadSha?: string;
   }): Promise<WorkSession>;
   updateSessionCheckpoint(params: { sessionId: string; checkpointPath: string }): Promise<void>;
+  /**
+   * Move a session along its program: bind it to a child's checkpoint, or clear
+   * the binding (null) while the next child's INIT writes one. `initialPrompt`
+   * null removes a prompt that has served its purpose.
+   */
+  updateSessionProgram(params: {
+    sessionId: string;
+    checkpointPath: string | null;
+    program: string;
+    initialPrompt: string | null;
+  }): Promise<WorkSession>;
   setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
   markSetupDone(params: { sessionId: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
@@ -654,6 +665,20 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         const current = records[index] as WorkSession;
         records[index] = { ...current, checkpointPath };
         await writeAll(records);
+      });
+    },
+
+    updateSessionProgram({ sessionId, checkpointPath, program, initialPrompt }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const index = records.findIndex((record) => record.id === sessionId);
+        if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+        const updated: WorkSession = { ...(records[index] as WorkSession), checkpointPath, program };
+        if (initialPrompt) updated.initialPrompt = initialPrompt;
+        else delete updated.initialPrompt;
+        records[index] = updated;
+        await writeAll(records);
+        return updated;
       });
     },
 

@@ -57,7 +57,7 @@ export interface SessionRuntimeChangedEvent {
 export interface SessionOrchestrator {
   setRoleLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
   setRepoAgentLaunchBuilder(builder: (sessionId: string, lane: string, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>): void;
-  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null }) => Promise<{
+  setAutopilotLaunchBuilder(builder: (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null; forceFresh?: boolean }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -76,6 +76,10 @@ export interface SessionOrchestrator {
   setAutopilot(sessionId: string, enabled: boolean): Promise<RunnerSessionRuntimeRecord>;
   runCommand(sessionId: string, role: SessionAgentRole, lane: string, command: string): Promise<void>;
   restoreView(sessionId: string, intent: SessionViewRestoreIntent): Promise<RunnerSessionRuntimeRecord>;
+  /** Relaunch `role` in a NEW provider conversation with `command` submitted: a program's next child starts its own turn. */
+  beginFreshTurn(sessionId: string, role: SessionAgentRole, command: string): Promise<void>;
+  /** Forget what auto-pilot knew about the session's previous checkpoint: the session now follows another one. */
+  resetAutopilot(sessionId: string): Promise<void>;
   onCheckpoint(sessionId: string, checkpoint: ParsedCheckpoint): void;
   onHandoff(sessionId: string, handoff: SessionHandoff): void;
   onSetupExit(params: { sessionId: string; code: number }): Promise<void>;
@@ -129,7 +133,7 @@ export function createSessionOrchestrator(params: {
 }): SessionOrchestrator {
   const { projectRegistry, sessionRegistry, runtimeStore, terminals, sessionAgentUuidStore, readCheckpoint, broadcast } = params;
   type RoleLaunchBuilder = (sessionId: string, role: SessionAgentRole, mode: "fresh" | "resume") => Promise<SessionRoleLaunch>;
-  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null }) => Promise<{
+  type AutopilotLaunchBuilder = (sessionId: string, role: SessionAgentRole, lane: string, prompt: string, options?: { targetTokens: number | null; forceFresh?: boolean }) => Promise<{
     command: string;
     agentKind: AgentKind;
     cwd: string;
@@ -797,6 +801,52 @@ export function createSessionOrchestrator(params: {
         terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
         terminal.generation = (terminal.generation ?? 0) + 1;
         await publish(sessionId, session.setupDone, runtime);
+      });
+    },
+    beginFreshTurn(sessionId, role, command) {
+      return serial(sessionId, async () => {
+        if (!buildAutopilotLaunch) throw new Error("Session orchestrator was started before its command launch builder was registered.");
+        const session = await sessionFor(sessionId);
+        const runtime = await ensureSetupOrPrimary(sessionId);
+        if (runtime.phase !== "ready") throw new Error("Worktree setup has not completed.");
+        const launch = await buildAutopilotLaunch(sessionId, role, role, command, { targetTokens: null, forceFresh: true });
+        let terminal = runtime.terminals.find((candidate) => candidate.kind === "agent" && candidate.role === role);
+        if (!terminal) {
+          terminal = { key: roleKey(sessionId, role), kind: "agent", role, mode: "fresh", generation: 0 };
+          runtime.terminals.push(terminal);
+        }
+        const created = await terminals.replace({
+          cwd: launch.cwd,
+          cols: RUNNER_COLS,
+          rows: RUNNER_ROWS,
+          launchCommand: launch.command,
+          environment: launch.environment,
+          persistKey: terminal.key,
+          initialInput: launch.typePrompt === null ? null : { text: launch.typePrompt, submit: true },
+        });
+        liveTerminal.set(created.sessionId, { sessionId, key: terminal.key, agentKind: launch.agentKind, sessionLane: role });
+        lastLaunchedLane.set(sessionId, role);
+        lastAgentOutputAt.set(sessionId, Date.now());
+        laneContextTokens.delete(`${sessionId}::${role}`);
+        terminal.mode = launch.typePrompt === null ? "resume" : "fresh";
+        terminal.generation = (terminal.generation ?? 0) + 1;
+        await publish(sessionId, session.setupDone, runtime);
+      });
+    },
+    resetAutopilot(sessionId) {
+      return serial(sessionId, async () => {
+        const timer = autoPilotTimers.get(sessionId);
+        if (timer) clearTimeout(timer);
+        autoPilotTimers.delete(sessionId);
+        latestCheckpoint.delete(sessionId);
+        pendingHandoff.delete(sessionId);
+        handoffWaitingSince.delete(sessionId);
+        const runtime = await runtimeStore.get(sessionId);
+        if (!runtime) return;
+        runtime.autoPilot.state = INITIAL_CONDUCTOR_STATE;
+        clearAttention(runtime);
+        if (runtime.autoPilot.enabled) runtime.autoPilot.message = "Auto-pilot reset: the session follows another checkpoint of its program";
+        await publish(sessionId, (await sessionFor(sessionId)).setupDone, runtime);
       });
     },
     restoreView(sessionId, intent) {

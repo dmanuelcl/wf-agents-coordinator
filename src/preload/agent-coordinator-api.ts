@@ -1,6 +1,7 @@
 import {
   CHECKPOINT_IPC_CHANNELS,
   IPC_CHANNELS,
+  PROGRAM_IPC_CHANNELS,
   SESSION_IPC_CHANNELS,
   TERMINAL_IPC_CHANNELS,
 } from "../shared/ipc/contract";
@@ -8,8 +9,10 @@ import type {
   AgentCoordinatorApi,
   CheckpointChangedEvent,
   CheckpointRemovedEvent,
+  ProgramStatusChangedEvent,
   SessionCheckpointDetectedEvent,
   SessionRuntimeChangedEvent,
+  SessionUpdatedEvent,
   TerminalDataEvent,
   TerminalExitEvent,
 } from "../shared/ipc/contract";
@@ -93,6 +96,14 @@ export function createAgentCoordinatorApi(
       runCommand: (sessionId, role, lane, command) => invoke(IPC_CHANNELS.sessionsRunCommand, sessionId, role, lane, command) as ReturnType<AgentCoordinatorApi["sessions"]["runCommand"]>,
       restoreView: (sessionId, intent) => invoke(IPC_CHANNELS.sessionsRestoreView, sessionId, intent) as ReturnType<AgentCoordinatorApi["sessions"]["restoreView"]>,
       onRuntimeChanged: (callback) => on<SessionRuntimeChangedEvent>(SESSION_IPC_CHANNELS.runtimeChanged, callback),
+      startProgramChild: (sessionId) => invoke(IPC_CHANNELS.sessionsStartProgramChild, sessionId) as ReturnType<AgentCoordinatorApi["sessions"]["startProgramChild"]>,
+      adoptProgramChild: (sessionId, index) => invoke(IPC_CHANNELS.sessionsAdoptProgramChild, sessionId, index) as ReturnType<AgentCoordinatorApi["sessions"]["adoptProgramChild"]>,
+      onSessionUpdated: (callback) => on<SessionUpdatedEvent>(SESSION_IPC_CHANNELS.sessionUpdated, callback),
+    },
+    programs: {
+      getStatus: (sessionId) => invoke(IPC_CHANNELS.programsGetStatus, sessionId) as ReturnType<AgentCoordinatorApi["programs"]["getStatus"]>,
+      refresh: (sessionId) => invoke(IPC_CHANNELS.programsRefresh, sessionId) as ReturnType<AgentCoordinatorApi["programs"]["refresh"]>,
+      onStatusChanged: (callback) => on<ProgramStatusChangedEvent>(PROGRAM_IPC_CHANNELS.statusChanged, callback),
     },
     terminal: {
       attach: (persistKey) => invoke(TERMINAL_IPC_CHANNELS.attach, persistKey) as ReturnType<AgentCoordinatorApi["terminal"]["attach"]>,

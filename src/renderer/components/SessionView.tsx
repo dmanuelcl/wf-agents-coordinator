@@ -20,6 +20,9 @@ import type { ReviewConfig } from "../../shared/workflow/review-config";
 import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
 import { planFileCandidates, planFileToken } from "./log-plan-link";
 import { SessionNotice, toneForReviewMessage } from "./session-notice";
+import { ProgramNotice, ProgramPanel } from "./ProgramPanel";
+import { useProgramActions } from "./use-program-actions";
+import type { ProgramVerdict } from "../../shared/workflow/program-verdict";
 
 // A dynamic plain-shell tab. The `+` mints these; each carries a renameable
 // title so several shells in one session can be told apart. `root` shells run
@@ -58,6 +61,8 @@ interface SessionViewProps {
   onLayoutChange?: (sessionId: string, layout: SessionLayout) => void;
   // The owning project's PR-review settings (Slack channel + kickoff).
   reviewConfig?: ReviewConfig;
+  // The verdict `wf:next` would give for this session's program (pushed by main); null outside a program.
+  programStatus?: ProgramVerdict | null;
 }
 
 const KIND_LABELS: Record<WorkSessionKind, string> = {
@@ -439,7 +444,7 @@ function initialPrTabs(
 }
 
 export function SessionView(props: SessionViewProps): JSX.Element {
-  const { session, initialLayout, onLayoutChange, repoMode = false, reviewConfig } = props;
+  const { session, initialLayout, onLayoutChange, repoMode = false, reviewConfig, programStatus = null } = props;
   const kind = session.kind;
   const reviewMode = kind === "review";
   const fixMode = kind === "pr-fix";
@@ -493,6 +498,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   // Which root the file tree browses: this session's worktree, or the main repo.
   const [filesScope, setFilesScope] = useState<"worktree" | "repo">("worktree");
   const [checkpoint, setCheckpoint] = useState<ParsedCheckpoint | null>(null);
+  const programActions = useProgramActions(session.id);
   const prFixPushGate = getPrFixPushGate(fixMode ? checkpoint : null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -1045,6 +1051,10 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         <SessionNotice tone={toneForReviewMessage(reviewPostMsg)}>{reviewPostMsg}</SessionNotice>
       )}
 
+      {!repoMode && !prSession && programStatus && (
+        <ProgramNotice verdict={programStatus} sessionCheckpointPath={session.checkpointPath} state={programActions} />
+      )}
+
       <div className="session-split">
       <div className="session-main">
       <div className="session-view-tabs" role="tablist" aria-label="Session tabs">
@@ -1304,6 +1314,14 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         )}
         {setupReady && !repoMode && activeTab === "log" && (
           <div className="session-log-scroll">
+            {programStatus && (
+              <ProgramPanel
+                verdict={programStatus}
+                sessionCheckpointPath={session.checkpointPath}
+                state={programActions}
+                now={Date.now()}
+              />
+            )}
             <LogPanel
               checkpoint={checkpoint}
               hasCheckpoint={hasCheckpoint}

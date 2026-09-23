@@ -55,6 +55,9 @@ export interface WorkSession {
   checkpointPath: string | null;
   // Pre-typed into the Architect tab while there is no checkpoint (a program's `wf next …`).
   initialPrompt?: string;
+  // The program this session advances through (repo-relative spec path), set
+  // once it starts or adopts one of the program's children.
+  program?: string;
   // Whether the project's setup command has already run, or its build artifacts
   // were explicitly reused, so setup does not run again before every tab.
   setupDone: boolean;

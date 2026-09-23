@@ -36,6 +36,45 @@ afterEach(() => {
 });
 
 describe("SessionRegistry", () => {
+  it("updateSessionProgram rebinds a session to a program child and drops a spent initial prompt", async () => {
+    writeFileSync(
+      storeFilePath,
+      JSON.stringify([
+        {
+          id: "s1",
+          projectId: "p",
+          name: "S",
+          kind: "feature",
+          slug: "s",
+          branch: "feature/s",
+          baseBranch: null,
+          pr: null,
+          worktreePath: "/tmp/w",
+          checkpointPath: "docs/workflow/checkpoints/padre-checkpoint.md",
+          initialPrompt: "old",
+          setupDone: true,
+          createdAtEpochMs: 0,
+        },
+      ]),
+    );
+    const registry = createSessionRegistry({ storeFilePath });
+    const started = await registry.updateSessionProgram({
+      sessionId: "s1",
+      checkpointPath: null,
+      program: "docs/workflow/specs/p.md",
+      initialPrompt: "wf next docs/workflow/specs/p.md",
+    });
+    expect(started).toMatchObject({ checkpointPath: null, program: "docs/workflow/specs/p.md", initialPrompt: "wf next docs/workflow/specs/p.md" });
+    const adopted = await registry.updateSessionProgram({
+      sessionId: "s1",
+      checkpointPath: "docs/workflow/checkpoints/x-2-checkpoint.md",
+      program: "docs/workflow/specs/p.md",
+      initialPrompt: null,
+    });
+    expect(adopted.initialPrompt).toBeUndefined();
+    expect(await registry.getSession({ sessionId: "s1" })).toEqual(adopted);
+  });
+
   it("lists nothing for a project with no sessions", async () => {
     const registry = createSessionRegistry({ storeFilePath });
     await expect(registry.listSessions({ projectId: "p1" })).resolves.toEqual([]);

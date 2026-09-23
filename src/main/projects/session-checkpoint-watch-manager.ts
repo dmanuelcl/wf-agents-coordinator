@@ -1,11 +1,29 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
+import { frontmatterStatus, normalizeRepoPath, programPathOf } from "../../shared/workflow/program-spec";
 import { createCheckpointWatcher } from "./checkpoint-watcher";
 import type { CheckpointWatcher, CreateWatcher } from "./checkpoint-watcher";
 
 // A session's checkpoint always lands here, inside that session's own worktree.
 const CHECKPOINT_DIR_SEGMENTS = ["docs", "workflow", "checkpoints"] as const;
 const CHECKPOINT_FILENAME_PATTERN = /-checkpoint\.md$/;
+
+/**
+ * A session waiting on a program's next child shares its worktree with the
+ * parent's checkpoint and with every closed sibling. The architect may touch
+ * those first, so "the first checkpoint that changes" is not the child's: only
+ * a checkpoint that declares `Programa: <this spec>` and is not DONE is.
+ */
+async function acceptsCheckpoint(absolutePath: string, programSpecPath: string | undefined): Promise<boolean> {
+  if (!programSpecPath) return true;
+  try {
+    const text = await readFile(absolutePath, "utf8");
+    const declared = programPathOf(text);
+    return declared !== null && normalizeRepoPath(declared) === normalizeRepoPath(programSpecPath) && frontmatterStatus(text) !== "DONE";
+  } catch {
+    return false;
+  }
+}
 
 // The newest checkpoint created/modified after this session started, or null.
 // Files materialized by `git worktree add` predate `createdAtEpochMs` and belong
@@ -14,6 +32,7 @@ async function existingSessionCheckpoint(
   dir: string,
   createdAtEpochMs: number,
   expectedFilename?: string,
+  programSpecPath?: string,
 ): Promise<string | null> {
   let entries: string[];
   try {
@@ -31,7 +50,8 @@ async function existingSessionCheckpoint(
         const path = join(dir, name);
         try {
           const info = await stat(path);
-          return info.isFile() && info.mtimeMs > createdAtEpochMs ? { path, mtimeMs: info.mtimeMs } : null;
+          if (!info.isFile() || info.mtimeMs <= createdAtEpochMs) return null;
+          return (await acceptsCheckpoint(path, programSpecPath)) ? { path, mtimeMs: info.mtimeMs } : null;
         } catch {
           return null;
         }
@@ -44,12 +64,14 @@ async function existingSessionCheckpoint(
   );
 }
 
-interface WatchSessionParams {
+export interface WatchSessionParams {
   sessionId: string;
   worktreePath: string;
   createdAtEpochMs: number;
   /** When set, no other checkpoint in the worktree may flip this gate. */
   expectedCheckpointPath?: string;
+  /** A program child's session: bind only a checkpoint of this program that is not DONE. */
+  programSpecPath?: string;
 }
 
 export interface SessionCheckpointWatchManager {
@@ -89,7 +111,7 @@ export function createSessionCheckpointWatchManager(params: {
   }
 
   async function start(params: WatchSessionParams): Promise<void> {
-    const { sessionId, worktreePath, createdAtEpochMs, expectedCheckpointPath } = params;
+    const { sessionId, worktreePath, createdAtEpochMs, expectedCheckpointPath, programSpecPath } = params;
     const checkpointDir = join(worktreePath, ...CHECKPOINT_DIR_SEGMENTS);
     const expectedFilename = expectedCheckpointPath ? basename(expectedCheckpointPath) : undefined;
 
@@ -97,7 +119,7 @@ export function createSessionCheckpointWatchManager(params: {
     // that landed between session creation and this watch. chokidar's
     // `ignoreInitial` would never surface it, leaving the gate stuck with the
     // tabs disabled despite a real checkpoint on disk. Detect it up front.
-    const existing = await existingSessionCheckpoint(checkpointDir, createdAtEpochMs, expectedFilename);
+    const existing = await existingSessionCheckpoint(checkpointDir, createdAtEpochMs, expectedFilename, programSpecPath);
     if (existing) {
       onCheckpointDetected(sessionId, relative(worktreePath, existing));
       return;
@@ -111,16 +133,22 @@ export function createSessionCheckpointWatchManager(params: {
     // directories, so this leaves no footprint in the worktree.
     await mkdir(checkpointDir, { recursive: true });
 
+    let bound = false;
     const handleCandidate = (absoluteFilePath: string): void => {
       // A second event before `stop()` finishes closing would re-enter here;
       // the delete inside `stop()` is synchronous, so this guard bails.
       if (!watchers.has(sessionId)) return;
       if (!CHECKPOINT_FILENAME_PATTERN.test(basename(absoluteFilePath))) return;
       if (expectedFilename && basename(absoluteFilePath) !== expectedFilename) return;
-      const checkpointPath = relative(worktreePath, absoluteFilePath);
-      // One checkpoint per session: once the gate flips, stop watching.
-      void stop(sessionId);
-      onCheckpointDetected(sessionId, checkpointPath);
+      void acceptsCheckpoint(absoluteFilePath, programSpecPath).then((accepted) => {
+        // Reading the file is async: another accepted event may have bound first.
+        if (!accepted || bound || !watchers.has(sessionId)) return;
+        bound = true;
+        const checkpointPath = relative(worktreePath, absoluteFilePath);
+        // One checkpoint per session: once the gate flips, stop watching.
+        void stop(sessionId);
+        onCheckpointDetected(sessionId, checkpointPath);
+      });
     };
 
     const watcher = createCheckpointWatcher({

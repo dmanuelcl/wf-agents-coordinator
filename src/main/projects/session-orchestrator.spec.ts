@@ -59,6 +59,94 @@ function memoryStore(): SessionRuntimeStore {
 }
 
 describe("createSessionOrchestrator", () => {
+  it("beginFreshTurn relaunches the role in a NEW conversation with the command submitted", async () => {
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/x", checkpointPath: null });
+    const replaces: Parameters<RunnerTerminalController["replace"]>[0][] = [];
+    const autopilotBuilder = vi.fn(async () => ({
+      command: "claude",
+      agentKind: "claude" as const,
+      cwd: current.worktreePath,
+      environment: {},
+      typePrompt: "wf next docs/workflow/specs/p.md",
+    }));
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: {
+        listProjects: async () => [project()],
+        addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn(),
+      } as unknown as ProjectRegistry,
+      sessionRegistry: { getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn() } as unknown as SessionRegistry,
+      runtimeStore: memoryStore(),
+      terminals: {
+        create: async () => ({ sessionId: "architect-pty", reused: false }),
+        replace: async (input) => {
+          replaces.push(input);
+          return { sessionId: "fresh-pty", reused: false };
+        },
+        attach: vi.fn(async () => null),
+        kill: vi.fn(),
+        write: vi.fn(),
+      },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+    orchestrator.setRoleLaunchBuilder(async () => ({
+      agentCommand: "claude", agentKind: "claude", environment: {},
+      wfCommand: null, cwd: current.worktreePath, sessionUuid: null, warnings: [],
+    }));
+    orchestrator.setAutopilotLaunchBuilder(autopilotBuilder);
+
+    await orchestrator.beginFreshTurn(current.id, "architect", "wf next docs/workflow/specs/p.md");
+
+    expect(autopilotBuilder).toHaveBeenCalledWith(current.id, "architect", "architect", "wf next docs/workflow/specs/p.md", {
+      targetTokens: null,
+      forceFresh: true,
+    });
+    expect(replaces[0]).toMatchObject({
+      persistKey: `${current.id}::role::architect`,
+      initialInput: { text: "wf next docs/workflow/specs/p.md", submit: true },
+    });
+    const architect = (await orchestrator.runtime(current.id))?.terminals.find(
+      (terminal) => terminal.kind === "agent" && terminal.role === "architect",
+    );
+    expect(architect?.mode).toBe("fresh");
+    await orchestrator.remove(current.id);
+  });
+
+  it("resetAutopilot forgets the previous checkpoint's conductor state but keeps auto-pilot on", async () => {
+    const current = session({ kind: "feature", setupDone: true, branch: "feature/x", checkpointPath: "docs/workflow/checkpoints/x-checkpoint.md" });
+    const store = memoryStore();
+    await store.put({
+      sessionId: current.id,
+      phase: "ready",
+      terminals: [],
+      error: null,
+      autoPilot: {
+        enabled: true,
+        state: { lastActedKey: "k", reloopCount: { t: 2 }, reviewedTasks: ["t"] },
+        message: "→ wf implement",
+        attention: { kind: "paused", reason: "x", sinceEpochMs: 1 },
+      },
+    });
+    const orchestrator = createSessionOrchestrator({
+      projectRegistry: { listProjects: async () => [project()], addProject: vi.fn(), updateProject: vi.fn(), removeProject: vi.fn() } as unknown as ProjectRegistry,
+      sessionRegistry: { getSession: async () => current, listSessions: vi.fn(), markSetupDone: vi.fn() } as unknown as SessionRegistry,
+      runtimeStore: store,
+      terminals: { create: vi.fn(), replace: vi.fn(), attach: vi.fn(async () => null), kill: vi.fn(), write: vi.fn() },
+      sessionAgentUuidStore: { get: vi.fn(), set: vi.fn() } as never,
+      readCheckpoint: vi.fn(async () => null),
+      broadcast: vi.fn(),
+    });
+
+    await orchestrator.resetAutopilot(current.id);
+
+    expect((await orchestrator.runtime(current.id))?.autoPilot).toMatchObject({
+      enabled: true,
+      state: INITIAL_CONDUCTOR_STATE,
+      attention: null,
+    });
+  });
+
   it("runs setup and launches the PR reviewer entirely from the runner transition", async () => {
     const current = session();
     const markSetupDone = vi.fn(async () => { current.setupDone = true; });

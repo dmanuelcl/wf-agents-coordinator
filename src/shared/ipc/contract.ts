@@ -13,6 +13,7 @@ import type { LaunchRole, RoleLaunchPlan } from "../workflow/role-launch-plan";
 import type { SessionAgentRole } from "../workflow/session-role-launch";
 import type { WorkSession, WorkSessionKind } from "../workflow/work-session";
 import type { ParsedCheckpoint } from "../workflow/workflow-types";
+import type { ProgramVerdict } from "../workflow/program-verdict";
 
 export type { ProjectRecord, ProjectUpdateInput } from "../../main/projects/project-registry";
 export type { WorktreeCreatePlan, WorktreeDetection } from "../../main/projects/worktree-manager";
@@ -104,25 +105,6 @@ export interface SessionCreateInput {
 }
 
 // A checkpoint committed on a ref, read without checking that ref out.
-// A program spec committed on a ref (a `# Hijos` table), with each child's
-// state read from its own checkpoint. `next` is the child `wf next` would open.
-export interface RefProgramChild {
-  index: number;
-  name: string;
-  spec: string | null;
-  checkpoint: string | null;
-  dependsOn: number[];
-  state: "PENDING" | "IN_PROGRESS" | "BLOCKED" | "DONE" | "UNKNOWN";
-}
-
-export interface RefProgramSummary {
-  path: string;
-  title: string;
-  children: RefProgramChild[];
-  next: RefProgramChild | null;
-  complete: boolean;
-}
-
 export interface RefCheckpointSummary {
   path: string;
   feature: string | null;
@@ -205,6 +187,10 @@ export const IPC_CHANNELS = {
   worktreeDetect: "worktree:detect",
   worktreeBuildPlan: "worktree:build-plan",
   worktreeCreate: "worktree:create",
+  programsGetStatus: "programs:get-status",
+  programsRefresh: "programs:refresh",
+  sessionsStartProgramChild: "sessions:start-program-child",
+  sessionsAdoptProgramChild: "sessions:adopt-program-child",
 } as const;
 
 export const TERMINAL_IPC_CHANNELS = {
@@ -229,7 +215,18 @@ export const CHECKPOINT_IPC_CHANNELS = {
 export const SESSION_IPC_CHANNELS = {
   checkpointDetected: "session:checkpoint-detected",
   runtimeChanged: "session:runtime-changed",
+  sessionUpdated: "session:updated",
 } as const;
+
+export const PROGRAM_IPC_CHANNELS = {
+  statusChanged: "programs:status-changed",
+} as const;
+
+/** A session's program verdict changed (or it stopped/started belonging to a program: `status` null). */
+export interface ProgramStatusChangedEvent {
+  sessionId: string;
+  status: ProgramVerdict | null;
+}
 
 export interface CheckpointChangedEvent {
   projectId: string;
@@ -246,6 +243,11 @@ export interface CheckpointRemovedEvent {
 export interface SessionCheckpointDetectedEvent {
   sessionId: string;
   checkpointPath: string;
+}
+
+/** A session record changed wholesale (a program action rebound it). */
+export interface SessionUpdatedEvent {
+  session: WorkSession;
 }
 
 /** Runner-owned lifecycle update. The browser uses it only to redraw. */
@@ -365,8 +367,8 @@ export interface AgentCoordinatorApi {
     // Checkpoints committed on `ref`, read without checking it out. An
     // unresolvable ref yields an empty list rather than an error.
     listRefCheckpoints(projectId: string, ref: string): Promise<RefCheckpointSummary[]>;
-    // Program specs committed on `ref` (a `# Hijos` table), children resolved from their checkpoints.
-    listRefPrograms(projectId: string, ref: string): Promise<RefProgramSummary[]>;
+    // Program specs committed on `ref` (a `# Hijos` section), each with the verdict `wf:next` would give.
+    listRefPrograms(projectId: string, ref: string): Promise<ProgramVerdict[]>;
     resolvePrUrl(projectId: string, url: string): Promise<ResolvedPr>;
     // Verify VCS creds/host/repo. token is the just-typed value (or null to use
     // the stored one for projectId). Resolves with the repo's full name, rejects
@@ -398,6 +400,18 @@ export interface AgentCoordinatorApi {
     runCommand(sessionId: string, role: SessionAgentRole, lane: string, command: string): Promise<void>;
     restoreView(sessionId: string, intent: SessionViewRestoreIntent): Promise<RunnerSessionRuntimeRecord>;
     onRuntimeChanged(cb: (e: SessionRuntimeChangedEvent) => void): () => void;
+    // Advance to the program's next child in this session (only when READY; main re-checks).
+    startProgramChild(sessionId: string): Promise<WorkSession>;
+    // Bind this session to a program child that is already IN_PROGRESS.
+    adoptProgramChild(sessionId: string, index: number): Promise<WorkSession>;
+    onSessionUpdated(cb: (e: SessionUpdatedEvent) => void): () => void;
+  };
+  programs: {
+    // The verdict `wf:next` would give for the session's program; null when it belongs to none.
+    getStatus(sessionId: string): Promise<ProgramVerdict | null>;
+    // Recompute now, forcing `git fetch origin develop`.
+    refresh(sessionId: string): Promise<ProgramVerdict | null>;
+    onStatusChanged(cb: (e: ProgramStatusChangedEvent) => void): () => void;
   };
   terminal: TerminalApi;
   sessionState: {

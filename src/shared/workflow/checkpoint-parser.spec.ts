@@ -744,6 +744,9 @@ describe("program pointer", () => {
   it("reads `- **Programa:** <spec>` from the Architect memory section and stays null otherwise", () => {
     expect(parseProgramPointer("# Architect memory\n- **Manifest:** docs/workflow/memory/x/manifest.md\n- **Programa:** docs/workflow/specs/x-programa.md\n")).toBe("docs/workflow/specs/x-programa.md");
     expect(parseProgramPointer("# Architect memory\n- **Manifest:** docs/workflow/memory/x/manifest.md\n")).toBeNull();
+    // Same reader as the workflow (Biznex 802fb00cb): backticks and links name the path, not the format.
+    expect(parseProgramPointer("- **Programa:** `docs/workflow/specs/x-programa.md` (hijo 1 de 5)\n")).toBe("docs/workflow/specs/x-programa.md");
+    expect(parseProgramPointer("- **Programa:** [x](docs/workflow/specs/x-programa.md)\n")).toBe("docs/workflow/specs/x-programa.md");
     const parsed = parseCheckpointMarkdown({ checkpointPath: "x-checkpoint.md", markdown: "---\nstatus: IN_PROGRESS\n---\n# ▶ NEXT\n- x\n\n# Architect memory\n- **Programa:** docs/workflow/specs/x-programa.md\n\n# Plans ledger\n\n# Log\n" });
     expect(parsed.program).toBe("docs/workflow/specs/x-programa.md");
   });

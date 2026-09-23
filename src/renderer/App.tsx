@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { ProjectModal } from "./components/ProjectModal";
 import { ProjectRail } from "./components/ProjectRail";
 import { AutopilotAlertBar } from "./components/AutopilotAlertBar";
 import { useAutopilotAlerts } from "./components/useAutopilotAlerts";
 import { SessionView } from "./components/SessionView";
+import { programRailBadge } from "./components/program-display";
+import type { ProgramVerdict } from "../shared/workflow/program-verdict";
 import type { SessionLayout, ShellTab } from "./components/SessionView";
 import type { PersistedSessionLayout, ProjectRecord, WorkSession, WorkspaceLayout } from "../shared/ipc/contract";
 import { isSessionAgentRole } from "../shared/workflow/session-role-launch";
@@ -220,6 +222,48 @@ export function App(): JSX.Element {
     });
   }, []);
 
+  // Program verdicts are computed and pushed by main; the UI only renders them.
+  const [programStatuses, setProgramStatuses] = useState<Record<string, ProgramVerdict | null>>({});
+  const requestedProgramStatus = useRef(new Set<string>());
+
+  useEffect(() => {
+    return window.agentCoordinator.programs.onStatusChanged((event) => {
+      setProgramStatuses((current) => ({ ...current, [event.sessionId]: event.status }));
+    });
+  }, []);
+
+  useEffect(() => {
+    for (const sessions of Object.values(sessionsByProject)) {
+      for (const session of sessions) {
+        if ((session.kind !== "feature" && session.kind !== "fix") || requestedProgramStatus.current.has(session.id)) continue;
+        requestedProgramStatus.current.add(session.id);
+        void window.agentCoordinator.programs
+          .getStatus(session.id)
+          .then((status) => setProgramStatuses((current) => ({ ...current, [session.id]: status })))
+          .catch(() => requestedProgramStatus.current.delete(session.id));
+      }
+    }
+  }, [sessionsByProject]);
+
+  // A program action rebinds a session wholesale (checkpoint, program, prompt).
+  useEffect(() => {
+    return window.agentCoordinator.sessions.onSessionUpdated(({ session: updated }) => {
+      setSessionsByProject((current) => {
+        const list = current[updated.projectId];
+        if (!list?.some((session) => session.id === updated.id)) return current;
+        return { ...current, [updated.projectId]: list.map((session) => (session.id === updated.id ? updated : session)) };
+      });
+    });
+  }, []);
+
+  const programBadges = useMemo(() => {
+    const badges: Record<string, ReturnType<typeof programRailBadge>> = {};
+    for (const sessions of Object.values(sessionsByProject)) {
+      for (const session of sessions) badges[session.id] = programRailBadge(programStatuses[session.id] ?? null, session.checkpointPath);
+    }
+    return badges;
+  }, [sessionsByProject, programStatuses]);
+
   // A session's first checkpoint appearing flips it from Architect-only to fully
   // enabled. Patch the cached record so the derived selectedSession re-renders.
   useEffect(() => {
@@ -339,6 +383,7 @@ export function App(): JSX.Element {
         onSelectRepo={handleSelectRepo}
         onRequestCreateSession={(projectId) => setNewSessionProjectId(projectId)}
         onRequestRemoveSession={(session) => setSessionToRemove(session)}
+        programBadges={programBadges}
       />
       <main className="main-area">
         <AutopilotAlertBar
@@ -359,6 +404,7 @@ export function App(): JSX.Element {
               initialLayout={restoredLayoutsRef.current[session.id]}
               onLayoutChange={handleSessionLayoutChange}
               reviewConfig={projects.find((project) => project.id === session.projectId)?.review}
+              programStatus={programStatuses[session.id] ?? null}
             />
           </div>
         ))}
@@ -385,6 +431,11 @@ export function App(): JSX.Element {
           projectId={newSessionProjectId}
           onClose={() => setNewSessionProjectId(null)}
           onCreated={(session) => void handleSessionCreated(newSessionProjectId, session)}
+          sessions={sessionsByProject[newSessionProjectId] ?? []}
+          onSelectSession={(session) => {
+            setNewSessionProjectId(null);
+            handleSelectSession(session);
+          }}
         />
       )}
       {sessionToRemove && (

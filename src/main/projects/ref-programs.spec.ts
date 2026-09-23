@@ -18,6 +18,7 @@ function write(relative: string, content: string): void {
 }
 
 const PROGRAM = `# Programa · Ventas
+Hijos: 2
 
 # Hijos
 | # | Hijo | Spec | Checkpoint | Depende de | Estado |
@@ -36,10 +37,27 @@ beforeEach(() => {
   write("docs/workflow/specs/v-1.md", "# Hijo 1\n");
   write(
     "docs/workflow/checkpoints/v-1-checkpoint.md",
-    ["---", "feature: Ventas · 1/2 Catálogo", "slug: v-1", "status: DONE", "---", "", "# ▶ NEXT", "- x", "", "# Plans ledger", "", "# Log", ""].join("\n"),
+    [
+      "---",
+      "feature: Ventas · 1/2 Catálogo",
+      "slug: v-1",
+      "status: DONE",
+      "---",
+      "",
+      "# ▶ NEXT",
+      "- x",
+      "",
+      "# Architect memory",
+      "- **Programa:** docs/workflow/specs/ventas-programa.md",
+      "",
+      "# Log",
+      "",
+    ].join("\n"),
   );
   git("add", ".");
   git("commit", "-q", "-m", "base");
+  // Child 1 closed on develop itself, so it is merged.
+  git("update-ref", "refs/remotes/origin/develop", "develop");
 });
 
 afterEach(() => {
@@ -47,15 +65,21 @@ afterEach(() => {
 });
 
 describe("listRefPrograms", () => {
-  it("finds the program on the ref, ignores plain specs, and reads each child's state from its checkpoint", async () => {
+  it("finds the program on the ref, ignores plain specs, and returns the verdict wf:next would give", async () => {
     const programs = await listRefPrograms({ projectRoot: repoDir, ref: "develop" });
     expect(programs).toHaveLength(1);
-    const program = programs[0];
-    expect(program?.path).toBe("docs/workflow/specs/ventas-programa.md");
-    expect(program?.title).toBe("Programa · Ventas");
-    expect(program?.children[0]?.state).toBe("DONE"); // the table said IN_PROGRESS; the checkpoint says DONE
-    expect(program?.next?.index).toBe(2);
-    expect(program?.complete).toBe(false);
+    expect(programs[0]).toMatchObject({ specPath: "docs/workflow/specs/ventas-programa.md", title: "Programa · Ventas", verdict: "READY" });
+    expect(programs[0]?.children[0]?.state).toBe("DONE"); // the table said IN_PROGRESS; the checkpoint says DONE
+    expect(programs[0]?.next?.index).toBe(2);
+  });
+
+  it("lists a spec whose `# Hijos` table is broken as BLOCKED instead of hiding it", async () => {
+    write("docs/workflow/specs/roto-programa.md", "# Roto\nHijos: 1\n\n# Hijos\n| # | Hijo |\n|---|---|\n| 1 | Uno |\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "roto");
+    const programs = await listRefPrograms({ projectRoot: repoDir, ref: "develop" });
+    const broken = programs.find((program) => program.specPath.endsWith("roto-programa.md"));
+    expect(broken?.verdict).toBe("BLOCKED");
   });
 
   it("yields an empty list for a ref that does not resolve", async () => {

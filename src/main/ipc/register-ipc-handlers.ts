@@ -30,6 +30,10 @@ import type { VcsConfig } from "../../shared/workflow/vcs-config";
 import { listGitBranches } from "../projects/git-branches";
 import { listRefCheckpoints } from "../projects/ref-checkpoints";
 import { listRefPrograms } from "../projects/ref-programs";
+import { sessionCheckpointWatchParams } from "../projects/session-checkpoint-watch-params";
+import { createMergeBaseRefresher } from "../projects/program-merge";
+import type { MergeBaseRefresher } from "../projects/program-merge";
+import { PROGRAM_MERGE_BASE } from "../../shared/workflow/program-verdict";
 import { withStageDefaults } from "../../shared/workflow/agent-runtime-config";
 import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
@@ -111,7 +115,7 @@ export interface RegisteredIpcServices {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
-    options?: { targetTokens: number | null },
+    options?: { targetTokens: number | null; forceFresh?: boolean },
   ): Promise<SessionRoleAutopilot>;
 }
 
@@ -130,6 +134,8 @@ export function registerIpcHandlers(params: {
   sessionSetupCoordinator?: SessionSetupCoordinator;
   onSessionCreated?: (session: WorkSession) => Promise<void>;
   onSessionRemoved?: (sessionId: string) => Promise<void>;
+  // Shared with the program status service so both throttle `git fetch origin develop` together.
+  mergeBaseRefresher?: MergeBaseRefresher;
 }): RegisteredIpcServices {
   const {
     projectRegistry,
@@ -146,6 +152,7 @@ export function registerIpcHandlers(params: {
     sessionSetupCoordinator: providedSessionSetupCoordinator,
     onSessionCreated,
     onSessionRemoved,
+    mergeBaseRefresher = createMergeBaseRefresher(),
   } = params;
   const ipc = transport;
   const sessionSetupCoordinator = providedSessionSetupCoordinator ?? createSessionSetupCoordinator();
@@ -188,13 +195,7 @@ export function registerIpcHandlers(params: {
       worktreePath: session.worktreePath,
     });
     if (session.checkpointPath) return;
-    await sessionCheckpointWatchManager.watchSession({
-      sessionId: session.id,
-      worktreePath: session.worktreePath,
-      createdAtEpochMs: session.createdAtEpochMs,
-      expectedCheckpointPath:
-        session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
-    });
+    await sessionCheckpointWatchManager.watchSession(sessionCheckpointWatchParams(session));
   }
 
   async function refreshCheckpointWatch(project: ProjectRecord): Promise<void> {
@@ -494,7 +495,8 @@ export function registerIpcHandlers(params: {
 
   ipc.handle(IPC_CHANNELS.gitListRefPrograms, async (_event, projectId: string, ref: string) => {
     const project = await findProject(projectRegistry, projectId);
-    return listRefPrograms({ projectRoot: project.rootPath, ref });
+    const fetchNote = await mergeBaseRefresher.refresh(project.rootPath, PROGRAM_MERGE_BASE, false);
+    return listRefPrograms({ projectRoot: project.rootPath, ref, fetchNote });
   });
 
   ipc.handle(IPC_CHANNELS.projectsSetVcsToken, async (_event, projectId: string, token: string) => {
@@ -885,7 +887,7 @@ export function registerIpcHandlers(params: {
     role: SessionAgentRole,
     sessionLane: string,
     wfPrompt: string,
-    options?: { targetTokens: number | null },
+    options?: { targetTokens: number | null; forceFresh?: boolean },
   ): Promise<SessionRoleAutopilot> {
       assertSessionLaneRole(sessionLane, role);
       const session = await sessionRegistry.getSession({ sessionId });
@@ -899,8 +901,9 @@ export function registerIpcHandlers(params: {
         sessionLane,
         cwd: session.worktreePath,
         agentConfig,
-        // Provider-neutral: lo que ESTE lane reportó en su último wf:done.
-        forceFresh: shouldForceFreshContext(options?.targetTokens ?? null),
+        // Provider-neutral: lo que ESTE lane reportó en su último wf:done. A
+        // program's next child asks for a new conversation outright.
+        forceFresh: options?.forceFresh === true || shouldForceFreshContext(options?.targetTokens ?? null),
       });
       if (
         sessionDirective?.mode === "resume" &&

@@ -1,3 +1,4 @@
+import { programPathOf } from "./program-spec";
 import type {
   CorrectionPlan,
   FindingStatus,
@@ -470,9 +471,9 @@ function parseFindings(sectionText: string): { findings: WorkflowFinding[]; coun
   return { findings, counts: { open, closed, total: findings.length } };
 }
 
-/** The program a child checkpoint belongs to, from the `# Architect memory` bullet; outside the machine contract, so a plain regex. */
+/** The program a child checkpoint belongs to, read exactly as the workflow reads it (`programPathOf`). */
 export function parseProgramPointer(body: string): string | null {
-  return body.match(/^[ \t]*[-*][ \t]*\*\*Programa:\*\*[ \t]*(\S+)/m)?.[1] ?? null;
+  return programPathOf(body);
 }
 
 export function parseCheckpointMarkdown(params: { checkpointPath: string; markdown: string }): ParsedCheckpoint {

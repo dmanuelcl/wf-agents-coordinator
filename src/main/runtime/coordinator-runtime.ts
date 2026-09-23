@@ -1,16 +1,20 @@
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS, SESSION_IPC_CHANNELS } from "../../shared/ipc/contract";
+import type { SessionUpdatedEvent } from "../../shared/ipc/contract";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
-import { prFixCompletionCheckpointPath } from "../../shared/workflow/pr-fix-kickoff";
 import { registerIpcHandlers } from "../ipc/register-ipc-handlers";
 import { registerTerminalIpcHandlers } from "../ipc/register-terminal-ipc-handlers";
 import type { IpcTransport } from "../ipc/ipc-transport";
 import type { SystemIntegration } from "../platform/system-integration";
 import { createChokidarWatcher } from "../projects/chokidar-watcher-adapter";
 import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manager";
+import { createMergeBaseRefresher } from "../projects/program-merge";
+import { createProgramStatusService } from "../projects/program-status-service";
+import { createProgramSessionActions } from "../projects/program-session-actions";
 import { sessionsOwningCheckpoint } from "../projects/checkpoint-session-routing";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
+import { sessionCheckpointWatchParams } from "../projects/session-checkpoint-watch-params";
 import { createSessionHandoffWatchManager } from "../projects/session-handoff-watch-manager";
 import { createSessionRegistry } from "../projects/session-registry";
 import { createSessionOrchestrator } from "../projects/session-orchestrator";
@@ -76,9 +80,20 @@ export async function createCoordinatorRuntime(
       throw error;
     }
   }
+  const mergeBaseRefresher = createMergeBaseRefresher();
+  const programStatusService = createProgramStatusService({
+    getSession: (sessionId) => sessionRegistry.getSession({ sessionId }),
+    listSessions: (projectId) => sessionRegistry.listSessions({ projectId }),
+    projectRootOf: async (projectId) =>
+      (await projectRegistry.listProjects()).find((candidate) => candidate.id === projectId)?.rootPath ?? null,
+    readSessionCheckpoint: (session) => readSessionCheckpointForRunner(session.id),
+    refresher: mergeBaseRefresher,
+    broadcast,
+  });
   const checkpointWatchManager = createCheckpointWatchManager({
     createWatcher: createChokidarWatcher,
     onCheckpointChanged: (projectId, checkpoint) => {
+      programStatusService.onCheckpointChanged(projectId, checkpoint.checkpointPath);
       broadcast(CHECKPOINT_IPC_CHANNELS.changed, { projectId, checkpoint });
       void Promise.all([
         projectRegistry.listProjects(),
@@ -97,9 +112,19 @@ export async function createCoordinatorRuntime(
         console.error(`Could not route checkpoint ${checkpoint.checkpointPath} to auto-pilot:`, error);
       });
     },
-    onCheckpointRemoved: (projectId, checkpointPath) =>
-      broadcast(CHECKPOINT_IPC_CHANNELS.removed, { projectId, checkpointPath }),
+    onCheckpointRemoved: (projectId, checkpointPath) => {
+      broadcast(CHECKPOINT_IPC_CHANNELS.removed, { projectId, checkpointPath });
+      programStatusService.onCheckpointChanged(projectId, checkpointPath);
+    },
   });
+  // What a newly bound checkpoint means to everyone else: viewers flip their
+  // gate, auto-pilot starts reading it, the program verdict is recomputed.
+  async function announceSessionCheckpoint(sessionId: string, checkpointPath: string): Promise<void> {
+    broadcast(SESSION_IPC_CHANNELS.checkpointDetected, { sessionId, checkpointPath });
+    const checkpoint = await readSessionCheckpointForRunner(sessionId);
+    if (checkpoint) sessionOrchestrator?.onCheckpoint(sessionId, checkpoint);
+    void programStatusService.refresh(sessionId).catch(() => {});
+  }
   const sessionCheckpointWatchManager = createSessionCheckpointWatchManager({
     createWatcher: createChokidarWatcher,
     onCheckpointDetected: (sessionId, checkpointPath) => {
@@ -107,11 +132,7 @@ export async function createCoordinatorRuntime(
       // a fully updated session record.
       void sessionRegistry
         .updateSessionCheckpoint({ sessionId, checkpointPath })
-        .then(async () => {
-          broadcast(SESSION_IPC_CHANNELS.checkpointDetected, { sessionId, checkpointPath });
-          const checkpoint = await readSessionCheckpointForRunner(sessionId);
-          if (checkpoint) sessionOrchestrator?.onCheckpoint(sessionId, checkpoint);
-        })
+        .then(() => announceSessionCheckpoint(sessionId, checkpointPath))
         .catch((error: unknown) => {
           console.error(`Could not persist checkpoint for session ${sessionId}:`, error);
         });
@@ -188,11 +209,34 @@ export async function createCoordinatorRuntime(
     killTerminalsForWorktree: (worktreePath) => ptySessionManager.killByCwd(worktreePath),
     sessionSetupCoordinator,
     onSessionCreated: (session) => sessionOrchestrator!.ensure(session.id).then(() => {}),
-    onSessionRemoved: (sessionId) => sessionOrchestrator!.remove(sessionId),
+    onSessionRemoved: (sessionId) => {
+      programStatusService.forget(sessionId);
+      return sessionOrchestrator!.remove(sessionId);
+    },
+    mergeBaseRefresher,
   });
   sessionOrchestrator.setRoleLaunchBuilder(ipcServices.buildRoleLaunch);
   sessionOrchestrator.setAutopilotLaunchBuilder(ipcServices.buildRoleAutopilot);
   sessionOrchestrator.setRepoAgentLaunchBuilder(ipcServices.buildRepoAgentLaunch);
+
+  const programSessionActions = createProgramSessionActions({
+    getSession: (sessionId) => sessionRegistry.getSession({ sessionId }),
+    refreshStatus: (sessionId, force) => programStatusService.refresh(sessionId, { force }),
+    updateSessionProgram: (params) => sessionRegistry.updateSessionProgram(params),
+    rewatchCheckpoint: async (session) => {
+      await sessionCheckpointWatchManager.unwatchSession(session.id);
+      await sessionCheckpointWatchManager.watchSession(sessionCheckpointWatchParams(session));
+    },
+    unwatchCheckpoint: (sessionId) => sessionCheckpointWatchManager.unwatchSession(sessionId),
+    resetAutopilot: (sessionId) => sessionOrchestrator!.resetAutopilot(sessionId),
+    beginFreshTurn: (sessionId, role, command) => sessionOrchestrator!.beginFreshTurn(sessionId, role, command),
+    announceCheckpoint: announceSessionCheckpoint,
+    broadcastSession: (session) => broadcast(SESSION_IPC_CHANNELS.sessionUpdated, { session } satisfies SessionUpdatedEvent),
+  });
+  transport.handle(IPC_CHANNELS.sessionsStartProgramChild, (_event, sessionId: string) => programSessionActions.startChild(sessionId));
+  transport.handle(IPC_CHANNELS.sessionsAdoptProgramChild, (_event, sessionId: string, index: number) =>
+    programSessionActions.adoptChild(sessionId, index),
+  );
 
   transport.handle(IPC_CHANNELS.sessionsEnsureRuntime, (_event, sessionId: string) => sessionOrchestrator!.ensure(sessionId));
   transport.handle(IPC_CHANNELS.sessionsGetRuntime, (_event, sessionId: string) => sessionOrchestrator!.runtime(sessionId));
@@ -225,6 +269,10 @@ export async function createCoordinatorRuntime(
   transport.handle(IPC_CHANNELS.sessionsRestoreView, (_event, sessionId: string, intent) =>
     sessionOrchestrator!.restoreView(sessionId, intent),
   );
+  transport.handle(IPC_CHANNELS.programsGetStatus, (_event, sessionId: string) => programStatusService.get(sessionId));
+  transport.handle(IPC_CHANNELS.programsRefresh, (_event, sessionId: string) =>
+    programStatusService.refresh(sessionId, { force: true }),
+  );
 
   // Build session watches before the broad project watcher. Chokidar can miss
   // children of a directory that did not exist when its parent began watching.
@@ -240,15 +288,7 @@ export async function createCoordinatorRuntime(
         await Promise.all(
           workflowSessions
             .filter((session) => session.checkpointPath === null)
-            .map((session) =>
-              sessionCheckpointWatchManager.watchSession({
-                sessionId: session.id,
-                worktreePath: session.worktreePath,
-                createdAtEpochMs: session.createdAtEpochMs,
-                expectedCheckpointPath:
-                  session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
-              }),
-            ),
+            .map((session) => sessionCheckpointWatchManager.watchSession(sessionCheckpointWatchParams(session))),
         );
         // Unlike the checkpoint gate, hand-offs matter for the whole life of a
         // session, so this watches every workflow session, checkpoint or not.
@@ -269,6 +309,7 @@ export async function createCoordinatorRuntime(
 
   return {
     async close() {
+      programStatusService.close();
       ptySessionManager.killAll();
       await scrollbackStore.flush();
       await checkpointWatchManager.closeAll();

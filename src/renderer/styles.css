@@ -3300,3 +3300,127 @@ textarea:focus,
   color: var(--muted-fg);
   cursor: pointer;
 }
+
+/* ── Programs ───────────────────────────────────────────────── */
+.session-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.program-notice-lines {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.program-actions,
+.program-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.program-confirm {
+  font-size: 12px;
+}
+.program-error {
+  margin: 4px 0 0;
+  color: var(--danger-fg);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.program-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.program-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.program-panel-title {
+  font-weight: 600;
+}
+.program-fetch-note {
+  margin: 0;
+  color: var(--gold);
+  font-size: 12px;
+}
+.program-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.program-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.program-child-bound {
+  background: rgba(212, 168, 75, 0.1);
+}
+.program-child-index {
+  min-width: 1.5em;
+  color: var(--muted-fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: right;
+}
+.program-child-here {
+  color: var(--gold);
+  font-weight: 600;
+}
+.program-reasons {
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  font-size: 12px;
+}
+.program-reasons ul,
+.program-hints {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.program-hints {
+  color: var(--muted-fg);
+  font-size: 12px;
+}
+.program-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+.session-row-program-badge {
+  margin-left: auto;
+  padding: 1px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+.session-row-program-badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+.session-row-program-badge-warning {
+  color: var(--gold);
+}
+.session-row-program-badge-ready {
+  color: var(--green);
+}

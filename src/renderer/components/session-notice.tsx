@@ -16,8 +16,8 @@ const NOTICE_ICON: Record<SessionNoticeTone, string> = {
   danger: "!",
 };
 
-export function SessionNotice(props: { tone: SessionNoticeTone; children: ReactNode }): JSX.Element {
-  const { tone, children } = props;
+export function SessionNotice(props: { tone: SessionNoticeTone; children: ReactNode; actions?: ReactNode }): JSX.Element {
+  const { tone, children, actions } = props;
   const urgent = tone === "warning" || tone === "danger";
   return (
     <div
@@ -28,7 +28,8 @@ export function SessionNotice(props: { tone: SessionNoticeTone; children: ReactN
       <span className="session-notice-icon" aria-hidden="true">
         {NOTICE_ICON[tone]}
       </span>
-      <span className="session-notice-copy">{children}</span>
+      <div className="session-notice-copy">{children}</div>
+      {actions && <div className="session-notice-actions">{actions}</div>}
     </div>
   );
 }
