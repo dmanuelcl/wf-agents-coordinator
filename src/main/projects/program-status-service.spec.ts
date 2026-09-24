@@ -25,7 +25,8 @@ function session(overrides: Partial<WorkSession> = {}): WorkSession {
 
 const VERDICT = { specPath: "docs/workflow/specs/p.md", verdict: "READY" } as ProgramVerdict;
 
-function harness(sessions: WorkSession[]) {
+function harness(sessions: WorkSession[], worktreeProgram: string | null = null) {
+  const findWorktreeProgram = vi.fn(async (_worktreePath: string) => worktreeProgram);
   const computeVerdict = vi.fn(async (_params: Parameters<typeof readProgramVerdict>[0]) => VERDICT);
   const refresh = vi.fn(async (_root: string, _base: string, _force: boolean): Promise<string | null> => null);
   const broadcast = vi.fn();
@@ -37,10 +38,11 @@ function harness(sessions: WorkSession[]) {
     refresher: { refresh },
     broadcast,
     computeVerdict,
+    findWorktreeProgram,
     debounceMs: 0,
     intervalMs: 60_000,
   });
-  return { service, computeVerdict, refresh, broadcast };
+  return { service, computeVerdict, refresh, broadcast, findWorktreeProgram };
 }
 
 describe("createProgramStatusService", () => {
@@ -84,6 +86,26 @@ describe("createProgramStatusService", () => {
     service.onCheckpointChanged("p", ".worktrees/a/docs/workflow/checkpoints/x-checkpoint.md");
     await vi.waitFor(() => expect(computeVerdict).toHaveBeenCalledTimes(1));
     expect(computeVerdict.mock.calls[0]?.[0]).toMatchObject({ source: { kind: "worktree", worktreePath: "/repo/.worktrees/a" } });
+    service.close();
+  });
+
+  it("a session bound to the parent still belongs to the program whose child lives in its worktree", async () => {
+    // corp-filing-form-mapping, 2026-09-23: the parent's NEXT moved on to `wf followups`, but child 1 lives here.
+    const { service, computeVerdict, findWorktreeProgram } = harness(
+      [session({ checkpointPath: "docs/workflow/checkpoints/padre-checkpoint.md" })],
+      "docs/workflow/specs/p.md",
+    );
+    expect(await service.get("s1")).toBe(VERDICT);
+    expect(findWorktreeProgram).toHaveBeenCalledWith("/repo/.worktrees/s");
+    expect(computeVerdict).toHaveBeenCalledWith(expect.objectContaining({ specPath: "docs/workflow/specs/p.md" }));
+    service.close();
+  });
+
+  it("PR sessions never look for a program in their worktree", async () => {
+    const { service, findWorktreeProgram, computeVerdict } = harness([session({ kind: "pr-fix" })], "docs/workflow/specs/p.md");
+    expect(await service.get("s1")).toBeNull();
+    expect(findWorktreeProgram).not.toHaveBeenCalled();
+    expect(computeVerdict).not.toHaveBeenCalled();
     service.close();
   });
 });

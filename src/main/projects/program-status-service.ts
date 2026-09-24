@@ -8,6 +8,7 @@ import type { WorkSession } from "../../shared/workflow/work-session";
 import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
 import type { MergeBaseRefresher } from "./program-merge";
 import { readProgramVerdict } from "./program-status";
+import { worktreeProgramSpec } from "./worktree-program";
 
 export interface ProgramStatusService {
   /** The cached verdict, computed on first request. */
@@ -33,10 +34,12 @@ export function createProgramStatusService(deps: {
   refresher: MergeBaseRefresher;
   broadcast(channel: string, payload: unknown): void;
   computeVerdict?: typeof readProgramVerdict;
+  findWorktreeProgram?: (worktreePath: string) => Promise<string | null>;
   intervalMs?: number;
   debounceMs?: number;
 }): ProgramStatusService {
   const computeVerdict = deps.computeVerdict ?? readProgramVerdict;
+  const findWorktreeProgram = deps.findWorktreeProgram ?? worktreeProgramSpec;
   const debounceMs = deps.debounceMs ?? 750;
   const cache = new Map<string, ProgramVerdict | null>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -46,7 +49,11 @@ export function createProgramStatusService(deps: {
     let status: ProgramVerdict | null = null;
     if (session) {
       const checkpoint = await deps.readSessionCheckpoint(session).catch(() => null);
-      const specPath = sessionProgramSpec(session, checkpoint);
+      // Its own binding first; otherwise the program whose children live in its worktree (a session
+      // bound to the parent keeps its program after the parent's NEXT stops saying `wf next`).
+      const specPath =
+        sessionProgramSpec(session, checkpoint) ??
+        (session.kind === "feature" || session.kind === "fix" ? await findWorktreeProgram(session.worktreePath) : null);
       const projectRoot = specPath ? await deps.projectRootOf(session.projectId) : null;
       if (specPath && projectRoot) {
         const fetchNote = await deps.refresher.refresh(projectRoot, PROGRAM_MERGE_BASE, force);

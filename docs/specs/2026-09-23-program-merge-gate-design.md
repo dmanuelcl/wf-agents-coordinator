@@ -128,6 +128,11 @@ In priority order:
 3. The bound checkpoint's `▶ NEXT` command, when it is `wf next <spec>`. That is a parent that
    spawned the program, or a closed child pointing to the next one.
 4. `session.initialPrompt`, when it is `wf next <spec>` (a child session with no checkpoint yet).
+5. Otherwise (feature/fix only): the program whose children live in the session's worktree, meaning a
+   checkpoint there declares `Programa:`. A program with an open child wins, then the most recently
+   touched one. This covers a session bound to the parent after the parent's `▶ NEXT` stops saying
+   `wf next`: on 2026-09-23 the real `corp-filing-form-mapping` session moved on to `wf followups` and
+   lost its program, while child 1 lived in the same worktree.
 
 A session that matches none of these has no program UI.
 
