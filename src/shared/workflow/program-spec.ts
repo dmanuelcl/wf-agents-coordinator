@@ -170,6 +170,18 @@ export function frontmatterStatus(checkpointText: string): string | null {
   return frontmatter?.[1]?.match(/^status:\s*([A-Z_]+)/m)?.[1] ?? null;
 }
 
+/** A frontmatter value of a checkpoint (`branch`, `worktree`…), backticks and quotes stripped. */
+export function frontmatterField(checkpointText: string, key: string): string | null {
+  const frontmatter = checkpointText.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1];
+  const value = frontmatter?.match(new RegExp(`^${key}:[ \\t]*(.*)$`, "m"))?.[1]?.replace(/[`'"]/g, "").trim();
+  return value || null;
+}
+
+/** `origin/feature/x` and `feature/x` name the same branch. */
+export function localBranchName(ref: string): string {
+  return ref.trim().replace(/^origin\//, "");
+}
+
 /** The `Estado` a checkpoint's `status:` dictates: DONE when it closed, IN_PROGRESS otherwise. */
 export function derivedChildState(status: string | null): "IN_PROGRESS" | "DONE" {
   return status === "DONE" ? "DONE" : "IN_PROGRESS";

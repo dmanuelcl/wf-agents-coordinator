@@ -41,6 +41,7 @@ beforeEach(() => {
       "---",
       "feature: Ventas · 1/2 Catálogo",
       "slug: v-1",
+      "branch: develop",
       "status: DONE",
       "---",
       "",
@@ -85,4 +86,21 @@ describe("listRefPrograms", () => {
   it("yields an empty list for a ref that does not resolve", async () => {
     expect(await listRefPrograms({ projectRoot: repoDir, ref: "no-such-ref" })).toEqual([]);
   });
+
+  it("does not list a program whose children belong to another branch — it only arrived here through develop", async () => {
+    git("checkout", "-q", "-b", "feature/deploy-platform");
+    const programs = await listRefPrograms({ projectRoot: repoDir, ref: "feature/deploy-platform" });
+    expect(programs.map((program) => program.specPath)).toEqual([]);
+  });
+
+  it("lists a program born on the branch that has no child checkpoint yet and is not in origin/develop", async () => {
+    git("checkout", "-q", "-b", "feature/nuevo");
+    write("docs/workflow/specs/nuevo-programa.md", "# Nuevo\nHijos: 1\n\n# Hijos\n| # | Hijo | Spec | Checkpoint | Depende de | Estado |\n|---|---|---|---|---|---|\n| 1 | Uno | – | – | – | PENDING |\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "nace el programa");
+    const programs = await listRefPrograms({ projectRoot: repoDir, ref: "feature/nuevo" });
+    expect(programs.map((program) => program.specPath)).toEqual(["docs/workflow/specs/nuevo-programa.md"]);
+    expect(await listRefPrograms({ projectRoot: repoDir, ref: "origin/feature/nuevo" })).toEqual([]); // unresolvable: no remote branch
+  });
 });
+

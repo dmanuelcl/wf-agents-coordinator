@@ -117,7 +117,10 @@ Two sources feed the same verdict:
 
 - **Session (worktree):** files from disk and `<ref>` = `HEAD`, which is what `wf:next` reads.
 - **Dialog (ref, no checkout):** files via `git show <ref>:<path>` and `<ref>` = the chosen branch
-  (`ref-programs.ts`, which now returns verdicts).
+  (`ref-programs.ts`, which now returns verdicts). It lists only the ref's **own** programs: one of their
+  children declares `branch: <ref>`, or, with no child checkpoint yet, the spec is not in
+  `origin/develop` (it was born on this branch). The programs merged into develop are not the
+  branch's.
 
 ### Which program a session belongs to
 
@@ -128,9 +131,12 @@ In priority order:
 3. The bound checkpoint's `▶ NEXT` command, when it is `wf next <spec>`. That is a parent that
    spawned the program, or a closed child pointing to the next one.
 4. `session.initialPrompt`, when it is `wf next <spec>` (a child session with no checkpoint yet).
-5. Otherwise (feature/fix only): the program whose children live in the session's worktree, meaning a
-   checkpoint there declares `Programa:`. A program with an open child wins, then the most recently
-   touched one. This covers a session bound to the parent after the parent's `▶ NEXT` stops saying
+5. Otherwise (feature/fix only): the program whose children were made on the session's **branch**,
+   meaning a checkpoint that declares `Programa:` and whose frontmatter `branch:` is the session's
+   branch. A program with an open child wins, then the most recently touched one. The branch filter
+   is required: every worktree also holds the checkpoints of every feature merged in through develop,
+   other programs' children included. Without it, `deploy-platform` showed the `sales-channels`
+   program (2026-09-25). This covers a session bound to the parent after the parent's `▶ NEXT` stops saying
    `wf next`: on 2026-09-23 the real `corp-filing-form-mapping` session moved on to `wf followups` and
    lost its program, while child 1 lived in the same worktree.
 

@@ -26,7 +26,7 @@ function session(overrides: Partial<WorkSession> = {}): WorkSession {
 const VERDICT = { specPath: "docs/workflow/specs/p.md", verdict: "READY" } as ProgramVerdict;
 
 function harness(sessions: WorkSession[], worktreeProgram: string | null = null) {
-  const findWorktreeProgram = vi.fn(async (_worktreePath: string) => worktreeProgram);
+  const findWorktreeProgram = vi.fn(async (_worktreePath: string, _branch: string) => worktreeProgram);
   const computeVerdict = vi.fn(async (_params: Parameters<typeof readProgramVerdict>[0]) => VERDICT);
   const refresh = vi.fn(async (_root: string, _base: string, _force: boolean): Promise<string | null> => null);
   const broadcast = vi.fn();
@@ -96,7 +96,8 @@ describe("createProgramStatusService", () => {
       "docs/workflow/specs/p.md",
     );
     expect(await service.get("s1")).toBe(VERDICT);
-    expect(findWorktreeProgram).toHaveBeenCalledWith("/repo/.worktrees/s");
+    // Only children of THIS branch count: other programs' children arrive in every worktree through develop.
+    expect(findWorktreeProgram).toHaveBeenCalledWith("/repo/.worktrees/s", "feature/s");
     expect(computeVerdict).toHaveBeenCalledWith(expect.objectContaining({ specPath: "docs/workflow/specs/p.md" }));
     service.close();
   });

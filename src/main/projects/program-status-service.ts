@@ -34,7 +34,7 @@ export function createProgramStatusService(deps: {
   refresher: MergeBaseRefresher;
   broadcast(channel: string, payload: unknown): void;
   computeVerdict?: typeof readProgramVerdict;
-  findWorktreeProgram?: (worktreePath: string) => Promise<string | null>;
+  findWorktreeProgram?: (worktreePath: string, branch: string) => Promise<string | null>;
   intervalMs?: number;
   debounceMs?: number;
 }): ProgramStatusService {
@@ -49,11 +49,11 @@ export function createProgramStatusService(deps: {
     let status: ProgramVerdict | null = null;
     if (session) {
       const checkpoint = await deps.readSessionCheckpoint(session).catch(() => null);
-      // Its own binding first; otherwise the program whose children live in its worktree (a session
+      // Its own binding first; otherwise the program whose children were made on its branch (a session
       // bound to the parent keeps its program after the parent's NEXT stops saying `wf next`).
       const specPath =
         sessionProgramSpec(session, checkpoint) ??
-        (session.kind === "feature" || session.kind === "fix" ? await findWorktreeProgram(session.worktreePath) : null);
+        (session.kind === "feature" || session.kind === "fix" ? await findWorktreeProgram(session.worktreePath, session.branch) : null);
       const projectRoot = specPath ? await deps.projectRootOf(session.projectId) : null;
       if (specPath && projectRoot) {
         const fetchNote = await deps.refresher.refresh(projectRoot, PROGRAM_MERGE_BASE, force);
