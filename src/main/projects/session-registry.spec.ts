@@ -276,6 +276,22 @@ describe("SessionRegistry", () => {
     expect(reloaded?.pr?.lastReviewedSha).toBe("deadbeef");
   });
 
+  it("setSessionPr links a feature session to its PR without changing its kind or checkpoint", async () => {
+    initGitRepo(repoDir);
+    const registry = createSessionRegistry({ storeFilePath });
+    const session = await registry.createSession({ projectId: "p1", projectRoot: repoDir, name: "My Feature", kind: "feature" });
+    await registry.updateSessionCheckpoint({ sessionId: session.id, checkpointPath: "docs/workflow/checkpoints/x-checkpoint.md" });
+    const pr = { host: "bitbucket" as const, workspace: "a", repo: "b", prId: "9", url: "u", lastReviewedSha: null, fixBaseSha: "abc" };
+
+    const updated = await registry.setSessionPr({ sessionId: session.id, pr });
+
+    expect(updated.pr).toEqual(pr);
+    const reloaded = await registry.getSession({ sessionId: session.id });
+    expect(reloaded?.pr).toEqual(pr);
+    expect(reloaded?.kind).toBe("feature");
+    expect(reloaded?.checkpointPath).toBe("docs/workflow/checkpoints/x-checkpoint.md");
+  });
+
   it("createFixSession checks out a WRITABLE branch worktree (not detached)", async () => {
     initGitRepo(repoDir);
     execFileSync("git", ["branch", "feature/fixme"], { cwd: repoDir });

@@ -190,6 +190,7 @@ export const IPC_CHANNELS = {
   programsGetStatus: "programs:get-status",
   programsRefresh: "programs:refresh",
   sessionsStartProgramChild: "sessions:start-program-child",
+  sessionsStartPrFix: "sessions:start-pr-fix",
   sessionsAdoptProgramChild: "sessions:adopt-program-child",
 } as const;
 
@@ -404,6 +405,8 @@ export interface AgentCoordinatorApi {
     startProgramChild(sessionId: string): Promise<WorkSession>;
     // Bind this session to a program child that is already IN_PROGRESS.
     adoptProgramChild(sessionId: string, index: number): Promise<WorkSession>;
+    // PR fix in place: link the PR from this session's branch and let its Reviewer reopen the DONE checkpoint.
+    startPrFix(sessionId: string, url: string): Promise<WorkSession>;
     onSessionUpdated(cb: (e: SessionUpdatedEvent) => void): () => void;
   };
   programs: {

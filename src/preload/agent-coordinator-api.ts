@@ -98,6 +98,7 @@ export function createAgentCoordinatorApi(
       onRuntimeChanged: (callback) => on<SessionRuntimeChangedEvent>(SESSION_IPC_CHANNELS.runtimeChanged, callback),
       startProgramChild: (sessionId) => invoke(IPC_CHANNELS.sessionsStartProgramChild, sessionId) as ReturnType<AgentCoordinatorApi["sessions"]["startProgramChild"]>,
       adoptProgramChild: (sessionId, index) => invoke(IPC_CHANNELS.sessionsAdoptProgramChild, sessionId, index) as ReturnType<AgentCoordinatorApi["sessions"]["adoptProgramChild"]>,
+      startPrFix: (sessionId, url) => invoke(IPC_CHANNELS.sessionsStartPrFix, sessionId, url) as ReturnType<AgentCoordinatorApi["sessions"]["startPrFix"]>,
       onSessionUpdated: (callback) => on<SessionUpdatedEvent>(SESSION_IPC_CHANNELS.sessionUpdated, callback),
     },
     programs: {

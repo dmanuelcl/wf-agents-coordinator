@@ -18,6 +18,8 @@ import type { LedgerRow, ParsedCheckpoint, WorkflowFollowUp, WorkflowNext, Workf
 import { buildSlackPostCommand, buildSlackSummaryCommand } from "../../shared/workflow/review-config";
 import type { ReviewConfig } from "../../shared/workflow/review-config";
 import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
+import { getSessionPrFixGate, getSessionPrPushGate } from "../../shared/workflow/session-pr-fix";
+import { SessionPrFixDialog } from "./SessionPrFixDialog";
 import { planFileCandidates, planFileToken } from "./log-plan-link";
 import { SessionNotice, toneForReviewMessage } from "./session-notice";
 import { ProgramNotice, ProgramPanel } from "./ProgramPanel";
@@ -500,6 +502,11 @@ export function SessionView(props: SessionViewProps): JSX.Element {
   const [checkpoint, setCheckpoint] = useState<ParsedCheckpoint | null>(null);
   const programActions = useProgramActions(session.id);
   const prFixPushGate = getPrFixPushGate(fixMode ? checkpoint : null);
+  // A feature/fix session fixes its own PR in place: the PR's branch lives in this worktree.
+  const workflowSession = !repoMode && (kind === "feature" || kind === "fix");
+  const sessionPrFixGate = getSessionPrFixGate(session, workflowSession ? checkpoint : null);
+  const pushGate = fixMode ? prFixPushGate : getSessionPrPushGate(session, workflowSession ? checkpoint : null);
+  const [prFixDialogOpen, setPrFixDialogOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   // Auto-pilot conductor: per-session on/off and the last action line shown in
@@ -835,7 +842,7 @@ export function SessionView(props: SessionViewProps): JSX.Element {
 
   // Push the committed fixes to the PR branch (git push). Outward action — button only.
   async function handlePushFix(): Promise<void> {
-    if (posting || !prFixPushGate.allowed) return;
+    if (posting || !pushGate.allowed) return;
     setPosting(true);
     setReviewPostMsg("Pushing to the PR branch…");
     try {
@@ -905,10 +912,47 @@ export function SessionView(props: SessionViewProps): JSX.Element {
               )}
             </>
           ) : (
-            <span className="session-topbar-kind">{KIND_LABELS[kind]}</span>
+            <>
+              <span className="session-topbar-kind">{KIND_LABELS[kind]}</span>
+              {session.pr && (
+                <button
+                  type="button"
+                  className="session-topbar-pr-chip"
+                  title={session.pr.url}
+                  onClick={() => session.pr && void window.agentCoordinator.system.openExternal(session.pr.url)}
+                >
+                  PR #{session.pr.prId}
+                </button>
+              )}
+            </>
           )}
         </div>
         <div className="session-topbar-meta">
+          {workflowSession && hasCheckpoint && (
+            <button
+              type="button"
+              className="session-topbar-diff"
+              disabled={!sessionPrFixGate.allowed}
+              title={
+                sessionPrFixGate.reason ??
+                "Fix the PR's comments here: the Reviewer reopens the checkpoint with them and the workflow runs the correction"
+              }
+              onClick={() => setPrFixDialogOpen(true)}
+            >
+              PR fix
+            </button>
+          )}
+          {workflowSession && session.pr && (
+            <button
+              type="button"
+              className="session-topbar-diff"
+              disabled={posting || !pushGate.allowed}
+              title={pushGate.reason ?? `Push the reviewed fixes to PR #${session.pr.prId} (git push)`}
+              onClick={() => void handlePushFix()}
+            >
+              {posting ? "Pushing…" : "Push to PR"}
+            </button>
+          )}
           {fixMode && (
             <button
               type="button"
@@ -1047,8 +1091,21 @@ export function SessionView(props: SessionViewProps): JSX.Element {
         </SessionNotice>
       )}
 
-      {prSession && reviewPostMsg && (
+      {(prSession || workflowSession) && reviewPostMsg && (
         <SessionNotice tone={toneForReviewMessage(reviewPostMsg)}>{reviewPostMsg}</SessionNotice>
+      )}
+
+      {prFixDialogOpen && (
+        <SessionPrFixDialog
+          session={session}
+          onClose={() => setPrFixDialogOpen(false)}
+          onStarted={(updated) => {
+            setPrFixDialogOpen(false);
+            setOpenedRoleTabs((current) => (current.has("reviewer") ? current : new Set(current).add("reviewer")));
+            setActiveTab("reviewer");
+            setReviewPostMsg(`PR fix started ✓ The Reviewer is reopening the checkpoint with PR #${updated.pr?.prId ?? ""}'s comments.`);
+          }}
+        />
       )}
 
       {!repoMode && !prSession && programStatus && (

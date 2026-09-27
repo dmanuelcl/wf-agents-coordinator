@@ -78,8 +78,8 @@ export interface SessionOrchestrator {
   restoreView(sessionId: string, intent: SessionViewRestoreIntent): Promise<RunnerSessionRuntimeRecord>;
   /** Relaunch `role` in a NEW provider conversation with `command` submitted: a program's next child starts its own turn. */
   beginFreshTurn(sessionId: string, role: SessionAgentRole, command: string): Promise<void>;
-  /** Forget what auto-pilot knew about the session's previous checkpoint: the session now follows another one. */
-  resetAutopilot(sessionId: string): Promise<void>;
+  /** Forget what auto-pilot knew about the session's checkpoint: it follows another one, or a PR fix reopened it. `reason` is the notice shown. */
+  resetAutopilot(sessionId: string, reason?: string): Promise<void>;
   onCheckpoint(sessionId: string, checkpoint: ParsedCheckpoint): void;
   onHandoff(sessionId: string, handoff: SessionHandoff): void;
   onSetupExit(params: { sessionId: string; code: number }): Promise<void>;
@@ -833,7 +833,7 @@ export function createSessionOrchestrator(params: {
         await publish(sessionId, session.setupDone, runtime);
       });
     },
-    resetAutopilot(sessionId) {
+    resetAutopilot(sessionId, reason = "Auto-pilot reset: the session follows another checkpoint of its program") {
       return serial(sessionId, async () => {
         const timer = autoPilotTimers.get(sessionId);
         if (timer) clearTimeout(timer);
@@ -845,7 +845,7 @@ export function createSessionOrchestrator(params: {
         if (!runtime) return;
         runtime.autoPilot.state = INITIAL_CONDUCTOR_STATE;
         clearAttention(runtime);
-        if (runtime.autoPilot.enabled) runtime.autoPilot.message = "Auto-pilot reset: the session follows another checkpoint of its program";
+        if (runtime.autoPilot.enabled) runtime.autoPilot.message = reason;
         await publish(sessionId, (await sessionFor(sessionId)).setupDone, runtime);
       });
     },

@@ -89,6 +89,8 @@ export interface SessionRegistry {
     initialPrompt: string | null;
   }): Promise<WorkSession>;
   setReviewedSha(params: { sessionId: string; sha: string }): Promise<void>;
+  /** Link a feature/fix session to the PR it opened, when a PR fix starts inside it. */
+  setSessionPr(params: { sessionId: string; pr: PrLink }): Promise<WorkSession>;
   markSetupDone(params: { sessionId: string }): Promise<void>;
   removeSession(params: { sessionId: string }): Promise<void>;
 }
@@ -691,6 +693,18 @@ export function createSessionRegistry(params: { storeFilePath: string }): Sessio
         if (!current.pr) throw new Error("Session has no PR to update.");
         records[index] = { ...current, pr: { ...current.pr, lastReviewedSha: sha } };
         await writeAll(records);
+      });
+    },
+
+    setSessionPr({ sessionId, pr }) {
+      return runExclusive(async () => {
+        const records = await readAll();
+        const index = records.findIndex((record) => record.id === sessionId);
+        if (index === -1) throw new Error(`Session not found: ${sessionId}`);
+        const updated: WorkSession = { ...(records[index] as WorkSession), pr };
+        records[index] = updated;
+        await writeAll(records);
+        return updated;
       });
     },
 

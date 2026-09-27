@@ -24,6 +24,7 @@ import {
   prFixCompletionCheckpointPath,
 } from "../../shared/workflow/pr-fix-kickoff";
 import { getPrFixPushGate } from "../../shared/workflow/pr-fix-push-gate";
+import { getSessionPrPushGate } from "../../shared/workflow/session-pr-fix";
 import { REPO_SESSION_PREFIX, truncateSessionName } from "../../shared/workflow/work-session";
 import type { PrLink, WorkSession } from "../../shared/workflow/work-session";
 import type { VcsConfig } from "../../shared/workflow/vcs-config";
@@ -38,7 +39,7 @@ import { withStageDefaults } from "../../shared/workflow/agent-runtime-config";
 import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
 import { getProvider } from "../vcs/get-provider";
 import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
-import type { PrRef, ReviewComment } from "../vcs/vcs-provider";
+import type { PrRef, ResolvedPr, ReviewComment } from "../vcs/vcs-provider";
 import type { VcsSecretStore } from "../vcs/vcs-secret-store";
 
 function prRefOf(pr: PrLink): PrRef {
@@ -59,6 +60,7 @@ import {
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
+import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
 import { buildRoleLaunchPlan } from "../../shared/workflow/role-launch-plan";
 import type { LaunchRole } from "../../shared/workflow/role-launch-plan";
 import {
@@ -117,6 +119,11 @@ export interface RegisteredIpcServices {
     wfPrompt: string,
     options?: { targetTokens: number | null; forceFresh?: boolean },
   ): Promise<SessionRoleAutopilot>;
+  // What an in-place PR fix needs from the VCS and git side (session-pr-fix-actions).
+  resolvePr(projectId: string, url: string): Promise<ResolvedPr>;
+  readSessionCheckpoint(session: WorkSession): Promise<ParsedCheckpoint | null>;
+  worktreeHead(session: WorkSession, sha: string): Promise<{ head: string; contains: boolean }>;
+  writePrFixContext(session: WorkSession): Promise<{ comments: number; loadError: string | null }>;
 }
 
 export function registerIpcHandlers(params: {
@@ -229,8 +236,8 @@ export function registerIpcHandlers(params: {
     session: WorkSession,
     project: ProjectRecord,
     mode: "review" | "fix",
-  ): Promise<void> {
-    if (!session.pr) return;
+  ): Promise<{ comments: number; loadError: string | null }> {
+    if (!session.pr) return { comments: 0, loadError: "The session has no PR." };
     let comments: ReviewComment[] = [];
     let loadError: string | null = null;
     try {
@@ -255,11 +262,34 @@ export function registerIpcHandlers(params: {
     // Also apply this at launch so sessions created by older app versions gain
     // the local exclude before the new context file is written.
     await addWorktreeExclude(session.worktreePath, PR_CONTEXT_ARTIFACT);
-    if (mode === "fix") {
+    if (session.kind === "pr-fix") {
       await addWorktreeExclude(session.worktreePath, prFixCompletionCheckpointPath(session.slug));
     }
     if (mode === "review") await addWorktreeExclude(session.worktreePath, REVIEW_ARTIFACT);
     await writeFile(join(session.worktreePath, PR_CONTEXT_ARTIFACT), content, "utf8");
+    return { comments: comments.length, loadError };
+  }
+
+  async function resolvePrForProject(projectId: string, url: string): Promise<ResolvedPr> {
+    const project = await findProject(projectRegistry, projectId);
+    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
+    const ref = parsePrUrl(project.vcs.host, url);
+    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
+    return getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
+  }
+
+  // Fetch first so a PR head pushed from elsewhere is known locally; offline, the
+  // ancestry check simply fails and the caller asks for a pull.
+  async function worktreeHead(session: WorkSession, sha: string): Promise<{ head: string; contains: boolean }> {
+    const cwd = session.worktreePath;
+    await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd }).catch(() => {});
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    if (!sha) return { head, contains: true };
+    const contains = await execFileAsync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd }).then(
+      () => true,
+      () => false,
+    );
+    return { head, contains };
   }
 
   // The command auto-typed into a reviewer/agent tab: a `wf` command normally,
@@ -526,20 +556,11 @@ export function registerIpcHandlers(params: {
     },
   );
 
-  ipc.handle(IPC_CHANNELS.gitResolvePrUrl, async (_event, projectId: string, url: string) => {
-    const project = await findProject(projectRegistry, projectId);
-    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
-    const ref = parsePrUrl(project.vcs.host, url);
-    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
-    return getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
-  });
+  ipc.handle(IPC_CHANNELS.gitResolvePrUrl, (_event, projectId: string, url: string) => resolvePrForProject(projectId, url));
 
   ipc.handle(IPC_CHANNELS.sessionsCreateReviewFromPr, async (_event, projectId: string, input: { url: string }) => {
     const project = await findProject(projectRegistry, projectId);
-    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
-    const ref = parsePrUrl(project.vcs.host, input.url);
-    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
-    const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
+    const resolved = await resolvePrForProject(projectId, input.url);
     // Review the PR's pushed state: origin/<source> against origin/<target>.
     // The anchor belongs to the PR, not to the session: a new round must inherit what the previous
     // one posted, or the reviewer loses the incremental delta and re-reads the whole branch.
@@ -574,10 +595,7 @@ export function registerIpcHandlers(params: {
     input: { url: string; diagnoseFirst?: boolean },
   ) => {
     const project = await findProject(projectRegistry, projectId);
-    if (project.vcs.host === "none") throw new Error("This project has no VCS host configured.");
-    const ref = parsePrUrl(project.vcs.host, input.url);
-    if (!ref) throw new Error("Could not parse a PR from that URL for the configured host.");
-    const resolved = await getProvider(project.vcs.host).resolvePr(ref, await vcsCredentialsFor(project));
+    const resolved = await resolvePrForProject(projectId, input.url);
     // Writable checkout of the PR source branch; base kept for diff context.
     const session = await sessionRegistry.createFixSession({
       projectId,
@@ -608,11 +626,19 @@ export function registerIpcHandlers(params: {
   ipc.handle(IPC_CHANNELS.sessionsPushFixBranch, async (_event, sessionId: string) => {
     const session = await sessionRegistry.getSession({ sessionId });
     if (!session) throw new Error("Session not found.");
-    if (session.kind !== "pr-fix") throw new Error("Only a PR fix session can push.");
-    const pushGate = getPrFixPushGate(await readSessionCheckpoint(session));
+    const checkpoint = await readSessionCheckpoint(session);
+    if (session.kind === "pr-fix") {
+      const pushGate = getPrFixPushGate(checkpoint);
+      if (!pushGate.allowed) throw new Error(`Push blocked: ${pushGate.reason}`);
+      // The branch tracks origin/<source>, so a bare push updates the PR.
+      const res = await execFileAsync("git", ["push"], { cwd: session.worktreePath });
+      return { output: `${res.stdout}${res.stderr}`.trim() || "Pushed." };
+    }
+    if (session.kind !== "feature" && session.kind !== "fix") throw new Error("This session cannot push to a PR.");
+    const pushGate = getSessionPrPushGate(session, checkpoint);
     if (!pushGate.allowed) throw new Error(`Push blocked: ${pushGate.reason}`);
-    // The branch tracks origin/<source>, so a bare push updates the PR.
-    const res = await execFileAsync("git", ["push"], { cwd: session.worktreePath });
+    // The PR fix verified that the PR comes from this branch; its upstream may never have been set.
+    const res = await execFileAsync("git", ["push", "origin", `HEAD:refs/heads/${session.branch}`], { cwd: session.worktreePath });
     return { output: `${res.stdout}${res.stderr}`.trim() || "Pushed." };
   });
 
@@ -976,5 +1002,10 @@ export function registerIpcHandlers(params: {
     buildRoleLaunch: buildRoleLaunchForRunner,
     buildRepoAgentLaunch: buildRepoAgentLaunchForRunner,
     buildRoleAutopilot: buildRoleAutopilotForRunner,
+    resolvePr: resolvePrForProject,
+    readSessionCheckpoint,
+    worktreeHead,
+    writePrFixContext: async (session) =>
+      refreshPrContextArtifact(session, await findProject(projectRegistry, session.projectId), "fix"),
   };
 }

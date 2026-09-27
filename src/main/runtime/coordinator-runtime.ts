@@ -12,6 +12,7 @@ import { createCheckpointWatchManager } from "../projects/checkpoint-watch-manag
 import { createMergeBaseRefresher } from "../projects/program-merge";
 import { createProgramStatusService } from "../projects/program-status-service";
 import { createProgramSessionActions } from "../projects/program-session-actions";
+import { createSessionPrFixActions } from "../projects/session-pr-fix-actions";
 import { sessionsOwningCheckpoint } from "../projects/checkpoint-session-routing";
 import { createSessionCheckpointWatchManager } from "../projects/session-checkpoint-watch-manager";
 import { sessionCheckpointWatchParams } from "../projects/session-checkpoint-watch-params";
@@ -233,6 +234,18 @@ export async function createCoordinatorRuntime(
     announceCheckpoint: announceSessionCheckpoint,
     broadcastSession: (session) => broadcast(SESSION_IPC_CHANNELS.sessionUpdated, { session } satisfies SessionUpdatedEvent),
   });
+  const sessionPrFixActions = createSessionPrFixActions({
+    getSession: (sessionId) => sessionRegistry.getSession({ sessionId }),
+    readCheckpoint: (session) => ipcServices.readSessionCheckpoint(session),
+    resolvePr: (projectId, url) => ipcServices.resolvePr(projectId, url),
+    worktreeHead: (session, sha) => ipcServices.worktreeHead(session, sha),
+    writePrContext: (session) => ipcServices.writePrFixContext(session),
+    setSessionPr: (params) => sessionRegistry.setSessionPr(params),
+    resetAutopilot: (sessionId) => sessionOrchestrator!.resetAutopilot(sessionId, "Auto-pilot reset: PR fix reopened the checkpoint"),
+    runCommand: (sessionId, role, lane, command) => sessionOrchestrator!.runCommand(sessionId, role, lane, command),
+    broadcastSession: (session) => broadcast(SESSION_IPC_CHANNELS.sessionUpdated, { session } satisfies SessionUpdatedEvent),
+  });
+  transport.handle(IPC_CHANNELS.sessionsStartPrFix, (_event, sessionId: string, url: string) => sessionPrFixActions.start(sessionId, url));
   transport.handle(IPC_CHANNELS.sessionsStartProgramChild, (_event, sessionId: string) => programSessionActions.startChild(sessionId));
   transport.handle(IPC_CHANNELS.sessionsAdoptProgramChild, (_event, sessionId: string, index: number) =>
     programSessionActions.adoptChild(sessionId, index),
