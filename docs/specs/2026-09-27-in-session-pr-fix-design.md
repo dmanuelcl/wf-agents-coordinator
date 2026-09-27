@@ -41,9 +41,10 @@ lane that gave the DONE. Redesign requests still route `BLOCKED → architect`.
 ## Workflow manual
 
 The kickoff (`buildSessionPrFixReviewerKickoff`) is the complete entry: a session's branch may carry an older
-manual. A durable **PR fix · reapertura** entry in the project's `reviewer.md` is pending a decision: biznex's
-`reviewer.md` is at 26,871 of its 27,000-byte cap (`ai-agent-rules/sync/manifest.json`), and rules land directly on
-`develop`.
+manual. The durable **PR fix · reapertura** entry landed in biznex `develop` (`febf45be5`) and the template, as a
+short pointer in `reviewer.md` (26,993 of its 27,000-byte cap). The same commit made the review that approves a
+branch for its PR (FEATURE_REVIEW, and the PR_REVIEW that closes a `kind: fix`) run `biznex-pr-review` with the PR
+review's own bar: full sweep, fan-out, audit. The re-review after an in-session PR fix inherits that bar.
 
 `wf:done` needs no change: it does not police DONE → IN_PROGRESS, only asks an `⚠ ISSUES` entry for
 `Follow-ups added:` and a `PLAN_REVIEW:` line, and rejects a program index row still `DONE` while its checkpoint is
