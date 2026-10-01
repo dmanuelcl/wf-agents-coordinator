@@ -23,7 +23,8 @@ export interface SessionHandoffWatchManager {
  *
  * The watch is pointed at `.wf/`, not at the worktree root. chokidar watches
  * recursively, so a root watch would pull in `node_modules` and every build
- * output in the tree.
+ * output in the tree. Agents also drop whole project copies under `.wf/`; the
+ * watcher adapter does not descend into them.
  */
 export function createSessionHandoffWatchManager(params: {
   createWatcher: CreateWatcher;
