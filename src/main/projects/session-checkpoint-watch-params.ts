@@ -15,5 +15,6 @@ export function sessionCheckpointWatchParams(session: WorkSession): WatchSession
     createdAtEpochMs: session.createdAtEpochMs,
     expectedCheckpointPath: session.kind === "pr-fix" ? prFixCompletionCheckpointPath(session.slug) : undefined,
     programSpecPath: watchProgramSpec(session) ?? undefined,
+    branch: session.branch,
   };
 }

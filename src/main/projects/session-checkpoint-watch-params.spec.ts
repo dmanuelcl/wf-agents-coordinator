@@ -36,13 +36,14 @@ describe("sessionCheckpointWatchParams", () => {
     expect(sessionCheckpointWatchParams(session({ program: "docs/workflow/specs/q.md" })).programSpecPath).toBe("docs/workflow/specs/q.md");
   });
 
-  it("an ordinary feature session keeps the unfiltered gate", () => {
+  it("an ordinary feature session only accepts a checkpoint of its own branch", () => {
     expect(sessionCheckpointWatchParams(session({}))).toEqual({
       sessionId: "s1",
       worktreePath: "/repo/.worktrees/s",
       createdAtEpochMs: 7,
       expectedCheckpointPath: undefined,
       programSpecPath: undefined,
+      branch: "feature/s",
     });
   });
 });

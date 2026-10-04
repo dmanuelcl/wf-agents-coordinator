@@ -267,4 +267,43 @@ describe("createSessionCheckpointWatchManager", () => {
       expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/x-2-checkpoint.md");
     });
   });
+
+  describe("with a branch filter", () => {
+    const BRANCH = "feature/partner-onboarding-flow";
+    const checkpointsDir = (): string => join(worktree, "docs", "workflow", "checkpoints");
+    const write = (name: string, branch: string | null): string => {
+      mkdirSync(checkpointsDir(), { recursive: true });
+      const path = join(checkpointsDir(), name);
+      writeFileSync(path, `---\nslug: x\n${branch === null ? "" : `branch: ${branch}\n`}status: IN_PROGRESS\n---\n# ▶ NEXT\n`);
+      return path;
+    };
+
+    it("ignores another branch's checkpoint rewritten by a merge from develop, and binds the session's own", async () => {
+      const { createWatcher, watchers } = makeFakeCreateWatcher();
+      const onCheckpointDetected = vi.fn();
+      const manager = createSessionCheckpointWatchManager({ createWatcher, debounceMs: 0, onCheckpointDetected });
+      await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0, branch: BRANCH });
+
+      watchers[0]?.emitChange(write("2026-08-05-ai-assistant-checkpoint.md", "feat/ai-assitant"));
+      watchers[0]?.emitChange(write("undeclared-checkpoint.md", null));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(onCheckpointDetected).not.toHaveBeenCalled();
+
+      watchers[0]?.emitChange(write("partner-onboarding-checkpoint.md", `origin/${BRANCH}`));
+      await vi.waitFor(() =>
+        expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/partner-onboarding-checkpoint.md"),
+      );
+      expect(onCheckpointDetected).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies the same filter to checkpoints that already exist when the watch starts", async () => {
+      write("partner-onboarding-checkpoint.md", BRANCH);
+      write("2026-08-05-ai-assistant-checkpoint.md", "feat/ai-assitant"); // newer: unfiltered, it would win
+      const onCheckpointDetected = vi.fn();
+      const { createWatcher } = makeFakeCreateWatcher();
+      const manager = createSessionCheckpointWatchManager({ createWatcher, debounceMs: 0, onCheckpointDetected });
+      await manager.watchSession({ sessionId: "s1", worktreePath: worktree, createdAtEpochMs: 0, branch: BRANCH });
+      expect(onCheckpointDetected).toHaveBeenCalledWith("s1", "docs/workflow/checkpoints/partner-onboarding-checkpoint.md");
+    });
+  });
 });
