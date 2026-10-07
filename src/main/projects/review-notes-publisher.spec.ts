@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { publishReviewNotes, REVIEW_NOTES_DIR } from "./review-notes-publisher";
+import { publishReviewNotes, REVIEW_NOTES_DIR, reviewedCommitOf } from "./review-notes-publisher";
 
 const BRANCH = "feature/x";
 const NOTES = `${REVIEW_NOTES_DIR}/feature-x.md`;
@@ -191,5 +191,66 @@ describe("publishReviewNotes", () => {
     expect(run(fx.review, "rev-parse", "HEAD")).toBe(fx.reviewedSha);
     expect(existsSync(join(fx.review, "src/later.ts"))).toBe(false);
     expect(fx.status()).toEqual([`A  ${NOTES}`]);
+  });
+});
+
+describe("reviewedCommitOf", () => {
+  const trailerOf = (cwd: string): string =>
+    run(cwd, "log", "-1", "--format=%(trailers:key=Reviewed-Commit,valueonly)", "HEAD");
+
+  it("resolves a published notes commit to the commit the review covered", async () => {
+    const fx = reviewFixture();
+    write(fx.review, NOTES, "# Notas\n- 🔵 una nota\n");
+    await publish(fx.review);
+
+    expect(trailerOf(fx.review)).toBe(fx.reviewedSha);
+    expect(await reviewedCommitOf(fx.review)).toBe(fx.reviewedSha);
+  });
+
+  it("still resolves to the reviewed commit after a replay, where HEAD~1 is a commit nobody reviewed", async () => {
+    const fx = reviewFixture();
+    const pushedMeanwhile = fx.teammate("src/later.ts", "export const later = 1;\n");
+    write(fx.review, NOTES, "# Notas\n- 🔵 una nota\n");
+    await publish(fx.review);
+
+    expect(run(fx.review, "rev-parse", "HEAD~1")).toBe(pushedMeanwhile);
+    expect(await reviewedCommitOf(fx.review)).toBe(fx.reviewedSha);
+  });
+
+  it("keeps naming the reviewed commit when a later Post commits more notes on top", async () => {
+    const fx = reviewFixture();
+    fx.teammate("src/later.ts", "export const later = 1;\n");
+    write(fx.review, NOTES, "# Notas\n- 🔵 una nota\n");
+    await publish(fx.review);
+    write(fx.review, NOTES, "# Notas\n- 🔵 una nota\n- 🔵 otra nota\n");
+    await publish(fx.review);
+
+    expect(trailerOf(fx.review)).toBe(fx.reviewedSha);
+    expect(await reviewedCommitOf(fx.review)).toBe(fx.reviewedSha);
+  });
+
+  it("is HEAD for a commit without the trailer, even one that only touches the notes", async () => {
+    const fx = reviewFixture();
+    write(fx.review, NOTES, "# Notas\n");
+    run(fx.review, "add", "--", NOTES);
+    run(fx.review, "commit", "-q", "-m", "docs: notas a mano");
+
+    expect(await reviewedCommitOf(fx.review)).toBe(run(fx.review, "rev-parse", "HEAD"));
+  });
+
+  it("is HEAD for a commit with the trailer that also touches another path", async () => {
+    const fx = reviewFixture();
+    write(fx.review, NOTES, "# Notas\n");
+    write(fx.review, "src/app.ts", "export const app = 2;\n");
+    run(fx.review, "add", "--", NOTES, "src/app.ts");
+    run(fx.review, "commit", "-q", "-m", "docs(review-notes): notas", "-m", `Reviewed-Commit: ${fx.reviewedSha}`);
+
+    expect(trailerOf(fx.review)).toBe(fx.reviewedSha);
+    expect(await reviewedCommitOf(fx.review)).toBe(run(fx.review, "rev-parse", "HEAD"));
+  });
+
+  it("is HEAD on the commit the review session started from", async () => {
+    const fx = reviewFixture();
+    expect(await reviewedCommitOf(fx.review)).toBe(fx.reviewedSha);
   });
 });

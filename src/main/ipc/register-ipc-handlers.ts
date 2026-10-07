@@ -37,7 +37,7 @@ import type { MergeBaseRefresher } from "../projects/program-merge";
 import { PROGRAM_MERGE_BASE } from "../../shared/workflow/program-verdict";
 import { withStageDefaults } from "../../shared/workflow/agent-runtime-config";
 import { PR_CONTEXT_ARTIFACT, REVIEW_ARTIFACT } from "../projects/session-registry";
-import { publishReviewNotes } from "../projects/review-notes-publisher";
+import { publishReviewNotes, reviewedCommitOf } from "../projects/review-notes-publisher";
 import { localBranchName } from "../../shared/workflow/program-spec";
 import { getProvider } from "../vcs/get-provider";
 import { parsePrUrl, REVIEW_COMMENT_MARKER } from "../vcs/vcs-provider";
@@ -711,8 +711,8 @@ export function registerIpcHandlers(params: {
     }
     if (!report.trim()) throw new Error(`The review file (${REVIEW_ARTIFACT}) is empty.`);
 
-    // Read before the notes commit moves HEAD.
-    const reviewedSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: session.worktreePath })).stdout.trim();
+    // Read before the notes commit moves HEAD; a notes commit an earlier Post left there names the commit it reviewed.
+    const reviewedSha = await reviewedCommitOf(session.worktreePath);
     // The 🔵 Notas reach the PR branch (session.branch is origin/<source>) before the comment; if they can't, nothing is posted.
     await publishReviewNotes({ cwd: session.worktreePath, sourceBranch: localBranchName(session.branch), prLabel: `PR #${session.pr.prId}` });
 

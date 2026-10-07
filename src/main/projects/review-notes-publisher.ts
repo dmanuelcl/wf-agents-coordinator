@@ -13,6 +13,9 @@ export const REVIEW_NOTES_DIR = "docs/workflow/review-notes";
 
 export type ReviewNotesPublishResult = { committed: false } | { committed: true; sha: string };
 
+/** Git trailer of a notes commit naming the commit the review covered. */
+const REVIEWED_COMMIT_TRAILER = "Reviewed-Commit";
+
 /** A git command that failed, with what git printed. */
 class GitCommandError extends Error {
   constructor(
@@ -47,6 +50,27 @@ async function isAncestor(cwd: string, ancestor: string, descendant: string): Pr
   }
 }
 
+/**
+ * The commit a review covered: HEAD, unless HEAD is a notes commit made by publishReviewNotes (its
+ * Reviewed-Commit trailer, and nothing changed outside REVIEW_NOTES_DIR). Such a commit may have been
+ * replayed onto commits nobody reviewed, so neither it nor its parent is the answer — the trailer is.
+ */
+export async function reviewedCommitOf(cwd: string): Promise<string> {
+  const head = await git(cwd, ["rev-parse", "HEAD"]);
+  const trailers = (await git(cwd, ["log", "-1", `--format=%(trailers:key=${REVIEWED_COMMIT_TRAILER},valueonly)`, "HEAD"]))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (trailers.length !== 1 || !trailers[0]) return head;
+  const paths = (await git(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).split("\n").filter(Boolean);
+  if (paths.length === 0 || !paths.every((path) => path.startsWith(`${REVIEW_NOTES_DIR}/`))) return head;
+  try {
+    return await git(cwd, ["rev-parse", "--verify", "--quiet", `${trailers[0]}^{commit}`]);
+  } catch {
+    return head;
+  }
+}
+
 async function rebaseInProgress(cwd: string): Promise<boolean> {
   for (const name of ["rebase-merge", "rebase-apply"]) {
     if (existsSync(resolve(cwd, await git(cwd, ["rev-parse", "--git-path", name])))) return true;
@@ -74,17 +98,16 @@ async function pushNotesCommit(cwd: string, sourceBranch: string): Promise<void>
 }
 
 /**
- * Put the worktree back as Post found it: on the reviewed commit, with the notes uncommitted, so the
- * next Post commits them again and records the reviewed commit, not the notes one. Returns what went
- * wrong if it could not.
+ * Put the worktree back as Post found it (HEAD at `startSha`), with the notes uncommitted, so the
+ * next Post commits them again. Returns what went wrong if it could not.
  */
-async function undoNotesCommit(cwd: string, reviewedSha: string, notesSha: string): Promise<string | null> {
+async function undoNotesCommit(cwd: string, startSha: string, notesSha: string): Promise<string | null> {
   try {
     if (await rebaseInProgress(cwd)) await git(cwd, ["rebase", "--abort"]);
     // A replay moved the checkout onto commits nobody reviewed: back to the notes commit first,
     // keeping any local edit outside the files that differ.
     if ((await git(cwd, ["rev-parse", "HEAD"])) !== notesSha) await git(cwd, ["reset", "-q", "--keep", notesSha]);
-    await git(cwd, ["reset", "-q", "--soft", reviewedSha]);
+    await git(cwd, ["reset", "-q", "--soft", startSha]);
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -114,11 +137,21 @@ export async function publishReviewNotes(params: {
   const pending = await git(cwd, ["status", "--porcelain", "--untracked-files=all", "--", REVIEW_NOTES_DIR]);
   if (!pending) return { committed: false };
 
-  const reviewedSha = await git(cwd, ["rev-parse", "HEAD"]);
+  const startSha = await git(cwd, ["rev-parse", "HEAD"]);
+  // An earlier Post may have left a notes commit at HEAD: the trailer keeps naming the reviewed code.
+  const reviewedSha = await reviewedCommitOf(cwd);
   try {
     await git(cwd, ["add", "-A", "--", REVIEW_NOTES_DIR]);
     // Pathspec commit: other staged or dirty files cannot slip into it.
-    await git(cwd, ["commit", "-m", `docs(review-notes): notas del review de ${prLabel}`, "--", REVIEW_NOTES_DIR]);
+    await git(cwd, [
+      "commit",
+      "-m",
+      `docs(review-notes): notas del review de ${prLabel}`,
+      "-m",
+      `${REVIEWED_COMMIT_TRAILER}: ${reviewedSha}`,
+      "--",
+      REVIEW_NOTES_DIR,
+    ]);
   } catch (error) {
     throw notPushedError(sourceBranch, error);
   }
@@ -127,7 +160,7 @@ export async function publishReviewNotes(params: {
   try {
     await pushNotesCommit(cwd, sourceBranch);
   } catch (error) {
-    throw notPushedError(sourceBranch, error, await undoNotesCommit(cwd, reviewedSha, notesSha));
+    throw notPushedError(sourceBranch, error, await undoNotesCommit(cwd, startSha, notesSha));
   }
   return { committed: true, sha: await git(cwd, ["rev-parse", "HEAD"]) };
 }
