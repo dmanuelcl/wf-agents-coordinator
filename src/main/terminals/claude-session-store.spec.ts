@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claudeConversationExists } from "./claude-session-store";
+import { claudeConversationExists, claudeProjectsDir } from "./claude-session-store";
 
 let projectsDir: string;
 
@@ -57,5 +57,12 @@ describe("claudeSessionContextTokens", () => {
 
     expect(await claudeSessionContextTokens("s-2", projectsDir)).toBeNull();
     expect(await claudeSessionContextTokens("nope", projectsDir)).toBeNull();
+  });
+});
+
+describe("claudeProjectsDir", () => {
+  it("follows the launch's CLAUDE_CONFIG_DIR and defaults to ~/.claude", () => {
+    expect(claudeProjectsDir({ CLAUDE_CONFIG_DIR: "/Users/ada/.claude-biz" })).toBe("/Users/ada/.claude-biz/projects");
+    expect(claudeProjectsDir({})).toBe(join(homedir(), ".claude", "projects"));
   });
 });

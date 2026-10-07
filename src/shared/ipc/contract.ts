@@ -163,6 +163,7 @@ export const IPC_CHANNELS = {
   gitTestVcs: "git:test-vcs",
   projectsSetVcsToken: "projects:set-vcs-token",
   projectsHasVcsCreds: "projects:has-vcs-creds",
+  agentsListClaudeCommands: "agents:list-claude-commands",
   sessionsReadCheckpoint: "sessions:read-checkpoint",
   sessionsWatchCheckpoint: "sessions:watch-checkpoint",
   sessionsUnwatchCheckpoint: "sessions:unwatch-checkpoint",
@@ -354,6 +355,10 @@ export interface AgentCoordinatorApi {
     openInFileManager(rootPath: string): Promise<void>;
     setVcsToken(projectId: string, token: string): Promise<void>;
     hasVcsCreds(projectId: string): Promise<boolean>;
+  };
+  agents: {
+    /** Shell aliases that run Claude Code under another name (claude-biz…). */
+    listClaudeCommands(): Promise<string[]>;
   };
   checkpoints: {
     list(projectId: string): Promise<ParsedCheckpoint[]>;

@@ -4,6 +4,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import {
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
+  customAgentCommand,
   DANGEROUS_SUPPORTED,
 } from "../../shared/workflow/agent-runtime-config";
 import type { AgentKind, ProjectRuntimeConfig, WorkflowStage } from "../../shared/workflow/agent-runtime-config";
@@ -20,6 +21,15 @@ const VCS_HOSTS: (VcsHost | "none")[] = ["none", "bitbucket", "github"];
 
 const AGENT_KINDS: AgentKind[] = ["claude", "codex", "kimi", "copilot", "opencode", "gemini", "antigravity"];
 const WORKFLOW_STAGES: WorkflowStage[] = ["architect", "implementer", "reviewer"];
+
+// The agent selector's value: a kind, or `claude:<command>` for Claude run
+// through a custom command (a shell alias such as claude-biz).
+const CLAUDE_COMMAND_PREFIX = "claude:";
+
+function agentSelectValue(config: ProjectRuntimeConfig[WorkflowStage]): string {
+  const command = customAgentCommand(config);
+  return command ? `${CLAUDE_COMMAND_PREFIX}${command}` : config.kind;
+}
 
 const STAGE_LABELS: Record<WorkflowStage, string> = {
   architect: "Architect",
@@ -106,7 +116,13 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
   const [vcsTestResult, setVcsTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [claudeCommands, setClaudeCommands] = useState<string[]>([]);
   const remote = window.agentCoordinator.connection.mode === "remote";
+
+  // The user's claude aliases (claude-biz…) are offered next to claude itself.
+  useEffect(() => {
+    void window.agentCoordinator.agents.listClaudeCommands().then(setClaudeCommands, () => setClaudeCommands([]));
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -124,11 +140,15 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
     }));
   }
 
-  function changeStageKind(stage: WorkflowStage, kind: AgentKind): void {
-    setRuntimeConfig((current) => ({
-      ...current,
-      [stage]: createAgentRuntimeConfig(kind),
-    }));
+  function changeStageAgent(stage: WorkflowStage, value: string): void {
+    const command = value.startsWith(CLAUDE_COMMAND_PREFIX) ? value.slice(CLAUDE_COMMAND_PREFIX.length) : null;
+    const kind = (command ? "claude" : value) as AgentKind;
+    setRuntimeConfig((current) => {
+      const { command: _previous, ...base } = current[stage];
+      // claude ↔ claude-biz is the same CLI: keep model, effort and bypass.
+      const next = base.kind === kind ? base : createAgentRuntimeConfig(kind);
+      return { ...current, [stage]: command ? { ...next, command } : next };
+    });
   }
 
   function handleIconClick(): void {
@@ -448,14 +468,29 @@ export function ProjectModal(props: ProjectModalProps): JSX.Element {
                         <td>{STAGE_LABELS[stage]}</td>
                         <td>
                           <select
-                            value={config.kind}
-                            onChange={(event) => changeStageKind(stage, event.target.value as AgentKind)}
+                            value={agentSelectValue(config)}
+                            onChange={(event) => changeStageAgent(stage, event.target.value)}
                           >
-                            {AGENT_KINDS.map((kind) => (
-                              <option key={kind} value={kind}>
-                                {kind}
-                              </option>
-                            ))}
+                            {AGENT_KINDS.flatMap((kind) => {
+                              const option = (
+                                <option key={kind} value={kind}>
+                                  {kind}
+                                </option>
+                              );
+                              if (kind !== "claude") return [option];
+                              const current = customAgentCommand(config);
+                              const commands = current && !claudeCommands.includes(current)
+                                ? [...claudeCommands, current]
+                                : claudeCommands;
+                              return [
+                                option,
+                                ...commands.map((command) => (
+                                  <option key={`claude-command-${command}`} value={`${CLAUDE_COMMAND_PREFIX}${command}`}>
+                                    {command}
+                                  </option>
+                                )),
+                              ];
+                            })}
                           </select>
                         </td>
                         <td>

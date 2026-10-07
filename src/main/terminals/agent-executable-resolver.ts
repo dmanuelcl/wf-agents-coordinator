@@ -34,7 +34,7 @@ export interface ResolveAgentExecutableOptions {
   }) => AgentExecutableResolution | null;
 }
 
-const resolvedExecutables = new Map<AgentKind, AgentExecutableResolution>();
+const resolvedExecutables = new Map<string, AgentExecutableResolution>();
 
 function executableCandidates(executable: string, platform: NodeJS.Platform, environment: NodeJS.ProcessEnv): string[] {
   if (platform !== "win32") return [executable];
@@ -164,9 +164,20 @@ export function resolveAgentExecutable(
   kind: AgentKind,
   options: ResolveAgentExecutableOptions = {},
 ): AgentExecutableResolution | null {
+  return resolveExecutable(AGENT_EXECUTABLES[kind], options);
+}
+
+/**
+ * Same lookup as resolveAgentExecutable for an arbitrary executable name — the
+ * program a custom agent command (a shell alias such as `claude-biz`) runs.
+ */
+export function resolveExecutable(
+  executable: string,
+  options: ResolveAgentExecutableOptions = {},
+): AgentExecutableResolution | null {
   const canUseCache = Object.keys(options).length === 0;
   if (canUseCache) {
-    const cached = resolvedExecutables.get(kind);
+    const cached = resolvedExecutables.get(executable);
     if (cached) return cached;
   }
 
@@ -174,20 +185,19 @@ export function resolveAgentExecutable(
   const environment = options.environment ?? process.env;
   const homeDirectory = options.homeDirectory ?? homedir();
   const checkExecutable = options.checkExecutable ?? defaultIsExecutable;
-  const executable = AGENT_EXECUTABLES[kind];
   const currentPath = environment["PATH"] ?? "";
 
   const fromCurrentPath = findOnPath({ executable, path: currentPath, platform, environment, checkExecutable });
   if (fromCurrentPath) {
     const resolution = { executable: fromCurrentPath, path: currentPath };
-    if (canUseCache) resolvedExecutables.set(kind, resolution);
+    if (canUseCache) resolvedExecutables.set(executable, resolution);
     return resolution;
   }
 
   const probeLoginShell = options.probeLoginShell ?? defaultProbeLoginShell;
   const fromLoginShell = probeLoginShell({ executable, environment, platform });
   if (fromLoginShell) {
-    if (canUseCache) resolvedExecutables.set(kind, fromLoginShell);
+    if (canUseCache) resolvedExecutables.set(executable, fromLoginShell);
     return fromLoginShell;
   }
 
@@ -195,7 +205,7 @@ export function resolveAgentExecutable(
     const candidate = findOnPath({ executable, path: directory, platform, environment, checkExecutable });
     if (candidate) {
       const resolution = { executable: candidate, path: prependDirectory(directory, currentPath, platform) };
-      if (canUseCache) resolvedExecutables.set(kind, resolution);
+      if (canUseCache) resolvedExecutables.set(executable, resolution);
       return resolution;
     }
   }

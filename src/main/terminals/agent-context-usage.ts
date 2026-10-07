@@ -1,5 +1,5 @@
 import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
-import { claudeSessionContextTokens } from "./claude-session-store";
+import { claudeProjectsDir, claudeSessionContextTokens } from "./claude-session-store";
 
 /**
  * Per-provider readers for "how full is the session we are about to RESUME".
@@ -12,17 +12,22 @@ import { claudeSessionContextTokens } from "./claude-session-store";
  * Extend per provider as a source becomes known (e.g. Codex keeps rollout
  * files under ~/.codex/sessions/ — unverified format, so not read yet).
  */
-export type AgentContextReader = (sessionUuid: string) => Promise<number | null>;
+/** `environment` is the launch's: it can move the provider's data (CLAUDE_CONFIG_DIR). */
+export type AgentContextReader = (
+  sessionUuid: string,
+  environment: Readonly<Record<string, string>>,
+) => Promise<number | null>;
 
 const READERS: Partial<Record<AgentKind, AgentContextReader>> = {
-  claude: (sessionUuid) => claudeSessionContextTokens(sessionUuid),
+  claude: (sessionUuid, environment) => claudeSessionContextTokens(sessionUuid, claudeProjectsDir(environment)),
 };
 
 export async function agentSessionContextTokens(
   kind: AgentKind,
   sessionUuid: string,
+  environment: Readonly<Record<string, string>> = {},
   readers: Partial<Record<AgentKind, AgentContextReader>> = READERS,
 ): Promise<number | null> {
   const reader = readers[kind];
-  return reader ? reader(sessionUuid) : null;
+  return reader ? reader(sessionUuid, environment) : null;
 }

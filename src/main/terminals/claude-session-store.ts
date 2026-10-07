@@ -3,6 +3,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
+ * Where Claude Code keeps its conversations for a launch environment: a
+ * CLAUDE_CONFIG_DIR (set by a custom command such as `claude-biz`) moves them
+ * out of `~/.claude`.
+ */
+export function claudeProjectsDir(environment: Readonly<Record<string, string>> = {}): string {
+  return join(environment["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude"), "projects");
+}
+
+/**
  * Whether Claude Code has a persisted conversation for `sessionUuid`.
  *
  * Claude stores each conversation as `~/.claude/projects/<escaped-cwd>/<uuid>.jsonl`.
@@ -14,7 +23,7 @@ import { join } from "node:path";
  */
 export async function claudeConversationExists(
   sessionUuid: string,
-  projectsDir: string = join(homedir(), ".claude", "projects"),
+  projectsDir: string = claudeProjectsDir(),
 ): Promise<boolean> {
   let entries;
   try {
@@ -43,7 +52,7 @@ export async function claudeConversationExists(
  */
 export async function claudeSessionContextTokens(
   sessionUuid: string,
-  projectsDir: string = join(homedir(), ".claude", "projects"),
+  projectsDir: string = claudeProjectsDir(),
 ): Promise<number | null> {
   let entries;
   try {

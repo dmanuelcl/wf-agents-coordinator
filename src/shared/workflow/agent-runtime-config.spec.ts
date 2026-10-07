@@ -4,6 +4,7 @@ import {
   buildAutopilotLaunchCommand,
   createAgentRuntimeConfig,
   createDefaultProjectRuntimeConfig,
+  customAgentCommand,
   resolveStageEffort,
   withStageDefaults,
 } from "./agent-runtime-config";
@@ -37,6 +38,27 @@ describe("buildAgentLaunchCommand — claude", () => {
   it("passes effort as a launch flag so no slash command races the startup UI", () => {
     const result = buildAgentLaunchCommand(makeConfig({ kind: "claude", effort: "high" }));
     expect(result.command).toBe("claude --model opus --effort high");
+  });
+});
+
+describe("custom claude command (claude-biz)", () => {
+  it("is the trimmed command of a claude config, and none for claude itself or other kinds", () => {
+    expect(customAgentCommand(makeConfig({ command: " claude-biz " }))).toBe("claude-biz");
+    expect(customAgentCommand(makeConfig({ command: "claude" }))).toBeNull();
+    expect(customAgentCommand(makeConfig({ command: "  " }))).toBeNull();
+    expect(customAgentCommand(makeConfig())).toBeNull();
+    expect(customAgentCommand(makeConfig({ kind: "codex", command: "claude-biz" }))).toBeNull();
+  });
+
+  it("starts the resolved program in place of claude, keeping every claude flag", () => {
+    const config = makeConfig({ command: "claude-biz", effort: "high", dangerous: true });
+    const target = { executable: "/opt/bin/claude --verbose" };
+    expect(buildAgentLaunchCommand(config, { id: "u-1", mode: "resume" }, target).command).toBe(
+      "/opt/bin/claude --verbose --resume u-1 --model opus --effort high --dangerously-skip-permissions",
+    );
+    expect(buildAutopilotLaunchCommand(config, "/wf:next", undefined, target).command).toBe(
+      "/opt/bin/claude --verbose --model opus --effort high --dangerously-skip-permissions '/wf:next'",
+    );
   });
 });
 

@@ -52,12 +52,19 @@ function prRefOf(pr: PrLink): PrRef {
 function credsFrom(email: string, token: string): { token: string; email?: string } {
   return email.trim() ? { token, email: email.trim() } : { token };
 }
+
+// A word of an agent launch command, quoted only when the shell would split or
+// expand it (`claude` stays readable in the terminal).
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:=@%+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
 import { CHECKPOINT_IPC_CHANNELS, IPC_CHANNELS } from "../../shared/ipc/contract";
 import {
   buildAgentLaunchCommand,
   buildAutopilotLaunchCommand,
+  customAgentCommand,
 } from "../../shared/workflow/agent-runtime-config";
-import type { AgentKind } from "../../shared/workflow/agent-runtime-config";
+import type { AgentLaunchTarget, AgentRuntimeConfig } from "../../shared/workflow/agent-runtime-config";
 import { isKimiSessionId } from "../../shared/workflow/kimi-session-id";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 import type { ParsedCheckpoint } from "../../shared/workflow/workflow-types";
@@ -80,8 +87,13 @@ import { createSessionSetupCoordinator } from "../projects/session-setup-coordin
 import type { SessionSetupCoordinator } from "../projects/session-setup-coordinator";
 import type { WorkspaceLayout, WorkspaceLayoutStore } from "../projects/workspace-layout-store";
 import { createAgentSessionLaneResolver } from "../terminals/agent-session-lane-resolver";
-import { missingAgentExecutableMessage, resolveAgentExecutable } from "../terminals/agent-executable-resolver";
-import { claudeConversationExists } from "../terminals/claude-session-store";
+import {
+  missingAgentExecutableMessage,
+  resolveAgentExecutable,
+  resolveExecutable,
+} from "../terminals/agent-executable-resolver";
+import { invokesClaude, listClaudeCommands, resolveCustomCommand } from "../terminals/agent-command-alias";
+import { claudeConversationExists, claudeProjectsDir } from "../terminals/claude-session-store";
 import { agentSessionContextTokens } from "../terminals/agent-context-usage";
 import { shouldForceFreshContext } from "../../shared/workflow/session-handoff";
 import type { SessionAgentUuidStore } from "../terminals/session-agent-uuid-store";
@@ -167,10 +179,49 @@ export function registerIpcHandlers(params: {
     sessionAgentUuidStore,
   });
 
-  function environmentForAgentLaunch(kind: AgentKind, environment: Readonly<Record<string, string>> | undefined): Record<string, string> {
-    const resolution = resolveAgentExecutable(kind);
-    if (!resolution) throw new Error(missingAgentExecutableMessage(kind));
-    return { ...environment, PATH: resolution.path };
+  /**
+   * What a stage's agent runs and the environment it runs in. The kind's CLI
+   * by default; a custom command (`claude-biz`) is expanded from the user's
+   * shell alias into its program, leading args and env assignments — the
+   * terminal launches with `exec`, which does not expand aliases. The environment is also
+   * where the provider keeps its sessions (CLAUDE_CONFIG_DIR), so the resume
+   * and context checks read it too. A lane is bound by kind, so switching a
+   * stage between claude and claude-biz keeps the lane's id: the other config
+   * dir has no such conversation and the lane starts fresh; switching back
+   * resumes the older conversation without what ran under the other command
+   * (no history moves between accounts).
+   */
+  async function resolveAgentLaunch(config: AgentRuntimeConfig): Promise<{
+    target: AgentLaunchTarget;
+    environment: Record<string, string>;
+  }> {
+    const command = customAgentCommand(config);
+    if (!command) {
+      const resolution = resolveAgentExecutable(config.kind);
+      if (!resolution) throw new Error(missingAgentExecutableMessage(config.kind));
+      return { target: {}, environment: { PATH: resolution.path } };
+    }
+    const invocation = await resolveCustomCommand(command);
+    if (!invocation || !invokesClaude(invocation)) {
+      throw new Error(
+        `Agent Coordinator could not resolve "${command}" to a claude command. Define it in your login shell as an alias that runs claude (e.g. alias ${command}="CLAUDE_CONFIG_DIR=~/.${command} command claude"), then reopen the app.`,
+      );
+    }
+    const resolution = resolveExecutable(invocation.executable);
+    if (!resolution) {
+      throw new Error(`Agent Coordinator could not find ${invocation.executable} (run by "${command}"). Install it, then reopen the app.`);
+    }
+    return {
+      target: { executable: [invocation.executable, ...invocation.args].map(shellWord).join(" ") },
+      environment: { ...invocation.environment, PATH: resolution.path },
+    };
+  }
+
+  function launchEnvironment(
+    resolved: { environment: Record<string, string> },
+    providerEnvironment: Readonly<Record<string, string>> | undefined,
+  ): Record<string, string> {
+    return { ...providerEnvironment, ...resolved.environment };
   }
 
   function assertSessionLaneRole(sessionLane: string, role: SessionAgentRole): void {
@@ -539,6 +590,8 @@ export function registerIpcHandlers(params: {
     return vcsSecretStore.hasToken(projectId);
   });
 
+  ipc.handle(IPC_CHANNELS.agentsListClaudeCommands, async () => listClaudeCommands());
+
   ipc.handle(
     IPC_CHANNELS.gitTestVcs,
     async (_event, input: { config: VcsConfig; token: string | null; projectId: string | null }) => {
@@ -812,6 +865,7 @@ export function registerIpcHandlers(params: {
       }
       const project = await findProject(projectRegistry, session.projectId);
       const agentConfig = withStageDefaults(project.runtimeConfig[stageForSessionRole(role)], stageForSessionRole(role));
+      const resolved = await resolveAgentLaunch(agentConfig);
       const sessionLane = role;
 
       // Manual tabs retain their legacy role-sized lane. A fresh open replaces
@@ -832,7 +886,7 @@ export function registerIpcHandlers(params: {
       if (
         sessionDirective?.mode === "resume" &&
         agentConfig.kind === "claude" &&
-        !(await claudeConversationExists(sessionDirective.id))
+        !(await claudeConversationExists(sessionDirective.id, claudeProjectsDir(resolved.environment)))
       ) {
         sessionDirective = { ...sessionDirective, mode: "fresh" };
       }
@@ -841,7 +895,7 @@ export function registerIpcHandlers(params: {
       // a TUI session. Launch it without --session; SessionTerminal captures
       // the session_<uuid> Kimi renders and persists it through the IPC above.
       // On reopen, the stored id is passed as --session for an exact resume.
-      const launch = buildAgentLaunchCommand(agentConfig, sessionDirective);
+      const launch = buildAgentLaunchCommand(agentConfig, sessionDirective, resolved.target);
       // A fresh PR session auto-runs its kickoff. A restored PR session only
       // resumes the conversation: injecting it again would repeat the work.
       const wfCommand = shouldInjectRoleCommand(session.kind, mode)
@@ -850,7 +904,7 @@ export function registerIpcHandlers(params: {
     return {
       agentCommand: launch.command,
       agentKind: agentConfig.kind,
-      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      environment: launchEnvironment(resolved, launch.environment),
       wfCommand,
       cwd: session.worktreePath,
       sessionUuid: sessionDirective?.id ?? null,
@@ -878,6 +932,7 @@ export function registerIpcHandlers(params: {
   ): Promise<SessionRoleLaunch> {
     const project = await findProject(projectRegistry, sessionId.slice(REPO_SESSION_PREFIX.length));
     const agentConfig = withStageDefaults(project.runtimeConfig.architect, "architect");
+    const resolved = await resolveAgentLaunch(agentConfig);
     let sessionDirective = await agentSessionLaneResolver.resolve({
       sessionId,
       sessionLane: lane,
@@ -888,15 +943,15 @@ export function registerIpcHandlers(params: {
     if (
       sessionDirective?.mode === "resume" &&
       agentConfig.kind === "claude" &&
-      !(await claudeConversationExists(sessionDirective.id))
+      !(await claudeConversationExists(sessionDirective.id, claudeProjectsDir(resolved.environment)))
     ) {
       sessionDirective = { ...sessionDirective, mode: "fresh" };
     }
-    const launch = buildAgentLaunchCommand(agentConfig, sessionDirective);
+    const launch = buildAgentLaunchCommand(agentConfig, sessionDirective, resolved.target);
     return {
       agentCommand: launch.command,
       agentKind: agentConfig.kind,
-      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      environment: launchEnvironment(resolved, launch.environment),
       wfCommand: null,
       cwd: project.rootPath,
       sessionUuid: sessionDirective?.id ?? null,
@@ -922,6 +977,7 @@ export function registerIpcHandlers(params: {
       }
       const project = await findProject(projectRegistry, session.projectId);
       const agentConfig = withStageDefaults(project.runtimeConfig[stageForSessionRole(role)], stageForSessionRole(role));
+      const resolved = await resolveAgentLaunch(agentConfig);
       let sessionDirective = await agentSessionLaneResolver.resolve({
         sessionId,
         sessionLane,
@@ -934,7 +990,7 @@ export function registerIpcHandlers(params: {
       if (
         sessionDirective?.mode === "resume" &&
         agentConfig.kind === "claude" &&
-        !(await claudeConversationExists(sessionDirective.id))
+        !(await claudeConversationExists(sessionDirective.id, claudeProjectsDir(resolved.environment)))
       ) {
         sessionDirective = { ...sessionDirective, mode: "fresh" };
       }
@@ -945,7 +1001,7 @@ export function registerIpcHandlers(params: {
       // ceiling, mint a fresh lane session (measured: every confessed error in
       // a real architect session happened above ~300k; below it, none).
       if (sessionDirective?.mode === "resume") {
-        const targetTokens = await agentSessionContextTokens(agentConfig.kind, sessionDirective.id);
+        const targetTokens = await agentSessionContextTokens(agentConfig.kind, sessionDirective.id, resolved.environment);
         if (shouldForceFreshContext(targetTokens)) {
           sessionDirective = await agentSessionLaneResolver.resolve({
             sessionId,
@@ -956,11 +1012,11 @@ export function registerIpcHandlers(params: {
           });
         }
       }
-      const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt, sessionDirective);
+      const launch = buildAutopilotLaunchCommand(agentConfig, wfPrompt, sessionDirective, resolved.target);
     return {
       command: launch.command,
       agentKind: agentConfig.kind,
-      environment: environmentForAgentLaunch(agentConfig.kind, launch.environment),
+      environment: launchEnvironment(resolved, launch.environment),
       cwd: session.worktreePath,
       sessionLane,
       sessionUuid: sessionDirective?.id ?? null,

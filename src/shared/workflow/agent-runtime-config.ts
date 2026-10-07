@@ -7,6 +7,12 @@ export interface AgentRuntimeConfig {
   model: string;
   effort: string | null;
   dangerous: boolean;
+  /**
+   * Claude only: the command that runs Claude Code when it is not `claude`
+   * itself — a shell alias such as `claude-biz` (its own CLAUDE_CONFIG_DIR).
+   * Absent means the kind's standard CLI.
+   */
+  command?: string;
 }
 
 export type WorkflowStage = "architect" | "implementer" | "reviewer";
@@ -77,6 +83,21 @@ export const DANGEROUS_SUPPORTED: Record<AgentKind, boolean> = {
   antigravity: false,
 };
 
+/** The custom command a config runs instead of its kind's CLI, or null. */
+export function customAgentCommand(config: AgentRuntimeConfig): string | null {
+  const command = config.kind === "claude" ? config.command?.trim() : "";
+  return command && command !== "claude" ? command : null;
+}
+
+/**
+ * What the launch command starts in place of the kind's CLI name — the program
+ * and leading arguments a custom command (alias) resolved to, already
+ * shell-quoted. Only the claude builder honours it.
+ */
+export interface AgentLaunchTarget {
+  executable?: string;
+}
+
 export interface AgentLaunchCommandResult {
   command: string;
   warnings: string[];
@@ -119,8 +140,9 @@ function withUnwiredSessionWarning(
 function buildClaudeLaunchCommand(
   config: AgentRuntimeConfig,
   session: AgentSessionLaunch | undefined,
+  target: AgentLaunchTarget,
 ): AgentLaunchCommandResult {
-  const parts = ["claude"];
+  const parts = [target.executable ?? "claude"];
   if (session) parts.push(session.mode === "resume" ? "--resume" : "--session-id", session.id);
   if (model(config)) parts.push("--model", model(config));
   if (config.effort) parts.push("--effort", config.effort);
@@ -210,10 +232,11 @@ function buildAntigravityLaunchCommand(config: AgentRuntimeConfig): AgentLaunchC
 export function buildAgentLaunchCommand(
   config: AgentRuntimeConfig,
   session?: AgentSessionLaunch,
+  target: AgentLaunchTarget = {},
 ): AgentLaunchCommandResult {
   switch (config.kind) {
     case "claude":
-      return buildClaudeLaunchCommand(config, session);
+      return buildClaudeLaunchCommand(config, session, target);
     case "codex":
       return buildCodexLaunchCommand(config, session);
     case "kimi":
@@ -259,8 +282,9 @@ export function buildAutopilotLaunchCommand(
   config: AgentRuntimeConfig,
   wfPrompt: string,
   session?: AgentSessionLaunch,
+  target: AgentLaunchTarget = {},
 ): AutopilotLaunchCommand {
-  const base = buildAgentLaunchCommand(config, session);
+  const base = buildAgentLaunchCommand(config, session, target);
   const q = shellQuoteSingle(wfPrompt);
   switch (config.kind) {
     case "claude":

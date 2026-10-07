@@ -57,6 +57,9 @@ export function createAgentCoordinatorApi(
       setVcsToken: (projectId, token) => invoke(IPC_CHANNELS.projectsSetVcsToken, projectId, token) as ReturnType<AgentCoordinatorApi["projects"]["setVcsToken"]>,
       hasVcsCreds: (projectId) => invoke(IPC_CHANNELS.projectsHasVcsCreds, projectId) as ReturnType<AgentCoordinatorApi["projects"]["hasVcsCreds"]>,
     },
+    agents: {
+      listClaudeCommands: () => invoke(IPC_CHANNELS.agentsListClaudeCommands) as ReturnType<AgentCoordinatorApi["agents"]["listClaudeCommands"]>,
+    },
     checkpoints: {
       list: (projectId) => invoke(IPC_CHANNELS.checkpointsList, projectId) as ReturnType<AgentCoordinatorApi["checkpoints"]["list"]>,
       onChanged: (callback) => on<CheckpointChangedEvent>(CHECKPOINT_IPC_CHANNELS.changed, callback),
