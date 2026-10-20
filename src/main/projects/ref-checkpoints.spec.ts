@@ -41,6 +41,26 @@ function writeCheckpoint(name: string, feature: string, status: string): void {
   );
 }
 
+function plumb(args: string[], input?: string): string {
+  return execFileSync("git", args, { cwd: repoDir, input, maxBuffer: 64 * 1024 * 1024 }).toString().trim();
+}
+
+/**
+ * Commit develop's tree plus over 1 MiB of path names (and any extra root
+ * entries) as `branch`, built with plumbing so no files touch the disk.
+ */
+function commitBigTree(branch: string, ...extraRootEntries: string[]): void {
+  const blob = plumb(["hash-object", "-w", "--stdin"], "filler\n");
+  const fillerEntries = Array.from(
+    { length: 6000 },
+    (_, index) => `100644 blob ${blob}\t${String(index).padStart(6, "0")}-${"x".repeat(200)}.txt`,
+  );
+  const filler = plumb(["mktree"], `${fillerEntries.join("\n")}\n`);
+  const rootEntries = [plumb(["ls-tree", "develop"]), `040000 tree ${filler}\tfiller`, ...extraRootEntries];
+  const commit = plumb(["commit-tree", plumb(["mktree"], `${rootEntries.join("\n")}\n`), "-p", "develop", "-m", "a big repo"]);
+  plumb(["update-ref", `refs/heads/${branch}`, commit]);
+}
+
 beforeEach(() => {
   repoDir = mkdtempSync(join(tmpdir(), "agent-coordinator-refcp-"));
   git("init", "-q", "-b", "main");
@@ -87,6 +107,26 @@ describe("listRefCheckpoints", () => {
 
   it("returns nothing for a ref that has no checkpoints", async () => {
     expect(await listRefCheckpoints({ projectRoot: repoDir, ref: "main", globs: GLOBS })).toEqual([]);
+  });
+
+  it("still finds the checkpoints when the ref's full tree listing is larger than execFile's default buffer", async () => {
+    commitBigTree("big");
+
+    const found = await listRefCheckpoints({ projectRoot: repoDir, ref: "big", globs: GLOBS });
+
+    expect(found.map((checkpoint) => checkpoint.path)).toEqual([
+      "docs/workflow/checkpoints/auth-checkpoint.md",
+      "docs/workflow/checkpoints/billing-checkpoint.md",
+    ]);
+  });
+
+  it("lists the whole tree, however large, when a glob has no fixed directory", async () => {
+    const checkpoint = ["---", "feature: root-level", "slug: root-level", "status: DONE", "---", ""].join("\n");
+    commitBigTree("big-root", `100644 blob ${plumb(["hash-object", "-w", "--stdin"], checkpoint)}\troot-checkpoint.md`);
+
+    const found = await listRefCheckpoints({ projectRoot: repoDir, ref: "big-root", globs: ["*-checkpoint.md"] });
+
+    expect(found).toEqual([{ path: "root-checkpoint.md", feature: "root-level", slug: "root-level", status: "DONE" }]);
   });
 
   it("returns nothing for a ref that does not exist", async () => {

@@ -3,6 +3,9 @@ import { promisify } from "node:util";
 import { parseCheckpointMarkdown } from "../../shared/workflow/checkpoint-parser";
 
 const execFileAsync = promisify(execFile);
+// A whole-tree listing (a glob with no fixed directory) of a large repo, or an
+// unusually large checkpoint, must not overflow execFile's 1 MiB default.
+const MAX_BUFFER = 24 * 1024 * 1024;
 
 /** Enough to identify a checkpoint in a picker, without shipping the whole parse. */
 export interface RefCheckpoint {
@@ -27,9 +30,27 @@ export function matchesCheckpointGlob(path: string, glob: string): boolean {
   return new RegExp(`^${pattern}$`).test(path);
 }
 
+/**
+ * The fixed directories the globs live under, as `ls-tree` pathspecs. Listing
+ * the whole tree of a large repo overflows execFile's output buffer, and the
+ * swallowed error read as "this ref has no checkpoints". `null` means some glob
+ * has no fixed directory, so the whole tree has to be listed.
+ */
+function globDirectories(globs: readonly string[]): string[] | null {
+  const directories = new Set<string>();
+  for (const glob of globs) {
+    const wildcard = glob.indexOf("*");
+    const fixed = wildcard === -1 ? glob : glob.slice(0, wildcard);
+    const directory = fixed.slice(0, fixed.lastIndexOf("/") + 1);
+    if (!directory) return null;
+    directories.add(directory);
+  }
+  return [...directories];
+}
+
 async function gitOutput(projectRoot: string, args: string[], exec: typeof execFileAsync): Promise<string | null> {
   try {
-    const { stdout } = await exec("git", args, { cwd: projectRoot });
+    const { stdout } = await exec("git", args, { cwd: projectRoot, maxBuffer: MAX_BUFFER });
     return stdout;
   } catch {
     return null;
@@ -50,7 +71,12 @@ export async function listRefCheckpoints(params: {
   execFileImpl?: typeof execFileAsync;
 }): Promise<RefCheckpoint[]> {
   const exec = params.execFileImpl ?? execFileAsync;
-  const tree = await gitOutput(params.projectRoot, ["ls-tree", "-r", "--name-only", params.ref], exec);
+  const directories = globDirectories(params.globs);
+  const tree = await gitOutput(
+    params.projectRoot,
+    ["ls-tree", "-r", "--name-only", params.ref, ...(directories ? ["--", ...directories] : [])],
+    exec,
+  );
   if (tree === null) return [];
 
   const paths = tree
